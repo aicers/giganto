@@ -590,8 +590,6 @@ mod tests {
         let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).unwrap();
         Database {
             db: std::sync::Arc::new(db),
-            #[cfg(feature = "bootroot")]
-            customer_deletion_job_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
         }
     }
 

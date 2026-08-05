@@ -131,7 +131,7 @@ impl CustomerDeletionMutation {
         };
 
         let in_progress = CustomerDataDeletion {
-            service_fqdn_list: local_targets.clone(),
+            service_fqdn_list: local_targets,
             requested_at: now_nanos(),
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
@@ -143,7 +143,7 @@ impl CustomerDeletionMutation {
             store.create(customer_id.0, &in_progress)?;
         }
 
-        start_customer_deletion_worker(db, customer_id.0, local_targets);
+        start_customer_deletion_worker(db, customer_id.0, in_progress.service_fqdn_list);
         Ok(CustomerDataDeletionRequestStatus::Accepted)
     }
 }
@@ -182,14 +182,14 @@ fn validate_service_fqdn_list(service_fqdn_list: Vec<String>) -> Result<Vec<Stri
 fn delete_customer_data_from_db(db: &Database, service_fqdn_list: &[String]) -> AnyhowResult<()> {
     delete_customer_data_with(
         service_fqdn_list,
-        |cf_name, service_fqdn| db.delete_customer_event_range(cf_name, service_fqdn),
+        |service_fqdn, cf_names| db.delete_customer_event_ranges(service_fqdn, cf_names),
         |service_fqdn| db.sensors_store()?.delete(service_fqdn),
     )
 }
 
 fn delete_customer_data_with(
     service_fqdn_list: &[String],
-    mut delete_event_range: impl FnMut(&str, &str) -> AnyhowResult<()>,
+    mut delete_event_ranges: impl FnMut(&str, &[&str]) -> AnyhowResult<()>,
     mut delete_sensor: impl FnMut(&str) -> AnyhowResult<()>,
 ) -> AnyhowResult<()> {
     for service_fqdn in service_fqdn_list {
@@ -198,11 +198,8 @@ fn delete_customer_data_with(
         } else {
             REPRODUCE_COLUMN_FAMILIES.as_slice()
         };
-        for cf_name in column_families {
-            delete_event_range(cf_name, service_fqdn).with_context(|| {
-                format!("cannot delete customer data range for {service_fqdn} from {cf_name}")
-            })?;
-        }
+        delete_event_ranges(service_fqdn, column_families)
+            .with_context(|| format!("cannot delete customer event ranges for {service_fqdn}"))?;
     }
 
     for service_fqdn in service_fqdn_list {
@@ -333,7 +330,8 @@ mod tests {
     }
 
     async fn wait_for_terminal_job(db: &Database, customer_id: u32) -> CustomerDataDeletion {
-        for _ in 0..100 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
             let job = db
                 .customer_deletion_job_store()
                 .unwrap()
@@ -343,9 +341,12 @@ mod tests {
             if job.status != CustomerDataDeletionStatus::InProgress {
                 return job;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "customer deletion job did not finish"
+            );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("customer deletion job did not finish");
     }
 
     #[test]
@@ -601,11 +602,10 @@ mod tests {
         let count = Arc::clone(&sensor_delete_count);
         let result = delete_customer_data_with(
             &["piglet.node1.example.test".to_string()],
-            |cf, _| {
-                if cf == "http" {
-                    anyhow::bail!("injected event deletion failure");
-                }
-                Ok(())
+            |service_fqdn, cf_names| {
+                assert_eq!(service_fqdn, "piglet.node1.example.test");
+                assert_eq!(cf_names, PIGLET_COLUMN_FAMILIES);
+                anyhow::bail!("injected event deletion failure");
             },
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);

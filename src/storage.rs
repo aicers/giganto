@@ -2,8 +2,6 @@
 
 mod migration;
 
-#[cfg(feature = "bootroot")]
-use std::sync::Mutex;
 use std::{
     collections::HashSet,
     marker::PhantomData,
@@ -36,6 +34,8 @@ use giganto_client::ingest::{
 };
 pub use migration::migrate_data_dir;
 pub use rocksdb::Direction;
+#[cfg(feature = "bootroot")]
+use rocksdb::WriteBatch;
 #[cfg(feature = "storage_diagnostics")]
 use rocksdb::properties;
 use rocksdb::{
@@ -196,8 +196,6 @@ impl DbOptions {
 #[derive(Clone)]
 pub struct Database {
     db: Arc<DB>,
-    #[cfg(feature = "bootroot")]
-    customer_deletion_job_lock: Arc<Mutex<()>>,
 }
 
 impl Database {
@@ -217,11 +215,7 @@ impl Database {
             .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
 
         let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
-        Ok(Database {
-            db: Arc::new(db),
-            #[cfg(feature = "bootroot")]
-            customer_deletion_job_lock: Arc::new(Mutex::new(())),
-        })
+        Ok(Database { db: Arc::new(db) })
     }
 
     /// Shuts down the database, ensuring data integrity and consistency before exiting.
@@ -410,27 +404,28 @@ impl Database {
     #[cfg(feature = "bootroot")]
     pub fn customer_deletion_job_store(&self) -> Result<CustomerDeletionJobStore<'_>> {
         let cf = self.get_cf_handle(CUSTOMER_DELETION_JOBS_CF)?;
-        Ok(CustomerDeletionJobStore {
-            db: &self.db,
-            cf,
-            lock: &self.customer_deletion_job_lock,
-        })
+        Ok(CustomerDeletionJobStore { db: &self.db, cf })
     }
 
     #[cfg(feature = "bootroot")]
-    pub(crate) fn delete_customer_event_range(
+    pub(crate) fn delete_customer_event_ranges(
         &self,
-        cf_name: &str,
         service_fqdn: &str,
+        cf_names: &[&str],
     ) -> Result<()> {
-        let cf = self.get_cf_handle(cf_name)?;
         let mut from = Vec::with_capacity(service_fqdn.len() + 1);
         from.extend_from_slice(service_fqdn.as_bytes());
-        from.push(0);
+        from.push(0x00);
         let mut to = Vec::with_capacity(service_fqdn.len() + 1);
         to.extend_from_slice(service_fqdn.as_bytes());
-        to.push(1);
-        self.db.delete_range_cf(cf, from, to)?;
+        to.push(0x01);
+
+        let mut batch = WriteBatch::default();
+        for cf_name in cf_names {
+            let cf = self.get_cf_handle(cf_name)?;
+            batch.delete_range_cf(cf, &from, &to);
+        }
+        self.db.write(batch)?;
         Ok(())
     }
 
@@ -791,16 +786,11 @@ unsafe impl Send for SensorStore<'_> {}
 pub struct CustomerDeletionJobStore<'db> {
     db: &'db DB,
     cf: &'db ColumnFamily,
-    lock: &'db Mutex<()>,
 }
 
 #[cfg(feature = "bootroot")]
 impl CustomerDeletionJobStore<'_> {
     pub fn create(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
-        let _guard = self
-            .lock
-            .lock()
-            .map_err(|_| anyhow!("customer deletion job lock is poisoned"))?;
         if self
             .db
             .get_cf(self.cf, customer_id.to_be_bytes())?
@@ -819,10 +809,6 @@ impl CustomerDeletionJobStore<'_> {
     }
 
     pub fn update(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
-        let _guard = self
-            .lock
-            .lock()
-            .map_err(|_| anyhow!("customer deletion job lock is poisoned"))?;
         if self
             .db
             .get_cf(self.cf, customer_id.to_be_bytes())?
@@ -835,10 +821,6 @@ impl CustomerDeletionJobStore<'_> {
 
     #[allow(dead_code)]
     pub fn delete(&self, customer_id: u32) -> Result<()> {
-        let _guard = self
-            .lock
-            .lock()
-            .map_err(|_| anyhow!("customer deletion job lock is poisoned"))?;
         self.db.delete_cf(self.cf, customer_id.to_be_bytes())?;
         Ok(())
     }
