@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: biomejs/setup-biome@v2
         with:
-          version: 2.3.5
+          version: latest
       - uses: ./.github/cache-cargo
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
@@ -52,7 +52,7 @@ jobs:
       - name: Detect Cargo.lock changes
         run: git diff-index --quiet HEAD --
       - name: markdownlint
-        uses: DavidAnson/markdownlint-cli2-action@v23
+        uses: DavidAnson/markdownlint-cli2-action@v24
         with:
           # Recursive, deliberately. The action's default glob is
           # `*.{md,markdown}` — repository root only — and `.markdownlint.yaml`
