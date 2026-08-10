@@ -99,7 +99,7 @@ pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 #[cfg(feature = "bootroot")]
-const CUSTOMER_DELETION_JOBS_CF: &str = "customer_deletion_jobs";
+const CUSTOMER_DELETION_JOBS_CF: &str = "customer deletion jobs";
 
 #[cfg(feature = "bootroot")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
