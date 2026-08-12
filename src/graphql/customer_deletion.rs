@@ -59,13 +59,22 @@ const REPRODUCE_COLUMN_FAMILIES: [&str; 18] = [
 
 #[derive(Enum, Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CustomerDataDeletionRequestStatus {
+    /// Terminal mutation response: this node accepted the request and started the deletion job.
     Accepted,
+    /// Terminal mutation response: an earlier deletion job for this customer already succeeded.
     AlreadyCompleted,
+    /// Wait for the existing job: this customer's previously accepted deletion is still running.
     DeletionInProgress,
-    Busy,
-    RetentionInProgress,
-    ShuttingDown,
-    NoLocalTarget,
+    /// Retry later: another customer's deletion blocks this request, which was not accepted.
+    BlockedByAnotherDeletion,
+    /// Retry later: retention cleanup blocks this request, which was not accepted.
+    BlockedByRetention,
+    /// Retry after restart or on another node: shutdown blocks this request, which was not accepted.
+    BlockedByShutdown,
+    /// Node-local no-op: none of the requested targets are stored on this node.
+    ///
+    /// This response remains node-local until cluster aggregation is implemented in #1727.
+    NoLocalTargetOnThisNode,
 }
 
 #[derive(Default)]
@@ -125,7 +134,7 @@ impl CustomerDeletionMutation {
                 .filter(|target| local_sensors.contains(target))
                 .collect::<Vec<_>>();
             if targets.is_empty() {
-                return Ok(CustomerDataDeletionRequestStatus::NoLocalTarget);
+                return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
             }
             targets
         };
@@ -209,70 +218,67 @@ fn delete_customer_data_with(
     Ok(())
 }
 
-#[derive(Debug)]
-enum WorkerError {
-    PersistSucceeded,
-    PersistFailed { deletion_error: String },
-}
-
 fn start_customer_deletion_worker(db: Database, customer_id: u32, service_fqdn_list: Vec<String>) {
     let worker_db = db.clone();
-    let worker = tokio::task::spawn_blocking(move || -> std::result::Result<(), WorkerError> {
-        match delete_customer_data_from_db(&worker_db, &service_fqdn_list) {
-            Ok(()) => {
-                info!(customer_id, "Customer data deletion succeeded");
-                mark_job_succeeded(&worker_db, customer_id)
-                    .map_err(|_| WorkerError::PersistSucceeded)?;
-            }
-            Err(err) => {
-                let deletion_error = format!("{err:#}");
-                error!(
-                    customer_id,
-                    "Customer data deletion failed: {deletion_error}"
-                );
-                mark_job_failed(&worker_db, customer_id, deletion_error.clone())
-                    .map_err(|_| WorkerError::PersistFailed { deletion_error })?;
-            }
-        }
-
-        Ok(())
+    let worker = tokio::task::spawn_blocking(move || {
+        delete_customer_data_from_db(&worker_db, &service_fqdn_list)
     });
 
     tokio::spawn(supervise_worker(worker, db, customer_id));
 }
 
+#[derive(Debug)]
+enum DeletionOutcome {
+    Succeeded,
+    Failed(String),
+}
+
+const TERMINAL_STATUS_UPDATE_ATTEMPTS: usize = 2;
+
+/// Owns the single transition from `InProgress` to a durable terminal state.
+///
+/// The blocking worker only performs deletion and returns its outcome. Keeping
+/// persistence here ensures a failed status write can be retried without
+/// repeating deletion work.
+///
+/// TODO(#1724): Register and drain this supervisor at the application lifecycle
+/// level before RocksDB shutdown. Until that coordination is implemented, the
+/// supervisor remains detached.
 async fn supervise_worker(
-    worker: tokio::task::JoinHandle<std::result::Result<(), WorkerError>>,
+    worker: tokio::task::JoinHandle<AnyhowResult<()>>,
     db: Database,
     customer_id: u32,
 ) {
-    match worker.await {
-        Ok(Ok(())) => {}
-        Ok(Err(WorkerError::PersistSucceeded)) => {
-            if let Err(err) = mark_job_succeeded(&db, customer_id) {
-                error!(
-                    customer_id,
-                    "Failed to persist successful customer data deletion: {err:#}"
-                );
-            }
+    let outcome = match worker.await {
+        Ok(Ok(())) => {
+            info!(customer_id, "Customer data deletion succeeded");
+            DeletionOutcome::Succeeded
         }
-        Ok(Err(WorkerError::PersistFailed { deletion_error })) => {
-            if let Err(err) = mark_job_failed(&db, customer_id, deletion_error) {
-                error!(
-                    customer_id,
-                    "Failed to persist customer data deletion failure: {err:#}"
-                );
-            }
+        Ok(Err(err)) => {
+            let message = format!("{err:#}");
+            error!(customer_id, "Customer data deletion failed: {message}");
+            DeletionOutcome::Failed(message)
         }
         Err(join_error) => {
             let message = format!("Customer data deletion task join failure: {join_error}");
             error!(customer_id, "{message}");
-            if let Err(update_err) = mark_job_failed(&db, customer_id, message) {
-                error!(
-                    customer_id,
-                    "Failed to persist customer data deletion failure: {update_err:#}"
-                );
-            }
+            DeletionOutcome::Failed(message)
+        }
+    };
+
+    for attempt in 1..=TERMINAL_STATUS_UPDATE_ATTEMPTS {
+        let update = match &outcome {
+            DeletionOutcome::Succeeded => mark_job_succeeded(&db, customer_id),
+            DeletionOutcome::Failed(message) => mark_job_failed(&db, customer_id, message.clone()),
+        };
+        match update {
+            Ok(()) => return,
+            Err(err) => error!(
+                customer_id,
+                attempt,
+                max_attempts = TERMINAL_STATUS_UPDATE_ATTEMPTS,
+                "Failed to persist terminal customer data deletion status: {err:#}"
+            ),
         }
     }
 }
@@ -312,9 +318,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES, WorkerError,
-        delete_customer_data_from_db, delete_customer_data_with, supervise_worker,
-        validate_service_fqdn_list,
+        PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES, delete_customer_data_from_db,
+        delete_customer_data_with, supervise_worker, validate_service_fqdn_list,
     };
     use crate::{
         datetime::DateTime,
@@ -515,7 +520,7 @@ mod tests {
             .await;
         assert_eq!(
             response.data.to_string(),
-            "{deleteCustomerData: NO_LOCAL_TARGET}"
+            "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
         );
         assert!(
             schema
@@ -645,7 +650,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn supervisor_retries_terminal_job_updates() {
+    async fn supervisor_owns_terminal_job_updates() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
         let make_job = || CustomerDataDeletion {
@@ -658,7 +663,7 @@ mod tests {
         let store = db.customer_deletion_job_store().unwrap();
 
         store.create(1, &make_job()).unwrap();
-        let succeeded_worker = tokio::task::spawn_blocking(|| Err(WorkerError::PersistSucceeded));
+        let succeeded_worker = tokio::task::spawn_blocking(|| Ok(()));
         supervise_worker(succeeded_worker, db.clone(), 1).await;
         let succeeded = store.get(1).unwrap().unwrap();
         assert_eq!(succeeded.status, CustomerDataDeletionStatus::Succeeded);
@@ -669,7 +674,7 @@ mod tests {
         let deletion_error = "injected deletion failure".to_string();
         let failed_worker = tokio::task::spawn_blocking({
             let deletion_error = deletion_error.clone();
-            move || Err(WorkerError::PersistFailed { deletion_error })
+            move || anyhow::bail!(deletion_error)
         });
         supervise_worker(failed_worker, db.clone(), 2).await;
         let failed = store.get(2).unwrap().unwrap();
