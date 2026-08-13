@@ -34,12 +34,16 @@ use giganto_client::ingest::{
 };
 pub use migration::migrate_data_dir;
 pub use rocksdb::Direction;
+#[cfg(feature = "bootroot")]
+use rocksdb::WriteBatch;
 #[cfg(feature = "storage_diagnostics")]
 use rocksdb::properties;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DB, DBIteratorWithThreadMode, Options, ReadOptions,
 };
 use serde::de::DeserializeOwned;
+#[cfg(feature = "bootroot")]
+use serde::{Deserialize, Serialize};
 use tokio::{select, sync::Notify, time};
 use tracing::{debug, error, info, warn};
 
@@ -94,6 +98,26 @@ pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
     "seculog",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
+#[cfg(feature = "bootroot")]
+const CUSTOMER_DELETION_JOBS_CF: &str = "customer deletion jobs";
+
+#[cfg(feature = "bootroot")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CustomerDataDeletionStatus {
+    InProgress,
+    Succeeded,
+    Failed,
+}
+
+#[cfg(feature = "bootroot")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerDataDeletion {
+    pub service_fqdn_list: Vec<String>,
+    pub requested_at: i64,
+    pub status: CustomerDataDeletionStatus,
+    pub completed_at: Option<i64>,
+    pub error: Option<String>,
+}
 
 // Not a `sensor`+`time` event.
 const NON_STANDARD_CFS: [&str; 6] = [
@@ -183,6 +207,8 @@ impl Database {
         );
         cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
         cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
+        #[cfg(feature = "bootroot")]
+        cfs_name.push(CUSTOMER_DELETION_JOBS_CF);
 
         let cfs = cfs_name
             .into_iter()
@@ -373,6 +399,47 @@ impl Database {
     pub fn sensors_store(&self) -> Result<SensorStore<'_>> {
         let cf = self.get_cf_handle("sensors")?;
         Ok(SensorStore { db: &self.db, cf })
+    }
+
+    #[cfg(feature = "bootroot")]
+    pub fn customer_deletion_job_store(&self) -> Result<CustomerDeletionJobStore<'_>> {
+        let cf = self.get_cf_handle(CUSTOMER_DELETION_JOBS_CF)?;
+        Ok(CustomerDeletionJobStore { db: &self.db, cf })
+    }
+
+    #[cfg(feature = "bootroot")]
+    pub(crate) fn delete_customer_event_ranges(
+        &self,
+        service_fqdn: &str,
+        cf_names: &[&str],
+    ) -> Result<()> {
+        let mut from = Vec::with_capacity(service_fqdn.len() + 1);
+        from.extend_from_slice(service_fqdn.as_bytes());
+        from.push(0x00);
+        let mut to = Vec::with_capacity(service_fqdn.len() + 1);
+        to.extend_from_slice(service_fqdn.as_bytes());
+        to.push(0x01);
+
+        let mut batch = WriteBatch::default();
+        for cf_name in cf_names {
+            let cf = self.get_cf_handle(cf_name)?;
+            batch.delete_range_cf(cf, &from, &to);
+        }
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    #[cfg(all(test, feature = "bootroot"))]
+    pub(crate) fn put_cf_for_test(&self, cf_name: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        let cf = self.get_cf_handle(cf_name)?;
+        self.db.put_cf(cf, key, value)?;
+        Ok(())
+    }
+
+    #[cfg(all(test, feature = "bootroot"))]
+    pub(crate) fn get_cf_for_test(&self, cf_name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let cf = self.get_cf_handle(cf_name)?;
+        Ok(self.db.get_cf(cf, key)?)
     }
 
     /// Returns the store for Ftp
@@ -703,11 +770,73 @@ impl SensorStore<'_> {
             .map(|(key, _)| String::from_utf8(key.to_vec()).expect("from utf8"))
             .collect()
     }
+
+    #[cfg(feature = "bootroot")]
+    pub fn delete(&self, name: &str) -> Result<()> {
+        self.db.delete_cf(self.cf, name)?;
+        Ok(())
+    }
 }
 
 // RocksDB must manage thread safety for `ColumnFamily`.
 // See rust-rocksdb/rust-rocksdb#407.
 unsafe impl Send for SensorStore<'_> {}
+
+#[cfg(feature = "bootroot")]
+pub struct CustomerDeletionJobStore<'db> {
+    db: &'db DB,
+    cf: &'db ColumnFamily,
+}
+
+#[cfg(feature = "bootroot")]
+impl CustomerDeletionJobStore<'_> {
+    pub fn create(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
+        if self
+            .db
+            .get_cf(self.cf, customer_id.to_be_bytes())?
+            .is_some()
+        {
+            bail!("customer deletion job already exists for customer {customer_id}");
+        }
+        self.put(customer_id, job)
+    }
+
+    pub fn get(&self, customer_id: u32) -> Result<Option<CustomerDataDeletion>> {
+        self.db
+            .get_cf(self.cf, customer_id.to_be_bytes())?
+            .map(|value| bincode::deserialize(&value).context("invalid customer deletion job"))
+            .transpose()
+    }
+
+    pub fn update(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
+        if self
+            .db
+            .get_cf(self.cf, customer_id.to_be_bytes())?
+            .is_none()
+        {
+            bail!("customer deletion job does not exist for customer {customer_id}");
+        }
+        self.put(customer_id, job)
+    }
+
+    #[allow(dead_code)]
+    pub fn delete(&self, customer_id: u32) -> Result<()> {
+        self.db.delete_cf(self.cf, customer_id.to_be_bytes())?;
+        Ok(())
+    }
+
+    fn put(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
+        let value = bincode::serialize(job).context("cannot serialize customer deletion job")?;
+        self.db
+            .put_cf(self.cf, customer_id.to_be_bytes(), value)
+            .context("cannot persist customer deletion job")
+    }
+}
+
+#[cfg(feature = "bootroot")]
+// RocksDB must manage thread safety for `ColumnFamily`.
+// See rust-rocksdb/rust-rocksdb#407.
+unsafe impl Send for CustomerDeletionJobStore<'_> {}
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Default, Debug, Clone)]
@@ -1366,6 +1495,8 @@ mod tests {
         BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
         StatisticsIter, StorageKey, read_compression_metadata, store_compression_metadata,
     };
+    #[cfg(feature = "bootroot")]
+    use super::{CUSTOMER_DELETION_JOBS_CF, CustomerDataDeletion, CustomerDataDeletionStatus};
     use crate::datetime::DateTime;
 
     fn setup_db() -> (TempDir, Database) {
@@ -1385,6 +1516,66 @@ mod tests {
     fn register_sensor(db: &Database, sensor: &str) {
         let sensor_store = db.sensors_store().unwrap();
         sensor_store.insert(sensor, DateTime::now()).unwrap();
+    }
+
+    #[cfg(feature = "bootroot")]
+    #[test]
+    fn customer_deletion_job_uses_customer_id_key_and_roundtrips_value() {
+        let (_dir, db) = setup_db();
+        let store = db.customer_deletion_job_store().unwrap();
+        let customer_id = 0x0102_0304;
+        let requested_at = DateTime::now().timestamp_nanos_opt().unwrap();
+        let job = CustomerDataDeletion {
+            service_fqdn_list: vec![
+                "piglet.node1.example.test".to_string(),
+                "reproduce.node1.example.test".to_string(),
+            ],
+            requested_at,
+            status: CustomerDataDeletionStatus::InProgress,
+            completed_at: None,
+            error: None,
+        };
+
+        store.create(customer_id, &job).unwrap();
+
+        assert_eq!(store.get(customer_id).unwrap(), Some(job.clone()));
+        let duplicate = CustomerDataDeletion {
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(requested_at),
+            error: Some("must not replace the existing job".to_string()),
+            ..job.clone()
+        };
+        assert!(store.create(customer_id, &duplicate).is_err());
+        assert_eq!(store.get(customer_id).unwrap(), Some(job.clone()));
+
+        let missing_customer_id = customer_id + 1;
+        assert!(store.update(missing_customer_id, &duplicate).is_err());
+        assert!(store.get(missing_customer_id).unwrap().is_none());
+
+        let cf = db.get_cf_handle(CUSTOMER_DELETION_JOBS_CF).unwrap();
+        let entries = db
+            .db
+            .iterator_cf(cf, rocksdb::IteratorMode::Start)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(&*entries[0].0, customer_id.to_be_bytes());
+        let stored: CustomerDataDeletion = bincode::deserialize(&entries[0].1).unwrap();
+        assert_eq!(stored.service_fqdn_list, job.service_fqdn_list);
+        assert_eq!(stored.requested_at, requested_at);
+
+        let completed_at = DateTime::now().timestamp_nanos_opt().unwrap();
+        let failed = CustomerDataDeletion {
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(completed_at),
+            error: Some("failure".to_string()),
+            ..job
+        };
+        store.update(customer_id, &failed).unwrap();
+        assert_eq!(store.get(customer_id).unwrap(), Some(failed));
+
+        store.delete(customer_id).unwrap();
+        assert!(store.get(customer_id).unwrap().is_none());
     }
 
     fn insert_conn(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64, value: &[u8]) {
