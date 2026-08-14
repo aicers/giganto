@@ -33,6 +33,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed peer self-check in release builds to compare full socket addresses
   (IP and port) instead of IP only, so peers on the same host with different
   ports are no longer silently dropped.
+- Fixed peer-state locks being held across peer connection and peer-list
+  update awaits by snapshotting shared state before asynchronous work.
 
 ### Changed
 
