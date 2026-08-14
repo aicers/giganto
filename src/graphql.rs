@@ -43,7 +43,10 @@ pub(crate) use crate::graphql::standalone::{
     events_in_cluster, events_vec_in_cluster, paged_events_in_cluster,
 };
 use crate::{
-    comm::{IngestSensors, PcapSensors, ingest::implement::EventFilter, peer::Peers},
+    comm::{
+        IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
+        ingest::implement::EventFilter, peer::Peers,
+    },
     settings::{ConfigVisible, Settings},
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
@@ -196,6 +199,9 @@ pub fn schema(
     database: Database,
     pcap_sensors: PcapSensors,
     ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    stream_direct_channels: StreamDirectChannels,
+    peer_notify: Option<Arc<Notify>>,
     peers: Peers,
     request_client_pool: reqwest::Client,
     export_path: PathBuf,
@@ -210,6 +216,8 @@ pub fn schema(
         .data(database)
         .data(pcap_sensors)
         .data(ingest_sensors)
+        .data(runtime_ingest_sensors)
+        .data(stream_direct_channels)
         .data(peers)
         .data(request_client_pool)
         .data(export_path)
@@ -218,6 +226,11 @@ pub fn schema(
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
         .data(settings);
+    let schema = if let Some(peer_notify) = peer_notify {
+        schema.data(peer_notify)
+    } else {
+        schema
+    };
     #[cfg(feature = "bootroot")]
     let schema = schema.data(Arc::new(
         customer_deletion::CustomerDeletionRequestManager::default(),
@@ -1010,9 +1023,9 @@ mod tests {
         schema, search_candidate_deserialize_count, time_range, write_run_tcpdump,
     };
     use crate::comm::{
-        IngestSensors,
+        IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
         ingest::implement::EventFilter,
-        new_pcap_sensors,
+        new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
         peer::{PeerInfo, Peers},
     };
     use crate::datetime::DateTime;
@@ -1030,21 +1043,32 @@ mod tests {
         pub export_dir: tempfile::TempDir, // keep export directory alive for tests
         pub db: Database,
         pub schema: Schema,
+        #[cfg(feature = "bootroot")]
+        pub(super) ingest_sensors: IngestSensors,
+        #[cfg(feature = "bootroot")]
+        pub(super) runtime_ingest_sensors: RunTimeIngestSensors,
+        #[cfg(feature = "bootroot")]
+        pub(super) pcap_sensors: PcapSensors,
+        #[cfg(feature = "bootroot")]
+        pub(super) stream_direct_channels: StreamDirectChannels,
     }
 
     impl TestSchema {
         fn setup(ingest_sensors: IngestSensors, peers: Peers) -> Self {
-            Self::setup_with_node_name(ingest_sensors, peers, "giganto1")
+            Self::setup_with_node_name(ingest_sensors, peers, "giganto1", None)
         }
 
         fn setup_with_node_name(
             ingest_sensors: IngestSensors,
             peers: Peers,
             node_name: &str,
+            peer_notify: Option<Arc<Notify>>,
         ) -> Self {
             let db_dir = tempfile::tempdir().unwrap();
             let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
             let pcap_sensors = new_pcap_sensors();
+            let runtime_ingest_sensors = new_runtime_ingest_sensors();
+            let stream_direct_channels = new_stream_direct_channels();
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
             let (reload_tx, _) = tokio::sync::mpsc::channel::<ConfigVisible>(1);
@@ -1055,8 +1079,11 @@ mod tests {
             let schema = schema(
                 NodeName(node_name.to_string()),
                 db.clone(),
-                pcap_sensors,
-                ingest_sensors,
+                pcap_sensors.clone(),
+                ingest_sensors.clone(),
+                runtime_ingest_sensors.clone(),
+                stream_direct_channels.clone(),
+                peer_notify,
                 peers,
                 request_client_pool,
                 export_dir.path().to_path_buf(),
@@ -1072,6 +1099,14 @@ mod tests {
                 export_dir,
                 db,
                 schema,
+                #[cfg(feature = "bootroot")]
+                ingest_sensors,
+                #[cfg(feature = "bootroot")]
+                runtime_ingest_sensors,
+                #[cfg(feature = "bootroot")]
+                pcap_sensors,
+                #[cfg(feature = "bootroot")]
+                stream_direct_channels,
             }
         }
 
@@ -1097,11 +1132,19 @@ mod tests {
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup_with_node_name(ingest_sensors, peers, node_name)
+            Self::setup_with_node_name(ingest_sensors, peers, node_name, None)
         }
 
         #[cfg(feature = "bootroot")]
         pub(super) fn new_with_ingest_sensors(sensors: &[&str]) -> Self {
+            Self::new_with_ingest_sensors_and_peer_notify(sensors, None)
+        }
+
+        #[cfg(feature = "bootroot")]
+        pub(super) fn new_with_ingest_sensors_and_peer_notify(
+            sensors: &[&str],
+            peer_notify: Option<Arc<Notify>>,
+        ) -> Self {
             let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
                 sensors
                     .iter()
@@ -1109,7 +1152,7 @@ mod tests {
                     .collect::<HashSet<String>>(),
             ));
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sensors, peers)
+            Self::setup_with_node_name(ingest_sensors, peers, "giganto1", peer_notify)
         }
 
         pub fn new_with_graphql_peer(port: u16) -> Self {
