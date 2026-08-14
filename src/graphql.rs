@@ -1023,11 +1023,13 @@ mod tests {
         schema, search_candidate_deserialize_count, time_range, write_run_tcpdump,
     };
     use crate::comm::{
-        IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
+        IngestSensors,
         ingest::implement::EventFilter,
         new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
         peer::{PeerInfo, Peers},
     };
+    #[cfg(feature = "bootroot")]
+    use crate::comm::{PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
     use crate::datetime::DateTime;
     use crate::graphql::{IpRange, Mutation, PortRange, Query};
     use crate::settings::{ConfigVisible, Settings};
@@ -1058,6 +1060,7 @@ mod tests {
             Self::setup_with_node_name(ingest_sensors, peers, "giganto1", None)
         }
 
+        #[cfg_attr(not(feature = "bootroot"), allow(clippy::needless_pass_by_value))]
         fn setup_with_node_name(
             ingest_sensors: IngestSensors,
             peers: Peers,

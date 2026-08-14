@@ -921,6 +921,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), peer_notify.notified())
             .await
             .expect("peer sensor-list notification was not sent");
+        drop(schema);
 
         let without_peers = TestSchema::new_with_ingest_sensors(&[target]);
         let response = without_peers
