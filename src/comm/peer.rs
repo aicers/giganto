@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{
     select,
     sync::{
-        Notify, RwLock,
+        Mutex, Notify, RwLock,
         mpsc::{Receiver, Sender, channel},
         oneshot,
     },
@@ -106,6 +106,7 @@ const PEER_RETRY_INTERVAL: u64 = 5;
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
 #[allow(clippy::module_name_repetitions)]
 pub type PeerIdents = Arc<RwLock<HashSet<PeerIdentity>>>;
+type SharedConfigDoc = Arc<Mutex<DocumentMut>>;
 
 #[allow(clippy::module_name_repetitions)]
 #[derive(Deserialize, Serialize, Debug, Default)]
@@ -159,7 +160,7 @@ pub struct PeerConns {
     peer_sender: Sender<PeerIdentity>,
     local_address: SocketAddr,
     notify_sensor: Arc<Notify>,
-    config_doc: DocumentMut,
+    config_doc: SharedConfigDoc,
     config_path: String,
 }
 
@@ -279,7 +280,7 @@ impl Peer {
             peer_sender: sender,
             local_address: self.local_address,
             notify_sensor,
-            config_doc,
+            config_doc: Arc::new(Mutex::new(config_doc)),
             config_path,
         };
 
@@ -456,7 +457,10 @@ async fn client_connection(
     local_connect_name: String,
     notify_shutdown: Arc<Notify>,
 ) -> Result<()> {
-    let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
+    let (graphql_port, publish_port) = {
+        let config_doc = peer_conn_info.config_doc.lock().await;
+        get_peer_ports(&config_doc)
+    };
     'connection: loop {
         match connect(&client_endpoint, &shared_client_config, &peer_info).await {
             Ok((connection, mut send, mut recv, snapshot_gen)) => {
@@ -665,7 +669,10 @@ async fn server_connection(
     let peer_identities = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
 
     // Exchange peer list/sensor list.
-    let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
+    let (graphql_port, publish_port) = {
+        let config_doc = peer_conn_info.config_doc.lock().await;
+        get_peer_ports(&config_doc)
+    };
     let (recv_peer_list, recv_sensor_list) =
         response_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
             &mut send,
@@ -780,7 +787,7 @@ async fn handle_request(
     peer_list: Arc<RwLock<HashSet<PeerIdentity>>>,
     peers: Peers,
     sender: Sender<PeerIdentity>,
-    doc: DocumentMut,
+    config_doc: SharedConfigDoc,
     path: &str,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_peer_data(&mut recv).await?;
@@ -788,8 +795,15 @@ async fn handle_request(
         PeerCode::UpdatePeerList => {
             let update_peer_list = bincode::deserialize::<HashSet<PeerIdentity>>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize peer list: {e}"))?;
-            update_to_new_peer_list(update_peer_list, local_addr, peer_list, sender, doc, path)
-                .await?;
+            update_to_new_peer_list(
+                update_peer_list,
+                local_addr,
+                peer_list,
+                sender,
+                config_doc,
+                path,
+            )
+            .await?;
         }
         PeerCode::UpdateSensorList => {
             let update_sensor_list = bincode::deserialize::<PeerInfo>(&msg_buf)
@@ -913,30 +927,68 @@ async fn update_to_new_peer_list(
     local_address: SocketAddr,
     peer_list: Arc<RwLock<HashSet<PeerIdentity>>>,
     sender: Sender<PeerIdentity>,
-    mut doc: DocumentMut,
+    config_doc: SharedConfigDoc,
     path: &str,
 ) -> Result<()> {
-    let mut is_change = false;
-    for recv_peer_info in recv_peer_list {
-        let is_changed = local_address != recv_peer_info.addr
-            && !peer_list.read().await.contains(&recv_peer_info);
-        if is_changed {
-            is_change = true;
-            peer_list.write().await.insert(recv_peer_info.clone());
-            sender.send(recv_peer_info).await?;
-        }
+    update_to_new_peer_list_with_writer(
+        recv_peer_list,
+        local_address,
+        peer_list,
+        sender,
+        config_doc,
+        path,
+        write_toml_file,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn update_to_new_peer_list_with_writer<F>(
+    recv_peer_list: HashSet<PeerIdentity>,
+    local_address: SocketAddr,
+    peer_list: Arc<RwLock<HashSet<PeerIdentity>>>,
+    sender: Sender<PeerIdentity>,
+    config_doc: SharedConfigDoc,
+    path: &str,
+    write_config: F,
+) -> Result<()>
+where
+    F: FnOnce(&DocumentMut, &str) -> anyhow::Result<()>,
+{
+    let mut config_doc_guard = config_doc.lock().await;
+    let mut peer_list_guard = peer_list.write().await;
+    let new_peers: Vec<PeerIdentity> = recv_peer_list
+        .into_iter()
+        .filter(|peer| peer.addr != local_address && !peer_list_guard.contains(peer))
+        .collect();
+
+    if new_peers.is_empty() {
+        return Ok(());
     }
 
-    if is_change {
-        let data: Vec<PeerIdentity> = peer_list.read().await.iter().cloned().collect();
-        if let Err(e) = insert_toml_peers(&mut doc, Some(data)) {
-            error!("Unable to generate TOML content: {e:?}");
-        }
-        if let Err(e) = write_toml_file(&doc, path) {
-            error!("Failed to write TOML content to file: {e:?}");
-        }
-        info!("Peer list updated - {peer_list:?}");
+    let mut updated_peer_list = peer_list_guard.clone();
+    updated_peer_list.extend(new_peers.iter().cloned());
+
+    // Refresh from disk while holding the write-serialization lock so edits are
+    // never applied to the stale document loaded when the peer service started.
+    let mut updated_doc = read_toml_file(path).context("failed to refresh config file")?;
+    insert_toml_peers(
+        &mut updated_doc,
+        Some(updated_peer_list.iter().cloned().collect()),
+    )
+    .map_err(|error| anyhow!(error.message))
+    .context("failed to update peers in config")?;
+    write_config(&updated_doc, path).context("failed to persist peer list")?;
+
+    *config_doc_guard = updated_doc;
+    *peer_list_guard = updated_peer_list;
+    drop(peer_list_guard);
+    drop(config_doc_guard);
+
+    for peer in new_peers {
+        sender.send(peer).await?;
     }
+    info!("Peer list updated - {peer_list:?}");
 
     Ok(())
 }
@@ -1258,7 +1310,7 @@ pub mod tests {
                 peer_sender: sender,
                 local_address,
                 notify_sensor: Arc::new(Notify::new()),
-                config_doc: doc,
+                config_doc: Arc::new(tokio::sync::Mutex::new(doc)),
                 config_path: config.path().to_string(),
             };
 
@@ -1560,7 +1612,7 @@ pub mod tests {
                 peer_sender: sender,
                 local_address: peer.local_address,
                 notify_sensor,
-                config_doc,
+                config_doc: Arc::new(tokio::sync::Mutex::new(config_doc)),
                 config_path,
             };
 
@@ -1960,7 +2012,7 @@ pub mod tests {
             peer_sender: sender,
             local_address: "127.0.0.1:1111".parse().unwrap(),
             notify_sensor: Arc::new(Notify::new()),
-            config_doc: doc,
+            config_doc: Arc::new(Mutex::new(doc)),
             config_path: config.path().to_string(),
         };
 
@@ -2292,7 +2344,7 @@ pub mod tests {
             peer_list,
             peers,
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2328,7 +2380,7 @@ pub mod tests {
             peer_list,
             peers,
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2520,7 +2572,7 @@ pub mod tests {
             local_addr,
             peer_list.clone(),
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2558,7 +2610,7 @@ pub mod tests {
             local_addr,
             peer_list.clone(),
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2595,7 +2647,7 @@ pub mod tests {
             local_addr,
             peer_list.clone(),
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2626,7 +2678,7 @@ pub mod tests {
             local_addr,
             peer_list.clone(),
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2659,7 +2711,7 @@ pub mod tests {
             local_addr,
             peer_list,
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2694,7 +2746,7 @@ pub mod tests {
             local_addr,
             peer_list,
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2728,8 +2780,8 @@ pub mod tests {
         drop(receiver);
         let local_addr: SocketAddr = "127.0.0.1:38383".parse().unwrap();
 
-        let doc = toml_edit::DocumentMut::new();
-        let config = TempConfig::from_str("");
+        let doc = "peers = []".parse::<toml_edit::DocumentMut>().unwrap();
+        let config = TempConfig::from_str("peers = []");
 
         let peer_ident = peer_identity("127.0.0.2:38383".parse().unwrap(), "peer2");
         let recv_peers: HashSet<PeerIdentity> = vec![peer_ident].into_iter().collect();
@@ -2739,7 +2791,7 @@ pub mod tests {
             local_addr,
             peer_list,
             sender,
-            doc,
+            Arc::new(Mutex::new(doc)),
             config.path(),
         )
         .await
@@ -2749,37 +2801,138 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_to_new_peer_list_keeps_config_structure_when_peers_key_missing() {
+    async fn test_update_to_new_peer_list_returns_insert_error_without_changing_state() {
         let peer_list = Arc::new(RwLock::new(HashSet::new()));
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         let local_addr: SocketAddr = "127.0.0.1:38383".parse().unwrap();
 
-        // Config is rewritten even if the peers key is missing; ensure structure stays the same.
         let initial = "title = \"ok\"\n";
         let doc = initial.parse::<toml_edit::DocumentMut>().unwrap();
+        let config_doc = Arc::new(Mutex::new(doc));
         let config = TempConfig::from_str(initial);
         let before = std::fs::read_to_string(config.path()).unwrap();
 
         let peer_ident = peer_identity("127.0.0.2:38383".parse().unwrap(), "peer2");
         let recv_peers: HashSet<PeerIdentity> = vec![peer_ident.clone()].into_iter().collect();
 
-        update_to_new_peer_list(
+        let err = update_to_new_peer_list(
             recv_peers,
             local_addr,
             peer_list.clone(),
             sender,
-            doc,
+            config_doc.clone(),
             config.path(),
         )
         .await
-        .unwrap();
+        .unwrap_err();
 
-        assert!(peer_list.read().await.contains(&peer_ident));
+        assert!(err.to_string().contains("failed to update peers in config"));
+        assert!(!peer_list.read().await.contains(&peer_ident));
+        assert_eq!(config_doc.lock().await.to_string(), initial);
 
         let after = std::fs::read_to_string(config.path()).unwrap();
-        let before_toml: toml::Value = toml::from_str(&before).unwrap();
-        let after_toml: toml::Value = toml::from_str(&after).unwrap();
-        assert_eq!(before_toml, after_toml);
+        assert_eq!(before, after);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_peer_list_updates_preserve_union() {
+        let peer_list = Arc::new(RwLock::new(HashSet::new()));
+        let (sender, _receiver) = tokio::sync::mpsc::channel(2);
+        let local_addr: SocketAddr = "127.0.0.1:38383".parse().unwrap();
+        let initial = "peers = []\n";
+        let config_doc = Arc::new(Mutex::new(initial.parse::<DocumentMut>().unwrap()));
+        let config = TempConfig::from_str(initial);
+
+        let peer_a = peer_identity("127.0.0.2:38383".parse().unwrap(), "peer-a");
+        let peer_b = peer_identity("127.0.0.3:38383".parse().unwrap(), "peer-b");
+        let path = config.path().to_string();
+
+        let update_a = tokio::spawn({
+            let peer_list = peer_list.clone();
+            let config_doc = config_doc.clone();
+            let path = path.clone();
+            let peer_a = peer_a.clone();
+            let sender = sender.clone();
+            async move {
+                update_to_new_peer_list(
+                    HashSet::from([peer_a]),
+                    local_addr,
+                    peer_list,
+                    sender,
+                    config_doc,
+                    &path,
+                )
+                .await
+            }
+        });
+        let update_b = tokio::spawn({
+            let peer_list = peer_list.clone();
+            let config_doc = config_doc.clone();
+            let peer_b = peer_b.clone();
+            async move {
+                update_to_new_peer_list(
+                    HashSet::from([peer_b]),
+                    local_addr,
+                    peer_list,
+                    sender,
+                    config_doc,
+                    &path,
+                )
+                .await
+            }
+        });
+
+        update_a.await.unwrap().unwrap();
+        update_b.await.unwrap().unwrap();
+
+        let persisted = read_toml_file(config.path()).unwrap();
+        let peers = persisted["peers"].as_array().expect("peers array");
+        let persisted_addresses: HashSet<&str> = peers
+            .iter()
+            .map(|peer| {
+                peer.as_inline_table()
+                    .and_then(|table| table.get("addr"))
+                    .and_then(toml_edit::Value::as_str)
+                    .expect("peer address")
+            })
+            .collect();
+        assert_eq!(persisted_addresses.len(), 2);
+        assert!(persisted_addresses.contains(peer_a.addr.to_string().as_str()));
+        assert!(persisted_addresses.contains(peer_b.addr.to_string().as_str()));
+        assert_eq!(*peer_list.read().await, HashSet::from([peer_a, peer_b]));
+        assert_eq!(config_doc.lock().await.to_string(), persisted.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_peer_list_write_failure_leaves_config_and_runtime_unchanged() {
+        let peer_list = Arc::new(RwLock::new(HashSet::new()));
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let local_addr: SocketAddr = "127.0.0.1:38383".parse().unwrap();
+        let initial = "peers = []\n";
+        let config_doc = Arc::new(Mutex::new(initial.parse::<DocumentMut>().unwrap()));
+        let config = TempConfig::from_str(initial);
+        let peer = peer_identity("127.0.0.2:38383".parse().unwrap(), "peer-a");
+
+        let err = update_to_new_peer_list_with_writer(
+            HashSet::from([peer.clone()]),
+            local_addr,
+            peer_list.clone(),
+            sender,
+            config_doc.clone(),
+            config.path(),
+            |_doc, _path| Err(anyhow!("injected write failure")),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("failed to persist peer list"));
+        assert!(peer_list.read().await.is_empty());
+        assert_eq!(config_doc.lock().await.to_string(), initial);
+        assert_eq!(std::fs::read_to_string(config.path()).unwrap(), initial);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(TryRecvError::Empty | TryRecvError::Disconnected)
+        ));
     }
 
     #[tokio::test]
@@ -3137,7 +3290,7 @@ pub mod tests {
                     peer_list,
                     peers,
                     sender,
-                    doc,
+                    Arc::new(Mutex::new(doc)),
                     &config_path,
                 )
                 .await
@@ -3193,7 +3346,7 @@ pub mod tests {
                     peer_list,
                     peers,
                     sender,
-                    doc,
+                    Arc::new(Mutex::new(doc)),
                     &config_path,
                 )
                 .await

@@ -35,6 +35,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   ports are no longer silently dropped.
 - Fixed peer update fan-out so peer-state locks are released before network
   I/O, reducing peer update contention and shutdown delays.
+- Fixed peer-list configuration updates to serialize concurrent writes and
+  atomically replace the configuration file. Configuration refresh, update,
+  and persistence failures are now returned to the peer handler instead of
+  being logged and ignored.
 
 ### Changed
 

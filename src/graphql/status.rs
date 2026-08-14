@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, io::Write, time::Duration};
+use std::{io::Write, path::Path, time::Duration};
 
 use anyhow::{Context as AnyhowContext, anyhow};
 #[cfg(feature = "storage_diagnostics")]
@@ -268,12 +268,35 @@ pub fn read_toml_file(path: &str) -> anyhow::Result<DocumentMut> {
 
 pub fn write_toml_file(doc: &DocumentMut, path: &str) -> anyhow::Result<()> {
     let output = doc.to_string();
-    let mut config_file = OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .create(true)
-        .open(path)?;
-    writeln!(config_file, "{output}")?;
+    let path = Path::new(path);
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut config_file = tempfile::Builder::new()
+        .prefix(".giganto-config-")
+        .tempfile_in(parent)
+        .context("failed to create temporary config file")?;
+    if let Ok(metadata) = path.metadata() {
+        config_file
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .context("failed to preserve config file permissions")?;
+    }
+    config_file
+        .write_all(output.as_bytes())
+        .context("failed to write temporary config file")?;
+    if !output.ends_with('\n') {
+        writeln!(config_file).context("failed to finish temporary config file")?;
+    }
+    config_file
+        .as_file()
+        .sync_all()
+        .context("failed to sync temporary config file")?;
+    config_file
+        .persist(path)
+        .map_err(|error| error.error)
+        .context("failed to atomically replace config file")?;
     Ok(())
 }
 
