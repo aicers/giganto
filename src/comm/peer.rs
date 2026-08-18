@@ -403,11 +403,12 @@ async fn client_run(
     local_connect_name: String,
     notify_shutdown: Arc<Notify>,
 ) {
-    for peer in &*peer_conn_info.peer_identities.read().await {
+    let peer_identities = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
+    for peer in peer_identities {
         tokio::spawn(client_connection(
             client_endpoint.clone(),
             shared_client_config.clone(),
-            peer.clone(),
+            peer,
             peer_conn_info.clone(),
             local_connect_name.clone(),
             notify_shutdown.clone(),
@@ -494,7 +495,8 @@ async fn client_connection(
                     peer_conn_info.ingest_sensors.read().await.to_owned();
 
                 // Add my peer info to the peer list.
-                let mut send_peer_list = peer_conn_info.peer_identities.read().await.clone();
+                let mut send_peer_list =
+                    snapshot_peer_identities(&peer_conn_info.peer_identities).await;
                 send_peer_list.insert(PeerIdentity {
                     addr: peer_conn_info.local_address,
                     hostname: local_connect_name.clone(),
@@ -537,11 +539,14 @@ async fn client_connection(
                 .await?;
 
                 // Share the received peer list with connected peers.
-                for conn in (*peer_conn_info.peer_conns.read().await).values() {
+                let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
+                let peer_identities =
+                    snapshot_peer_identities(&peer_conn_info.peer_identities).await;
+                for conn in connections {
                     tokio::spawn(update_peer_info::<HashSet<PeerIdentity>>(
-                        conn.clone(),
+                        conn,
                         PeerCode::UpdatePeerList,
-                        peer_conn_info.peer_identities.read().await.clone(),
+                        peer_identities.clone(),
                     ));
                 }
 
@@ -582,9 +587,10 @@ async fn client_connection(
                         },
                         () = peer_conn_info.notify_sensor.notified() => {
                             let sensor_list = peer_conn_info.ingest_sensors.read().await.to_owned();
-                            for conn in (*peer_conn_info.peer_conns.write().await).values() {
+                            let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
+                            for conn in connections {
                                 tokio::spawn(update_peer_info::<PeerInfo>(
-                                    conn.clone(),
+                                    conn,
                                     PeerCode::UpdateSensorList,
                                     PeerInfo {
                                         ingest_sensors: sensor_list.clone(),
@@ -656,6 +662,7 @@ async fn server_connection(
         };
 
     let sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
+    let peer_identities = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
 
     // Exchange peer list/sensor list.
     let (graphql_port, publish_port) = get_peer_ports(&peer_conn_info.config_doc);
@@ -665,7 +672,7 @@ async fn server_connection(
             &mut recv,
             PeerCode::UpdatePeerList,
             (
-                peer_conn_info.peer_identities.read().await.clone(),
+                peer_identities,
                 PeerInfo {
                     ingest_sensors: sensor_list,
                     graphql_port,
@@ -695,11 +702,13 @@ async fn server_connection(
     .await?;
 
     // Share the received peer list with your connected peers.
-    for conn in (*peer_conn_info.peer_conns.read().await).values() {
+    let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
+    let peer_identities = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
+    for conn in connections {
         tokio::spawn(update_peer_info::<HashSet<PeerIdentity>>(
-            conn.clone(),
+            conn,
             PeerCode::UpdatePeerList,
-            peer_conn_info.peer_identities.read().await.clone(),
+            peer_identities.clone(),
         ));
     }
 
@@ -740,9 +749,10 @@ async fn server_connection(
             },
             () = peer_conn_info.notify_sensor.notified() => {
                 let sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
-                for conn in (*peer_conn_info.peer_conns.read().await).values() {
+                let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
+                for conn in connections {
                     tokio::spawn(update_peer_info::<PeerInfo>(
-                        conn.clone(),
+                        conn,
                         PeerCode::UpdateSensorList,
                         PeerInfo {
                             ingest_sensors: sensor_list.clone(),
@@ -868,6 +878,18 @@ where
             bail!("Failed to send peer data");
         }
     }
+}
+
+async fn snapshot_connections(peer_conns: &RwLock<HashMap<String, Connection>>) -> Vec<Connection> {
+    let peer_conns = peer_conns.read().await;
+    peer_conns.values().cloned().collect()
+}
+
+async fn snapshot_peer_identities(
+    peer_identities: &RwLock<HashSet<PeerIdentity>>,
+) -> HashSet<PeerIdentity> {
+    let peer_identities = peer_identities.read().await;
+    peer_identities.clone()
 }
 
 async fn check_for_duplicate_connections(
@@ -3192,6 +3214,29 @@ pub mod tests {
         assert!(stored_info.ingest_sensors.contains("sensor-a"));
         assert_eq!(stored_info.graphql_port, Some(9100));
         assert_eq!(stored_info.publish_port, Some(9200));
+    }
+
+    #[tokio::test]
+    async fn test_connection_snapshot_releases_lock_before_subsequent_await() {
+        let peer_conns = Arc::new(RwLock::new(HashMap::new()));
+        let continue_task = Arc::new(Notify::new());
+        let continue_task_handle = continue_task.clone();
+        let peer_conns_handle = peer_conns.clone();
+        let (snapshot_ready_tx, snapshot_ready_rx) = oneshot::channel();
+
+        let task = tokio::spawn(async move {
+            let connections = snapshot_connections(&peer_conns_handle).await;
+            snapshot_ready_tx.send(connections.len()).unwrap();
+            continue_task_handle.notified().await;
+        });
+
+        assert_eq!(snapshot_ready_rx.await.unwrap(), 0);
+        let peer_conns_write =
+            with_timeout("peer connection write lock timeout", peer_conns.write()).await;
+        drop(peer_conns_write);
+
+        continue_task.notify_one();
+        task.await.unwrap();
     }
 
     #[tokio::test]
