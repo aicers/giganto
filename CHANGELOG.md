@@ -41,6 +41,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Unified storage introspection GraphQL APIs (`propertiesCf` and
   `countByProtocol`) under the opt-in `storage_diagnostics` feature flag.
   Enable diagnostics with `--features storage_diagnostics`.
+- Simplified the `cancellation` module down to `TaskTracker`. Its
+  `CancellationToken` wrapper, along with `check_cancelled` and
+  `CancelledError`, is gone in favor of `tokio_util::sync::CancellationToken`,
+  whose full API (`run_until_cancelled`, `drop_guard`, `cancelled_owned`) is
+  now available. `TaskTracker` is `Clone` and its `spawn` preserves the task's
+  own output type, so nested spawning and result observation no longer need
+  wrapping. `token()` is now `root_token()`, and `drain` reports an unfinished
+  drain as `Ok(DrainOutcome::Pending(..))` rather than an error, leaving the
+  logging cadence to the caller; `DrainError` is removed. A tracked task that
+  vanishes without returning normally is now reported with its name and age.
 
 ## [0.28.0] - 2026-06-19
 

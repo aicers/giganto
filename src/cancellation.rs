@@ -1,16 +1,17 @@
-//! Cancellation primitives for cooperative subsystem shutdown and task tracking.
+//! Task tracking for cooperative subsystem shutdown.
 //!
-//! This module provides two main primitives:
+//! This module provides [`TaskTracker`]: a task tracker that spawns named,
+//! tracked tasks with automatic child token creation, admission control, and
+//! drain-with-timeout diagnostics.
 //!
-//! - [`CancellationToken`]: A hierarchical cancellation token supporting
-//!   parent-child relationships and cooperative cancellation checks.
-//! - [`TaskTracker`]: A task tracker that spawns named, tracked tasks with
-//!   automatic child token creation, drain-with-timeout, and pending-task
-//!   logging.
+//! Cancellation tokens themselves are
+//! [`tokio_util::sync::CancellationToken`]; this module does not wrap them, so
+//! its full API (`child_token`, `cancelled`, `run_until_cancelled`,
+//! `drop_guard`, ...) is available to call sites directly.
 //!
-//! These primitives are intended to be shared by subsystems such as
-//! `ingest`, `publish`, `peer`, retention work, and other long-running async
-//! components that need a common cancellation and drain pattern.
+//! [`TaskTracker`] is intended to be shared by subsystems such as `ingest`,
+//! `publish`, `peer`, retention work, and other long-running async components
+//! that need a common cancellation and drain pattern.
 //!
 //! # Intended Pattern
 //!
@@ -27,108 +28,53 @@
 //! For subsystems with separate ingress shutdown, use the staged
 //! [`TaskTracker::close`] -> [`TaskTracker::cancel_children`] ->
 //! [`TaskTracker::drain`] sequence instead.
-//! Drain only waits for tracked tasks to exit; it does not report their
-//! returned results or panics. Subsystem owners should retain the
-//! [`tokio::task::JoinHandle`] returned by [`TaskTracker::spawn`] for critical
-//! tasks and await or select on it so task failures are observed.
+//!
+//! Three rules cover the task side:
+//!
+//! 1. Observe cancellation with `tokio::select!` on
+//!    [`CancellationToken::cancelled`] or with
+//!    [`CancellationToken::run_until_cancelled`].
+//! 2. In a CPU-bound section with no `.await` point, check
+//!    [`CancellationToken::is_cancelled`].
+//! 3. `drain` only waits for tasks to exit; it does not report their returned
+//!    results or panics. Keep the [`tokio::task::JoinHandle`] returned by
+//!    [`TaskTracker::spawn`] when the result matters.
+//!
+//! Worked examples live in this module's tests:
+//! `cancel_children_cancels_spawned_task_token` (select-based observation),
+//! `cancel_and_drain_completes_cooperative_tasks` (cooperative loop),
+//! `drain_returns_pending_on_timeout` (drain timeout and pending
+//! diagnostics), `spawn_returns_join_handle_for_task_outcome` (result
+//! observation), and `staged_shutdown_closes_cancels_then_drains` (staged
+//! shutdown).
 //!
 //! # Granularity
 //!
-//! Use [`TaskTracker::spawn`] only for long-lived tasks: subsystem entry
-//! points, one task per QUIC connection, or one task per bi-directional
-//! stream. For per-event or per-batch hot paths, take only a child token via
-//! [`TaskTracker::create_child_token`] and use `tokio::select!` or
-//! [`CancellationToken::check_cancelled`], spawning directly with
-//! `tokio::spawn` when needed. Calling [`TaskTracker::spawn`] per message
-//! will turn the registry mutex into the throughput ceiling.
+//! [`TaskTracker`] is the right tool when a tracked task spawns further tasks
+//! that must be drained too, and when task results are observed through the
+//! [`tokio::task::JoinHandle`] rather than harvested by the tracker. A flat
+//! set of tasks whose results are collected in one place is better served by
+//! `tokio::task::JoinSet` or `tokio_util::task::JoinMap`.
 //!
-//! ## Subsystem-level usage
+//! Cancellation reaches a child tracker only if the child was built from the
+//! parent's token. A tracker built with
+//! [`with_token`](TaskTracker::with_token) from a token handed down by its
+//! parent stays inside the parent's cancellation tree, so the parent's
+//! [`cancel_children`](TaskTracker::cancel_children) reaches the child
+//! tracker's tasks. A tracker built with [`new`](TaskTracker::new) starts a
+//! fresh root, so the parent's cancellation never reaches it. Neither the
+//! compiler nor a type signature catches the difference.
 //!
-//! For async worker tasks, use `tokio::select!` with `token.cancelled()` so
-//! that cancellation is observed while awaiting I/O, timers, or channels.
-//! This is the **primary** pattern for async subsystems:
+//! Cleanup that a task must perform after observing cancellation has to run
+//! before the task returns. `Drop` is synchronous and cannot `.await`, so
+//! cleanup cannot be deferred to it, and `drain` only ends once every tracked
+//! task has returned.
 //!
-//! ```ignore
-//! use std::time::Duration;
-//!
-//! async fn run_subsystem() -> Result<(), Box<dyn std::error::Error>> {
-//!     let tracker = crate::cancellation::TaskTracker::new();
-//!
-//!     let worker = tracker.spawn("worker-1", |token| async move {
-//!         loop {
-//!             tokio::select! {
-//!                 result = do_work() => {
-//!                     // process result ...
-//!                 }
-//!                 _ = token.cancelled() => {
-//!                     // shutdown requested; cleanup and exit
-//!                     break;
-//!                 }
-//!             }
-//!         }
-//!         Ok(())
-//!     })?;
-//!
-//!     // ... later, when shutdown starts ...
-//!     tracker.cancel_and_drain(Duration::from_secs(5)).await?;
-//!
-//!     match worker.await {
-//!         Ok(Ok(())) => {}
-//!         Ok(Err(err)) => tracing::info!(?err, "worker observed cancellation"),
-//!         Err(err) => tracing::error!(?err, "worker task panicked or was aborted"),
-//!     }
-//!
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## Staged Shutdown
-//!
-//! Under sustained load, callers often need to close ingress before signalling
-//! all live tasks. Drive the stages independently when cleanup can pile up:
-//!
-//! ```ignore
-//! use std::time::Duration;
-//!
-//! async fn stop_subsystem(
-//!     tracker: &crate::cancellation::TaskTracker,
-//!     endpoint: quinn::Endpoint,
-//! ) -> Result<(), crate::cancellation::DrainError> {
-//!     tracker
-//!         .close()
-//!         .map_err(|_| crate::cancellation::DrainError::LockPoisoned)?; // 1) refuse new spawns
-//!     endpoint.close(0_u32.into(), &[]);             // 2) close ingress
-//!     tracker.cancel_children();                     // 3) signal live tasks
-//!     tracker.drain(Duration::from_secs(30)).await?; // 4) graceful drain
-//!     // Optionally escalate after this point if drain times out.
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## `cancel()` vs `cancelled()`
-//!
-//! `cancel()` is used by the controller side to signal shutdown.
-//! `cancelled().await` is used by worker tasks to wait for that signal,
-//! typically inside a `tokio::select!` branch alongside the main work future.
-//!
-//! ## `check_cancelled()`
-//!
-//! Use [`CancellationToken::check_cancelled`] as a **secondary** cooperative
-//! check in CPU-bound loops or hot-path sections where you need to test for
-//! cancellation without introducing an `.await` point:
-//!
-//! ```ignore
-//! async fn consume_batches(
-//!     token: crate::cancellation::CancellationToken,
-//! ) -> Result<(), crate::cancellation::CancelledError> {
-//!     loop {
-//!         token.check_cancelled()?;
-//!         read_next_batch().await;
-//!         token.check_cancelled()?;
-//!         apply_batch();
-//!     }
-//! }
-//! ```
+//! Use [`TaskTracker::spawn`] only for long-lived tasks. On the per-event or
+//! per-batch hot path, take only a child token via
+//! [`TaskTracker::create_child_token`] and spawn directly with `tokio::spawn`
+//! when needed. Calling [`TaskTracker::spawn`] per message will turn the
+//! registry mutex into the throughput ceiling.
 
 use std::{
     borrow::Cow,
@@ -136,26 +82,14 @@ use std::{
     fmt,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use tokio::task::JoinHandle;
-use tokio_util::task::TaskTracker as TokioTaskTracker;
+use tokio_util::{sync::CancellationToken, task::TaskTracker as TokioTaskTracker};
 use tracing::{info, warn};
-
-/// Error returned when a cancellation token has been cancelled.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CancelledError;
-
-impl fmt::Display for CancelledError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "operation cancelled")
-    }
-}
-
-impl std::error::Error for CancelledError {}
 
 /// Snapshot of a task that was still pending when drain timed out.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,39 +114,25 @@ impl fmt::Display for LockPoisonedError {
 
 impl std::error::Error for LockPoisonedError {}
 
-/// Error returned when [`TaskTracker::cancel_and_drain`] or
-/// [`TaskTracker::drain`] fails.
+/// Result of [`TaskTracker::drain`] or [`TaskTracker::cancel_and_drain`].
+///
+/// A timeout is not a failure: it is the signal to report progress and wait
+/// again. Callers are expected to repeat the drain until it returns
+/// [`Drained`](Self::Drained), deciding for themselves how often and at what
+/// level to log the pending snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DrainError {
-    /// The timeout elapsed before all tracked tasks completed.
-    Timeout {
-        /// Number of tasks that were still pending when the timeout elapsed.
-        pending_count: usize,
-        /// Snapshot of tasks that were still pending when the timeout elapsed.
-        pending: Vec<PendingTaskSnapshot>,
-    },
-    /// An internal mutex was poisoned while collecting pending tasks.
-    LockPoisoned,
+pub enum DrainOutcome {
+    /// All tracked tasks completed within the timeout.
+    Drained,
+    /// The timeout elapsed while these tasks were still running.
+    Pending(Vec<PendingTaskSnapshot>),
 }
-
-impl fmt::Display for DrainError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Timeout { pending_count, .. } => {
-                write!(f, "drain timed out with {pending_count} pending task(s)")
-            }
-            Self::LockPoisoned => write!(f, "task tracker lock was poisoned"),
-        }
-    }
-}
-
-impl std::error::Error for DrainError {}
 
 /// Error returned when [`TaskTracker::spawn`] cannot admit a new task.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SpawnError {
-    /// The tracker has been closed (via [`TaskTracker::close`] or
-    /// [`TaskTracker::cancel_and_drain`]).
+    /// The tracker has been closed (via [`TaskTracker::close`],
+    /// [`TaskTracker::drain`], or [`TaskTracker::cancel_and_drain`]).
     Closed,
     /// An internal mutex was poisoned during spawn admission.
     LockPoisoned,
@@ -229,91 +149,6 @@ impl fmt::Display for SpawnError {
 
 impl std::error::Error for SpawnError {}
 
-type TaskRegistry = Arc<Mutex<HashMap<u64, TaskMeta>>>;
-
-/// A hierarchical cancellation token for cooperative cancellation.
-///
-/// Wraps [`tokio_util::sync::CancellationToken`] with convenience methods
-/// for cooperative cancellation inside long-running loops.
-///
-/// Tokens are cheap to clone (internally `Arc`-based) and are `Send + Sync`.
-#[derive(Clone)]
-pub struct CancellationToken {
-    inner: tokio_util::sync::CancellationToken,
-}
-
-impl CancellationToken {
-    /// Creates a new root cancellation token.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            inner: tokio_util::sync::CancellationToken::new(),
-        }
-    }
-
-    /// Creates a child token. Cancelling the parent also cancels the child,
-    /// but cancelling the child does **not** cancel the parent.
-    #[must_use]
-    pub fn child_token(&self) -> Self {
-        Self {
-            inner: self.inner.child_token(),
-        }
-    }
-
-    /// Cancels this token (and all its children).
-    ///
-    /// This is typically called by the controlling side of a subsystem when
-    /// shutdown begins and existing tasks should start exiting cooperatively.
-    pub fn cancel(&self) {
-        self.inner.cancel();
-    }
-
-    /// Returns `true` if this token has been cancelled.
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.is_cancelled()
-    }
-
-    /// Returns a future that resolves when this token is cancelled.
-    ///
-    /// This is typically used inside worker tasks that should wait for a
-    /// shutdown signal while doing other async work via `tokio::select!`.
-    pub async fn cancelled(&self) {
-        self.inner.cancelled().await;
-    }
-
-    /// Returns an error if the token has already been cancelled.
-    ///
-    /// This is useful in hot paths that want to check cancellation without
-    /// introducing an `.await` point, such as synchronous processing or
-    /// post-I/O validation before mutating local state.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CancelledError`] if the token is cancelled.
-    pub fn check_cancelled(&self) -> Result<(), CancelledError> {
-        if self.is_cancelled() {
-            Err(CancelledError)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl Default for CancellationToken {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Debug for CancellationToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CancellationToken")
-            .field("is_cancelled", &self.is_cancelled())
-            .finish()
-    }
-}
-
 /// Metadata for a tracked task.
 #[derive(Debug, Clone)]
 struct TaskMeta {
@@ -321,79 +156,13 @@ struct TaskMeta {
     started_at: std::time::Instant,
 }
 
-/// RAII guard that removes a task from the registry when dropped,
-/// guaranteeing cleanup on all termination paths (normal, cancel, panic).
-struct RegistryGuard {
-    id: u64,
-    registry: TaskRegistry,
-    live_count: Arc<AtomicUsize>,
-}
-
-impl Drop for RegistryGuard {
-    fn drop(&mut self) {
-        if let Ok(mut reg) = self.registry.lock() {
-            reg.remove(&self.id);
-        }
-        self.live_count.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-/// A task tracker that spawns named tasks with cancellation token management
-/// and graceful drain semantics.
-///
-/// Each spawned task receives a child [`CancellationToken`] tied to the
-/// tracker's root token. The tracker keeps a registry of pending tasks
-/// so it can log stragglers during drain.
-///
-/// Once [`close`](Self::close) or [`cancel_and_drain`](Self::cancel_and_drain)
-/// is called, the tracker enters a shutdown boundary. Spawn admission is
-/// serialized against `close`, so any spawn that begins to admit after `close`
-/// returns will fail with [`SpawnError`]; any task that completed admission
-/// before `close` is fully tracked and waited on by `drain`.
-///
-/// If the tracker is created with [`with_token`](Self::with_token), remember
-/// that any other tracker sharing the same root token observes the same
-/// cancellation tree: cancelling one shared root cancels tasks under both.
-///
-/// `drain` and [`cancel_and_drain`](Self::cancel_and_drain) wait for task
-/// exit, but they do not surface task return values or
-/// [`tokio::task::JoinError`]. Keep the returned [`JoinHandle`] for critical
-/// tasks and await or select on it at the subsystem boundary.
-///
-/// Typical subsystem usage:
-///
-/// ```ignore
-/// use std::time::Duration;
-///
-/// async fn run_subsystem() -> Result<(), Box<dyn std::error::Error>> {
-///     let tracker = crate::cancellation::TaskTracker::new();
-///
-///     let worker = tracker.spawn("worker", |token| async move {
-///         loop {
-///             token.check_cancelled()?;
-///             // ... do one unit of work ...
-///         }
-///     })?;
-///
-///     // ... later, when shutdown starts ...
-///     tracker.cancel_and_drain(Duration::from_secs(5)).await?;
-///
-///     match worker.await {
-///         Ok(Ok(())) => {}
-///         Ok(Err(err)) => tracing::info!(?err, "worker observed cancellation"),
-///         Err(err) => tracing::error!(?err, "worker task panicked or was aborted"),
-///     }
-///
-///     Ok(())
-/// }
-/// ```
-pub struct TaskTracker {
+/// Shared state behind every [`TaskTracker`] clone.
+struct Inner {
     root_token: CancellationToken,
     tasks: TokioTaskTracker,
-    registry: TaskRegistry,
+    registry: Mutex<HashMap<u64, TaskMeta>>,
     next_id: AtomicU64,
-    live_count: Arc<AtomicUsize>,
-    closed: std::sync::atomic::AtomicBool,
+    closed: AtomicBool,
     /// Serializes the final admission step in [`TaskTracker::spawn`] against
     /// [`TaskTracker::close`] so that a task cannot be submitted to the inner
     /// tracker after the close flag has been observed by `drain`. The lock is
@@ -402,8 +171,98 @@ pub struct TaskTracker {
     admission: Mutex<()>,
 }
 
+impl Inner {
+    /// Removes a task from the registry, returning its metadata.
+    ///
+    /// A poisoned registry still holds a consistent map — the only code that
+    /// takes this lock is registry bookkeeping — so read through the poison
+    /// rather than leaking the entry.
+    fn deregister(&self, id: u64) -> Option<TaskMeta> {
+        self.registry.lock().map_or_else(
+            |poisoned| poisoned.into_inner().remove(&id),
+            |mut reg| reg.remove(&id),
+        )
+    }
+}
+
+/// RAII guard that removes a task from the registry when dropped,
+/// guaranteeing cleanup on all termination paths (normal, cancel, abort,
+/// panic, and drop before the first poll).
+///
+/// The guard doubles as the safety net for the "every tracked task eventually
+/// returns" contract: [`TaskTracker::spawn`] flips `completed` just before the
+/// task returns, so a guard dropped with `completed` still unset names a task
+/// that vanished without running to the end.
+struct RegistryGuard {
+    id: u64,
+    inner: Arc<Inner>,
+    completed: bool,
+}
+
+impl RegistryGuard {
+    fn mark_completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for RegistryGuard {
+    fn drop(&mut self) {
+        let meta = self.inner.deregister(self.id);
+        if self.completed {
+            return;
+        }
+        // Logged outside the registry lock: the subscriber's writer may call
+        // back into the tracker. The name is recorded with `?` so a dynamic
+        // name cannot break the line-oriented log format.
+        if let Some(meta) = meta {
+            warn!(
+                id = self.id,
+                name = ?meta.name,
+                age = ?meta.started_at.elapsed(),
+                "tracked task did not run to completion"
+            );
+        }
+    }
+}
+
+/// A task tracker that spawns named tasks with cancellation token management
+/// and graceful drain semantics.
+///
+/// Each spawned task receives a child [`CancellationToken`] tied to the
+/// tracker's root token. The tracker keeps a registry of pending tasks so it
+/// can report stragglers when drain times out.
+///
+/// The tracker is cheap to clone (internally `Arc`-based); every clone shares
+/// one root token, one registry, and one admission boundary, so a tracked task
+/// can carry a clone and register the tasks it spawns in turn.
+///
+/// Once [`close`](Self::close), [`drain`](Self::drain), or
+/// [`cancel_and_drain`](Self::cancel_and_drain) is called, the tracker enters a
+/// shutdown boundary. Spawn admission is serialized against `close`, so any
+/// spawn that begins to admit after `close` returns will fail with
+/// [`SpawnError`]; any task that completed admission before `close` is fully
+/// tracked and waited on by `drain`.
+///
+/// If the tracker is created with [`with_token`](Self::with_token), remember
+/// that any other tracker sharing the same root token observes the same
+/// cancellation tree: cancelling one shared root cancels tasks under both.
+///
+/// `drain` and `cancel_and_drain` wait for task exit, but they do not surface
+/// task return values or [`tokio::task::JoinError`]. Keep the returned
+/// [`JoinHandle`] for critical tasks and await or select on it at the
+/// subsystem boundary.
+#[derive(Clone)]
+pub struct TaskTracker {
+    inner: Arc<Inner>,
+}
+
 impl TaskTracker {
     /// Creates a new task tracker with a fresh root cancellation token.
+    ///
+    /// The new root is detached from every other cancellation tree: if this
+    /// tracker is used as a child of another one, use
+    /// [`with_token`](Self::with_token) instead, or the parent's
+    /// [`cancel_children`](Self::cancel_children) will not reach these tasks.
     #[must_use]
     pub fn new() -> Self {
         Self::with_token(CancellationToken::new())
@@ -417,32 +276,33 @@ impl TaskTracker {
     #[must_use]
     pub fn with_token(root_token: CancellationToken) -> Self {
         Self {
-            root_token,
-            tasks: TokioTaskTracker::new(),
-            registry: Arc::new(Mutex::new(HashMap::new())),
-            next_id: AtomicU64::new(0),
-            live_count: Arc::new(AtomicUsize::new(0)),
-            closed: std::sync::atomic::AtomicBool::new(false),
-            admission: Mutex::new(()),
+            inner: Arc::new(Inner {
+                root_token,
+                tasks: TokioTaskTracker::new(),
+                registry: Mutex::new(HashMap::new()),
+                next_id: AtomicU64::new(0),
+                closed: AtomicBool::new(false),
+                admission: Mutex::new(()),
+            }),
         }
     }
 
-    /// Returns a reference to the root cancellation token.
+    /// Returns a reference to the tracker's root cancellation token.
     #[must_use]
-    pub fn token(&self) -> &CancellationToken {
-        &self.root_token
+    pub fn root_token(&self) -> &CancellationToken {
+        &self.inner.root_token
     }
 
     /// Creates a child cancellation token tied to the tracker's root.
     #[must_use]
     pub fn create_child_token(&self) -> CancellationToken {
-        self.root_token.child_token()
+        self.inner.root_token.child_token()
     }
 
     /// Returns `true` if the tracker has been closed against new spawns.
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+        self.inner.closed.load(Ordering::Acquire)
     }
 
     /// Closes the tracker so that no new tasks can be spawned.
@@ -461,9 +321,9 @@ impl TaskTracker {
     ///
     /// Returns [`LockPoisonedError`] if the admission lock is poisoned.
     pub fn close(&self) -> Result<(), LockPoisonedError> {
-        let _admission = self.admission.lock().map_err(|_| LockPoisonedError)?;
-        self.closed.store(true, Ordering::Release);
-        self.tasks.close();
+        let _admission = self.inner.admission.lock().map_err(|_| LockPoisonedError)?;
+        self.inner.closed.store(true, Ordering::Release);
+        self.inner.tasks.close();
         Ok(())
     }
 
@@ -473,86 +333,41 @@ impl TaskTracker {
     /// cancelled when the tracker's root token is cancelled. The task is
     /// automatically registered and deregistered in the pending-task registry
     /// when the task future is dropped after normal completion, cancellation,
-    /// abort, or panic.
+    /// abort, or panic. A task that is deregistered without having returned
+    /// normally is reported with its name and age at `WARN`.
     ///
-    /// Returns the spawned task's [`JoinHandle`]. `drain` only waits for task
-    /// exit; it does not report task outcomes. Callers that own critical
-    /// tasks should keep this handle and await or select on it to observe both
-    /// the task's `Result` and [`tokio::task::JoinError`] for panics or aborts.
-    ///
-    /// The spawned future returns `Result<(), CancelledError>`. Ordinary
-    /// work errors should therefore be handled inside the task body, or
-    /// explicitly converted if cancellation is the intended outcome.
+    /// The task's output type is preserved, so an entry point returning
+    /// `Result` can be spawned without wrapping. Returns the spawned task's
+    /// [`JoinHandle`]; `drain` only waits for task exit and does not report
+    /// task outcomes, so callers that own critical tasks should keep this
+    /// handle and await or select on it to observe both the task's output and
+    /// [`tokio::task::JoinError`] for panics or aborts.
     ///
     /// String-literal names are stored without allocation; dynamic names can
     /// still be passed with `String` or `format!(...)`.
     ///
-    /// ```ignore
-    /// let tracker = crate::cancellation::TaskTracker::new();
-    ///
-    /// let handle = tracker.spawn("stream-reader", |token| async move {
-    ///     loop {
-    ///         tokio::select! {
-    ///             _ = token.cancelled() => break,
-    ///             item = read_next_item() => {
-    ///                 let item = match item {
-    ///                     Ok(item) => item,
-    ///                     Err(err) => {
-    ///                         tracing::warn!(?err, "read error; exiting task");
-    ///                         break;
-    ///                     }
-    ///                 };
-    ///
-    ///                 if let Err(err) = handle_item(item).await {
-    ///                     tracing::warn!(?err, "handler error; exiting task");
-    ///                     break;
-    ///                 }
-    ///             }
-    ///         }
-    ///     }
-    ///     Ok(())
-    /// })?;
-    ///
-    /// match handle.await {
-    ///     Ok(Ok(())) => {}
-    ///     Ok(Err(err)) => tracing::info!(?err, "stream reader stopped after cancellation"),
-    ///     Err(err) => tracing::error!(?err, "stream reader panicked or was aborted"),
-    /// }
-    /// # Ok::<(), crate::cancellation::SpawnError>(())
-    /// ```
-    ///
-    /// Existing `tokio::spawn(async move { ... -> Result<()> })` call sites
-    /// should absorb domain errors inside the tracked task:
-    ///
-    /// ```ignore
-    /// let handle = tracker.spawn("handle_connection", |token| async move {
-    ///     if let Err(err) = handle_connection(conn, token).await {
-    ///         tracing::error!(?err, "handle_connection failed");
-    ///     }
-    ///     Ok(())
-    /// })?;
-    ///
-    /// match handle.await {
-    ///     Ok(Ok(())) => {}
-    ///     Ok(Err(err)) => tracing::info!(?err, "connection task observed cancellation"),
-    ///     Err(err) => tracing::error!(?err, "connection task panicked or was aborted"),
-    /// }
-    /// ```
+    /// `f` runs before the final admission check, so a losing race against
+    /// [`close`](Self::close) returns [`SpawnError::Closed`] after `f` has
+    /// already run, and the future it built is dropped without ever being
+    /// polled. Keep resource acquisition inside the future rather than in `f`
+    /// when the acquisition needs a matching release.
     ///
     /// # Errors
     ///
     /// Returns [`SpawnError::Closed`] if the tracker has been closed (via
-    /// [`close`](Self::close) or [`cancel_and_drain`](Self::cancel_and_drain)).
+    /// [`close`](Self::close), [`drain`](Self::drain), or
+    /// [`cancel_and_drain`](Self::cancel_and_drain)).
     ///
     /// Returns [`SpawnError::LockPoisoned`] if an internal mutex is poisoned.
     pub fn spawn<F, Fut>(
         &self,
         name: impl Into<Cow<'static, str>>,
         f: F,
-    ) -> Result<JoinHandle<Result<(), CancelledError>>, SpawnError>
+    ) -> Result<JoinHandle<Fut::Output>, SpawnError>
     where
         F: FnOnce(CancellationToken) -> Fut,
-        Fut: Future<Output = Result<(), CancelledError>> + Send + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: Send + 'static,
     {
         // Fast path: cheap closed check before doing any allocation or
         // running the user factory.
@@ -561,13 +376,11 @@ impl TaskTracker {
         }
 
         let name = name.into();
-        let child_token = self.root_token.child_token();
-        let registry = Arc::clone(&self.registry);
-        let live_count = Arc::clone(&self.live_count);
+        let child_token = self.inner.root_token.child_token();
 
         // Relaxed is sufficient: task IDs only need uniqueness and do not
         // synchronize with any other memory.
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let meta = TaskMeta {
             name,
             started_at: std::time::Instant::now(),
@@ -584,39 +397,51 @@ impl TaskTracker {
         // close+drain could observe an empty tracker just before `tasks.spawn`
         // submits a fresh task and lets it escape the drain.
         let _admission = self
+            .inner
             .admission
             .lock()
             .map_err(|_| SpawnError::LockPoisoned)?;
         if self.is_closed() {
             return Err(SpawnError::Closed);
         }
-        register_task(&registry, &live_count, id, meta)?;
+        self.register_task(id, meta)?;
         let guard = RegistryGuard {
             id,
-            registry: Arc::clone(&registry),
-            live_count: Arc::clone(&live_count),
+            inner: Arc::clone(&self.inner),
+            completed: false,
         };
         let task = async move {
             // Move the guard into the future state at construction time so it
             // still runs if the task is dropped before its first poll.
-            let _guard = guard;
-            fut.await
+            let mut guard = guard;
+            let output = fut.await;
+            guard.mark_completed();
+            output
         };
-        Ok(self.tasks.spawn(task))
+        Ok(self.inner.tasks.spawn(task))
     }
 
     /// Cancels all child tokens by cancelling the root token.
     pub fn cancel_children(&self) {
-        self.root_token.cancel();
+        self.inner.root_token.cancel();
     }
 
     /// Returns the number of tasks that are currently pending.
     #[must_use]
     pub fn pending_count(&self) -> usize {
-        self.live_count.load(Ordering::Relaxed)
+        // The registry is the single source of truth for pending tasks. A
+        // poisoned lock still holds a consistent map, so read through it
+        // rather than reporting a bogus zero.
+        self.inner
+            .registry
+            .lock()
+            .map_or_else(|poisoned| poisoned.into_inner().len(), |reg| reg.len())
     }
 
     /// Logs information about tasks that are still pending.
+    ///
+    /// Drain never calls this on its own: when and how often to report
+    /// stragglers is the caller's policy.
     ///
     /// # Errors
     ///
@@ -630,31 +455,21 @@ impl TaskTracker {
     /// Closes the tracker, cancels all children, and waits for tasks to
     /// complete within a timeout.
     ///
-    /// After this call, [`spawn`](Self::spawn) will return
-    /// [`SpawnError`].
+    /// After this call, [`spawn`](Self::spawn) will return [`SpawnError`].
     ///
-    /// If all tasks finish within `timeout`, returns `Ok(())`. Otherwise
-    /// logs pending tasks and returns `Err(DrainError)`.
-    ///
-    /// ```ignore
-    /// use std::time::Duration;
-    ///
-    /// async fn stop_subsystem(
-    ///     tracker: &crate::cancellation::TaskTracker,
-    /// ) -> Result<(), crate::cancellation::DrainError> {
-    ///     // Caller is expected to stop accepting new work before this point.
-    ///     tracker.cancel_and_drain(Duration::from_secs(5)).await
-    /// }
-    /// ```
+    /// Returns [`DrainOutcome::Drained`] if all tasks finished within
+    /// `timeout`, and [`DrainOutcome::Pending`] with a snapshot of the
+    /// stragglers otherwise. A pending outcome is not a failure; call again to
+    /// keep waiting.
     ///
     /// # Errors
     ///
-    /// Returns [`DrainError::Timeout`] if the timeout elapses before all tasks
-    /// have completed.
-    ///
-    /// Returns [`DrainError::LockPoisoned`] if an internal mutex is poisoned.
-    pub async fn cancel_and_drain(&self, timeout: Duration) -> Result<(), DrainError> {
-        self.close().map_err(|_| DrainError::LockPoisoned)?;
+    /// Returns [`LockPoisonedError`] if an internal mutex is poisoned.
+    pub async fn cancel_and_drain(
+        &self,
+        timeout: Duration,
+    ) -> Result<DrainOutcome, LockPoisonedError> {
+        self.close()?;
         self.cancel_children();
         self.drain_after_close(timeout).await
     }
@@ -662,35 +477,48 @@ impl TaskTracker {
     /// Closes the tracker and waits for all tracked tasks to complete,
     /// with a timeout.
     ///
-    /// Does **not** cancel children; call [`cancel_children`](Self::cancel_children)
-    /// first if desired.
+    /// Does **not** cancel children; call
+    /// [`cancel_children`](Self::cancel_children) first if desired.
+    ///
+    /// Returns [`DrainOutcome::Drained`] if all tasks finished within
+    /// `timeout`, and [`DrainOutcome::Pending`] with a snapshot of the
+    /// stragglers otherwise. A pending outcome is not a failure; call again to
+    /// keep waiting.
     ///
     /// # Errors
     ///
-    /// Returns [`DrainError::Timeout`] if the timeout elapses before all tasks
-    /// have completed.
-    ///
-    /// Returns [`DrainError::LockPoisoned`] if an internal mutex is poisoned.
-    pub async fn drain(&self, timeout: Duration) -> Result<(), DrainError> {
-        self.close().map_err(|_| DrainError::LockPoisoned)?;
+    /// Returns [`LockPoisonedError`] if an internal mutex is poisoned.
+    pub async fn drain(&self, timeout: Duration) -> Result<DrainOutcome, LockPoisonedError> {
+        self.close()?;
         self.drain_after_close(timeout).await
     }
 
-    async fn drain_after_close(&self, timeout: Duration) -> Result<(), DrainError> {
-        if let Ok(()) = tokio::time::timeout(timeout, self.tasks.wait()).await {
-            Ok(())
+    async fn drain_after_close(
+        &self,
+        timeout: Duration,
+    ) -> Result<DrainOutcome, LockPoisonedError> {
+        if tokio::time::timeout(timeout, self.inner.tasks.wait())
+            .await
+            .is_ok()
+        {
+            Ok(DrainOutcome::Drained)
         } else {
-            let pending = self.pending_tasks().map_err(|_| DrainError::LockPoisoned)?;
-            Self::log_pending_tasks(&pending);
-            Err(DrainError::Timeout {
-                pending_count: pending.len(),
-                pending,
-            })
+            Ok(DrainOutcome::Pending(self.pending_tasks()?))
         }
     }
 
+    fn register_task(&self, id: u64, meta: TaskMeta) -> Result<(), SpawnError> {
+        let mut reg = self
+            .inner
+            .registry
+            .lock()
+            .map_err(|_| SpawnError::LockPoisoned)?;
+        reg.insert(id, meta);
+        Ok(())
+    }
+
     fn pending_tasks(&self) -> Result<Vec<PendingTaskSnapshot>, LockPoisonedError> {
-        let reg = self.registry.lock().map_err(|_| LockPoisonedError)?;
+        let reg = self.inner.registry.lock().map_err(|_| LockPoisonedError)?;
         Ok(reg
             .iter()
             .map(|(id, meta)| PendingTaskSnapshot {
@@ -727,23 +555,11 @@ impl Default for TaskTracker {
 impl fmt::Debug for TaskTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TaskTracker")
-            .field("root_token", &self.root_token)
+            .field("root_token", &self.inner.root_token)
             .field("is_closed", &self.is_closed())
             .field("pending_count", &self.pending_count())
             .finish_non_exhaustive()
     }
-}
-
-fn register_task(
-    registry: &TaskRegistry,
-    live_count: &AtomicUsize,
-    id: u64,
-    meta: TaskMeta,
-) -> Result<(), SpawnError> {
-    let mut reg = registry.lock().map_err(|_| SpawnError::LockPoisoned)?;
-    reg.insert(id, meta);
-    live_count.fetch_add(1, Ordering::Relaxed);
-    Ok(())
 }
 
 #[cfg(test)]
@@ -796,8 +612,21 @@ mod tests {
         }
     }
 
+    /// Installs a log-capturing subscriber for the current thread.
+    fn capture_logs() -> (SharedLogBuffer, tracing::subscriber::DefaultGuard) {
+        let logs = SharedLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        (logs, guard)
+    }
+
     struct ReentrantPendingCountWriter {
-        tracker: Arc<TaskTracker>,
+        tracker: TaskTracker,
         calls: Arc<AtomicUsize>,
     }
 
@@ -815,12 +644,12 @@ mod tests {
 
     #[derive(Clone)]
     struct ReentrantPendingCountBuffer {
-        tracker: Arc<TaskTracker>,
+        tracker: TaskTracker,
         calls: Arc<AtomicUsize>,
     }
 
     impl ReentrantPendingCountBuffer {
-        fn new(tracker: Arc<TaskTracker>) -> (Self, Arc<AtomicUsize>) {
+        fn new(tracker: TaskTracker) -> (Self, Arc<AtomicUsize>) {
             let calls = Arc::new(AtomicUsize::new(0));
             (
                 Self {
@@ -837,13 +666,14 @@ mod tests {
 
         fn make_writer(&'a self) -> Self::Writer {
             ReentrantPendingCountWriter {
-                tracker: Arc::clone(&self.tracker),
+                tracker: self.tracker.clone(),
                 calls: Arc::clone(&self.calls),
             }
         }
     }
 
     const THREAD_TEST_TIMEOUT: Duration = Duration::from_secs(1);
+    const UNFINISHED_TASK_LOG: &str = "tracked task did not run to completion";
 
     fn run_on_current_thread_runtime<T, F>(future: F) -> T
     where
@@ -866,77 +696,11 @@ mod tests {
             .expect("threaded runtime should complete without deadlocking")
     }
 
-    // ── CancellationToken tests ─────────────────────────────────────
-
-    #[test]
-    fn token_starts_not_cancelled() {
-        let token = CancellationToken::new();
-        assert!(!token.is_cancelled());
-    }
-
-    #[test]
-    fn cancel_sets_is_cancelled() {
-        let token = CancellationToken::new();
-        token.cancel();
-        assert!(token.is_cancelled());
-    }
-
-    #[test]
-    fn clone_shares_state() {
-        let token = CancellationToken::new();
-        let clone = token.clone();
-        token.cancel();
-        assert!(clone.is_cancelled());
-    }
-
-    #[test]
-    fn child_cancelled_when_parent_cancelled() {
-        let parent = CancellationToken::new();
-        let child = parent.child_token();
-        assert!(!child.is_cancelled());
-        parent.cancel();
-        assert!(child.is_cancelled());
-    }
-
-    #[test]
-    fn parent_not_cancelled_when_child_cancelled() {
-        let parent = CancellationToken::new();
-        let child = parent.child_token();
-        child.cancel();
-        assert!(!parent.is_cancelled());
-        assert!(child.is_cancelled());
-    }
-
-    #[test]
-    fn grandchild_cancelled_when_grandparent_cancelled() {
-        let grandparent = CancellationToken::new();
-        let parent = grandparent.child_token();
-        let child = parent.child_token();
-        grandparent.cancel();
-        assert!(parent.is_cancelled());
-        assert!(child.is_cancelled());
-    }
-
-    #[test]
-    fn child_created_after_parent_cancelled_is_cancelled() {
-        let parent = CancellationToken::new();
-        parent.cancel();
-        let child = parent.child_token();
-        assert!(child.is_cancelled());
-    }
-
-    #[tokio::test]
-    async fn cancelled_future_resolves_on_cancel() {
-        let token = CancellationToken::new();
-        let token2 = token.clone();
-        let handle = tokio::spawn(async move {
-            token2.cancelled().await;
-            true
-        });
-        // Token not yet cancelled, task should be waiting.
-        tokio::task::yield_now().await;
-        token.cancel();
-        assert!(handle.await.expect("task should not panic"));
+    fn expect_pending(outcome: DrainOutcome) -> Vec<PendingTaskSnapshot> {
+        match outcome {
+            DrainOutcome::Pending(pending) => pending,
+            DrainOutcome::Drained => panic!("drain should not have completed yet"),
+        }
     }
 
     // ── TaskTracker tests ───────────────────────────────────────────
@@ -950,12 +714,14 @@ mod tests {
         let _handle = tracker
             .spawn("test-task", move |_token| async move {
                 completed2.store(true, Ordering::Release);
-                Ok(())
             })
             .expect("spawn should succeed");
 
-        let result = tracker.drain(Duration::from_secs(1)).await;
-        assert!(result.is_ok());
+        let outcome = tracker
+            .drain(Duration::from_secs(1))
+            .await
+            .expect("drain should succeed");
+        assert_eq!(outcome, DrainOutcome::Drained);
         assert!(completed.load(Ordering::Acquire));
         assert_eq!(tracker.pending_count(), 0);
     }
@@ -969,7 +735,6 @@ mod tests {
         let _handle = tracker
             .spawn("token-check", move |token| async move {
                 flag.store(!token.is_cancelled(), Ordering::Release);
-                Ok(())
             })
             .expect("spawn should succeed");
 
@@ -991,7 +756,6 @@ mod tests {
             .spawn("cancel-watch", move |token| async move {
                 token.cancelled().await;
                 flag.store(true, Ordering::Release);
-                Ok(())
             })
             .expect("spawn should succeed");
 
@@ -1014,8 +778,7 @@ mod tests {
 
         let _handle = tracker
             .spawn("loop-task", move |token| async move {
-                loop {
-                    token.check_cancelled()?;
+                while !token.is_cancelled() {
                     counter.fetch_add(1, Ordering::Relaxed);
                     tokio::task::yield_now().await;
                 }
@@ -1026,41 +789,62 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
 
-        let result = tracker.cancel_and_drain(Duration::from_secs(1)).await;
-        assert!(result.is_ok());
+        let outcome = tracker
+            .cancel_and_drain(Duration::from_secs(1))
+            .await
+            .expect("drain should succeed");
+        assert_eq!(outcome, DrainOutcome::Drained);
         assert!(iterations.load(Ordering::Relaxed) > 0);
     }
 
     #[tokio::test]
-    async fn drain_timeout_returns_error() {
+    async fn drain_returns_pending_on_timeout() {
         let tracker = TaskTracker::new();
 
         let _handle = tracker
             .spawn("stuck-task", |_token| async {
                 // Intentionally never completes and ignores cancellation.
                 tokio::time::sleep(Duration::from_hours(1)).await;
-                Ok(())
             })
             .expect("spawn should succeed");
 
         // Give the task a moment to start.
         tokio::task::yield_now().await;
 
-        let result = tracker.cancel_and_drain(Duration::from_millis(50)).await;
-        match result.expect_err("drain should time out") {
-            DrainError::Timeout {
-                pending_count,
-                pending,
-            } => {
-                assert_eq!(pending_count, 1);
-                assert_eq!(pending.len(), 1);
-                assert_eq!(pending[0].name, "stuck-task");
-            }
-            DrainError::LockPoisoned => panic!("unexpected lock poison during drain timeout test"),
-        }
-        // The lock-free fast path must stay consistent with the registry
-        // snapshot after a timed-out drain.
+        let outcome = tracker
+            .cancel_and_drain(Duration::from_millis(50))
+            .await
+            .expect("drain should not fail");
+        let pending = expect_pending(outcome);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].name, "stuck-task");
+        // The registry is the single source of truth for the pending count.
         assert_eq!(tracker.pending_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn drain_does_not_log_pending_tasks() {
+        let tracker = TaskTracker::new();
+        let _handle = tracker
+            .spawn("stuck-task", |_token| async {
+                tokio::time::sleep(Duration::from_hours(1)).await;
+            })
+            .expect("spawn should succeed");
+        tokio::task::yield_now().await;
+
+        let (logs, _guard) = capture_logs();
+        let outcome = tracker
+            .drain(Duration::from_millis(50))
+            .await
+            .expect("drain should not fail");
+        assert_eq!(expect_pending(outcome).len(), 1);
+
+        let output = logs.contents();
+        assert!(
+            !output.contains("still pending"),
+            "drain must leave the reporting cadence to the caller, got: {output}"
+        );
+        assert!(output.is_empty(), "drain must not log on its own: {output}");
     }
 
     #[tokio::test]
@@ -1074,7 +858,6 @@ mod tests {
             .spawn("ext-token", move |token| async move {
                 token.cancelled().await;
                 flag.store(true, Ordering::Release);
-                Ok(())
             })
             .expect("spawn should succeed");
 
@@ -1087,6 +870,129 @@ mod tests {
             .expect("drain should succeed");
         assert!(saw_cancel.load(Ordering::Acquire));
         assert_eq!(tracker.pending_count(), 0);
+    }
+
+    /// A child tracker inherits the parent's cancellation only when it is
+    /// built from a token handed down by the parent. Neither the compiler nor
+    /// a type signature catches the difference, so pin it with a test.
+    #[tokio::test]
+    async fn parent_cancellation_reaches_with_token_child_only() {
+        let parent = TaskTracker::new();
+        let inherited = TaskTracker::with_token(parent.create_child_token());
+        let detached = TaskTracker::new();
+
+        let inherited_flag = Arc::new(AtomicBool::new(false));
+        let detached_flag = Arc::new(AtomicBool::new(false));
+
+        for (tracker, name, flag) in [
+            (&inherited, "inherited", Arc::clone(&inherited_flag)),
+            (&detached, "detached", Arc::clone(&detached_flag)),
+        ] {
+            let _handle = tracker
+                .spawn(name, move |token| async move {
+                    token.cancelled().await;
+                    flag.store(true, Ordering::Release);
+                })
+                .expect("spawn should succeed");
+        }
+        tokio::task::yield_now().await;
+
+        parent.cancel_children();
+
+        assert_eq!(
+            inherited
+                .drain(Duration::from_secs(1))
+                .await
+                .expect("drain should not fail"),
+            DrainOutcome::Drained
+        );
+        assert!(inherited_flag.load(Ordering::Acquire));
+
+        let pending = expect_pending(
+            detached
+                .drain(Duration::from_millis(50))
+                .await
+                .expect("drain should not fail"),
+        );
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].name, "detached");
+        assert!(!detached_flag.load(Ordering::Acquire));
+
+        // Its own root still cancels it.
+        detached.cancel_children();
+        assert_eq!(
+            detached
+                .drain(Duration::from_secs(1))
+                .await
+                .expect("drain should not fail"),
+            DrainOutcome::Drained
+        );
+        assert!(detached_flag.load(Ordering::Acquire));
+    }
+
+    /// A tracked task carries a tracker clone and registers a task of its own
+    /// in the same registry, as a connection task does for its streams.
+    #[tokio::test]
+    async fn tracked_task_clone_registers_nested_task() {
+        let tracker = TaskTracker::new();
+        let nested_cancelled = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&nested_cancelled);
+        let nested_tracker = tracker.clone();
+        let (spawned_tx, spawned_rx) = tokio::sync::oneshot::channel();
+
+        let _handle = tracker
+            .spawn("connection", move |_token| async move {
+                let _nested = nested_tracker
+                    .spawn("stream", move |token| async move {
+                        token.cancelled().await;
+                        flag.store(true, Ordering::Release);
+                    })
+                    .expect("nested spawn should succeed");
+                spawned_tx.send(()).expect("receiver should be alive");
+            })
+            .expect("spawn should succeed");
+
+        spawned_rx
+            .await
+            .expect("connection task should register the nested task");
+
+        // The nested task is in the parent tracker's registry and drain waits
+        // for it.
+        let pending = expect_pending(
+            tracker
+                .drain(Duration::from_millis(50))
+                .await
+                .expect("drain should not fail"),
+        );
+        assert!(
+            pending.iter().any(|task| task.name == "stream"),
+            "nested task should be registered in the shared registry: {pending:?}"
+        );
+
+        tracker.cancel_children();
+        assert_eq!(
+            tracker
+                .drain(Duration::from_secs(1))
+                .await
+                .expect("drain should not fail"),
+            DrainOutcome::Drained
+        );
+        assert!(nested_cancelled.load(Ordering::Acquire));
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn clone_shares_close_state() {
+        let tracker = TaskTracker::new();
+        let clone = tracker.clone();
+
+        tracker.close().expect("close should succeed");
+
+        assert!(clone.is_closed());
+        assert!(matches!(
+            clone.spawn("late-task", |_token| async {}),
+            Err(SpawnError::Closed)
+        ));
     }
 
     #[tokio::test]
@@ -1108,7 +1014,6 @@ mod tests {
             let _handle = tracker
                 .spawn(format!("task-{i}"), move |_token| async move {
                     c.fetch_add(1, Ordering::Relaxed);
-                    Ok(())
                 })
                 .expect("spawn should succeed");
         }
@@ -1127,20 +1032,12 @@ mod tests {
         let _handle = tracker
             .spawn("slow", |_token| async {
                 tokio::time::sleep(Duration::from_hours(1)).await;
-                Ok(())
             })
             .expect("spawn should succeed");
         tokio::task::yield_now().await;
         assert_eq!(tracker.pending_count(), 1);
 
-        let logs = SharedLogBuffer::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .without_time()
-            .with_target(false)
-            .with_writer(logs.clone())
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let (logs, _guard) = capture_logs();
 
         tracker.log_pending().expect("log_pending should succeed");
 
@@ -1157,7 +1054,7 @@ mod tests {
     async fn spawn_after_close_returns_error() {
         let tracker = TaskTracker::new();
         tracker.close().expect("close should succeed");
-        let result = tracker.spawn("late-task", |_token| async { Ok(()) });
+        let result = tracker.spawn("late-task", |_token| async {});
         assert!(matches!(result, Err(SpawnError::Closed)));
     }
 
@@ -1165,7 +1062,7 @@ mod tests {
     async fn spawn_after_cancel_and_drain_returns_error() {
         let tracker = TaskTracker::new();
         let _handle = tracker
-            .spawn("normal-task", |_token| async { Ok(()) })
+            .spawn("normal-task", |_token| async {})
             .expect("spawn should succeed");
 
         tracker
@@ -1174,7 +1071,7 @@ mod tests {
             .expect("drain should succeed");
 
         // Tracker is now closed; spawn must fail.
-        let result = tracker.spawn("late-task", |_token| async { Ok(()) });
+        let result = tracker.spawn("late-task", |_token| async {});
         assert!(matches!(result, Err(SpawnError::Closed)));
     }
 
@@ -1187,7 +1084,6 @@ mod tests {
         let _handle = tracker
             .spawn("before-close", move |_token| async move {
                 flag.store(true, Ordering::Release);
-                Ok(())
             })
             .expect("spawn should succeed");
 
@@ -1197,6 +1093,51 @@ mod tests {
             .await
             .expect("drain should succeed");
         assert!(completed.load(Ordering::Acquire));
+    }
+
+    /// Staged shutdown: close ingress first, then signal live tasks, then
+    /// wait. Tasks admitted before `close` still run their cleanup.
+    #[tokio::test]
+    async fn staged_shutdown_closes_cancels_then_drains() {
+        let tracker = TaskTracker::new();
+        let cleaned_up = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cleaned_up);
+
+        let handle = tracker
+            .spawn("worker", move |token| async move {
+                token.cancelled().await;
+                // Cleanup must happen before returning: `drain` ends only
+                // when the task has returned, and `Drop` cannot await.
+                tokio::task::yield_now().await;
+                flag.store(true, Ordering::Release);
+                "clean"
+            })
+            .expect("spawn should succeed");
+        tokio::task::yield_now().await;
+
+        // 1) refuse new spawns
+        tracker.close().expect("close should succeed");
+        assert!(matches!(
+            tracker.spawn("late-task", |_token| async {}),
+            Err(SpawnError::Closed)
+        ));
+
+        // 2) the worker is still running; drain has nothing to report yet
+        assert_eq!(tracker.pending_count(), 1);
+
+        // 3) signal live tasks, then 4) drain
+        tracker.cancel_children();
+        assert_eq!(
+            tracker
+                .drain(Duration::from_secs(1))
+                .await
+                .expect("drain should not fail"),
+            DrainOutcome::Drained
+        );
+
+        assert!(cleaned_up.load(Ordering::Acquire));
+        assert_eq!(handle.await.expect("task should not panic"), "clean");
+        assert_eq!(tracker.pending_count(), 0);
     }
 
     // ── Panic cleanup tests ──────────────────────────────────────────
@@ -1225,8 +1166,11 @@ mod tests {
             })
             .expect("spawn should succeed");
 
-        let result = tracker.drain(Duration::from_millis(100)).await;
-        assert!(result.is_ok(), "drain should succeed, not timeout");
+        let outcome = tracker
+            .drain(Duration::from_millis(100))
+            .await
+            .expect("drain should not fail");
+        assert_eq!(outcome, DrainOutcome::Drained, "drain should not time out");
         let join_error = handle.await.expect_err("task should panic");
         assert!(join_error.is_panic());
         assert_eq!(tracker.pending_count(), 0);
@@ -1236,12 +1180,14 @@ mod tests {
     async fn spawn_returns_join_handle_for_task_outcome() {
         let tracker = TaskTracker::new();
         let handle = tracker
-            .spawn("outcome", |_token| async { Err(CancelledError) })
+            .spawn("outcome", |_token| async {
+                Err::<(), String>("domain failure".to_string())
+            })
             .expect("spawn should succeed");
 
         assert_eq!(
             handle.await.expect("task should not panic"),
-            Err(CancelledError)
+            Err("domain failure".to_string())
         );
         tracker
             .drain(Duration::from_secs(1))
@@ -1257,9 +1203,7 @@ mod tests {
             let _ = tracker.spawn("factory-panics", |_token| {
                 panic!("intentional panic while building future");
                 #[allow(unreachable_code)]
-                async {
-                    Ok(())
-                }
+                async {}
             });
         }));
 
@@ -1273,16 +1217,56 @@ mod tests {
         assert_eq!(tracker.pending_count(), 0);
     }
 
+    // ── Contract safety net: tasks that did not run to the end ───────
+
+    #[tokio::test]
+    async fn panicked_task_is_reported_as_unfinished() {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let handle = tracker
+            .spawn("panicker", |_token| async {
+                panic!("intentional panic in test");
+            })
+            .expect("spawn should succeed");
+        handle.await.expect_err("task should panic");
+
+        let output = logs.contents();
+        assert!(output.contains(UNFINISHED_TASK_LOG), "got: {output}");
+        assert!(output.contains(r#"name="panicker""#), "got: {output}");
+        assert!(output.contains("age="), "got: {output}");
+    }
+
+    #[tokio::test]
+    async fn aborted_task_is_reported_as_unfinished() {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let handle = tracker
+            .spawn("aborted", |_token| async {
+                tokio::time::sleep(Duration::from_hours(1)).await;
+            })
+            .expect("spawn should succeed");
+        tokio::task::yield_now().await;
+
+        handle.abort();
+        let join_error = handle.await.expect_err("task should be cancelled");
+        assert!(join_error.is_cancelled());
+        tokio::task::yield_now().await;
+
+        let output = logs.contents();
+        assert!(output.contains(UNFINISHED_TASK_LOG), "got: {output}");
+        assert!(output.contains(r#"name="aborted""#), "got: {output}");
+    }
+
     #[test]
-    fn dropped_before_first_poll_cleans_up_registry() {
-        let tracker = Arc::new(TaskTracker::new());
+    fn task_dropped_at_runtime_shutdown_is_reported_as_unfinished() {
+        let tracker = TaskTracker::new();
         let polled = Arc::new(AtomicBool::new(false));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("runtime should build");
 
         {
-            let tracker = Arc::clone(&tracker);
+            let tracker = tracker.clone();
             let polled = Arc::clone(&polled);
             runtime.block_on(async move {
                 let _handle = tracker
@@ -1291,7 +1275,6 @@ mod tests {
                         async move {
                             polled.store(true, Ordering::Release);
                             tokio::task::yield_now().await;
-                            Ok(())
                         }
                     })
                     .expect("spawn should succeed");
@@ -1300,6 +1283,7 @@ mod tests {
             });
         }
 
+        let (logs, _guard) = capture_logs();
         drop(runtime);
 
         assert!(
@@ -1307,41 +1291,74 @@ mod tests {
             "task should be dropped before its first poll"
         );
         assert_eq!(tracker.pending_count(), 0);
+        let output = logs.contents();
+        assert!(output.contains(UNFINISHED_TASK_LOG), "got: {output}");
+        assert!(output.contains(r#"name="never-polled""#), "got: {output}");
     }
+
+    #[tokio::test]
+    async fn task_returning_after_cancellation_is_not_reported() {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let _handle = tracker
+            .spawn("cooperative", |token| async move {
+                token.cancelled().await;
+            })
+            .expect("spawn should succeed");
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            tracker
+                .cancel_and_drain(Duration::from_secs(1))
+                .await
+                .expect("drain should not fail"),
+            DrainOutcome::Drained
+        );
+
+        let output = logs.contents();
+        assert!(
+            !output.contains(UNFINISHED_TASK_LOG),
+            "a task that returned after cancellation kept the contract: {output}"
+        );
+    }
+
+    // ── Admission-boundary tests ─────────────────────────────────────
 
     #[test]
     fn nested_spawn_in_future_factory_does_not_deadlock() {
         let (spawn_result, drain_result, nested_ran) = run_on_current_thread_runtime(async move {
-            let tracker = Arc::new(TaskTracker::new());
+            let tracker = TaskTracker::new();
             let nested_ran = Arc::new(AtomicBool::new(false));
-            let outer_tracker = Arc::clone(&tracker);
+            let outer_tracker = tracker.clone();
             let nested_flag = Arc::clone(&nested_ran);
 
             let result = tracker.spawn("outer", move |_token| {
-                let inner_tracker = Arc::clone(&outer_tracker);
                 let inner_flag = Arc::clone(&nested_flag);
-                let _handle = inner_tracker
+                let _handle = outer_tracker
                     .spawn("inner", move |_token| async move {
                         inner_flag.store(true, Ordering::Release);
-                        Ok(())
                     })
                     .expect("nested spawn should succeed");
-                async { Ok(()) }
+                async {}
             });
 
             let drained = tracker.drain(Duration::from_secs(1)).await;
-            (result, drained, nested_ran.load(Ordering::Acquire))
+            (
+                result.is_ok(),
+                drained.expect("drain should not fail"),
+                nested_ran.load(Ordering::Acquire),
+            )
         });
-        assert!(spawn_result.is_ok(), "outer spawn should succeed");
-        assert!(drain_result.is_ok(), "tracker drain should succeed");
+        assert!(spawn_result, "outer spawn should succeed");
+        assert_eq!(drain_result, DrainOutcome::Drained);
         assert!(nested_ran, "nested task should run");
     }
 
     #[test]
     fn close_in_future_factory_returns_spawn_error_without_deadlock() {
         let (spawn_result, drain_result) = run_on_current_thread_runtime(async move {
-            let tracker = Arc::new(TaskTracker::new());
-            let tracker_for_factory = Arc::clone(&tracker);
+            let tracker = TaskTracker::new();
+            let tracker_for_factory = tracker.clone();
 
             // The factory closes the tracker before returning. With
             // serialized admission, the surrounding spawn observes the close
@@ -1349,17 +1366,20 @@ mod tests {
             // admit the task.
             let result = tracker.spawn("close-from-factory", move |_token| {
                 let _ = tracker_for_factory.close();
-                async { Ok(()) }
+                async {}
             });
 
             let drained = tracker.drain(Duration::from_secs(1)).await;
-            (result, drained)
+            (
+                matches!(result, Err(SpawnError::Closed)),
+                drained.expect("drain should not fail"),
+            )
         });
         assert!(
-            matches!(spawn_result, Err(SpawnError::Closed)),
+            spawn_result,
             "spawn must observe the close that happened inside the factory"
         );
-        assert!(drain_result.is_ok(), "tracker drain should succeed");
+        assert_eq!(drain_result, DrainOutcome::Drained);
     }
 
     // Stress regression for the admission race: many concurrent spawns
@@ -1369,7 +1389,7 @@ mod tests {
     #[test]
     fn concurrent_spawn_and_close_never_escapes_drain() {
         for _ in 0..32 {
-            let tracker = Arc::new(TaskTracker::new());
+            let tracker = TaskTracker::new();
             let observed = Arc::new(AtomicUsize::new(0));
             let admitted_count = Arc::new(AtomicUsize::new(0));
 
@@ -1385,7 +1405,7 @@ mod tests {
 
             let mut spawn_threads = Vec::new();
             for _ in 0..8 {
-                let tracker_for_thread = Arc::clone(&tracker);
+                let tracker_for_thread = tracker.clone();
                 let observed_for_thread = Arc::clone(&observed);
                 let admitted_count_for_thread = Arc::clone(&admitted_count);
                 let runtime_for_thread = Arc::clone(&runtime);
@@ -1395,7 +1415,6 @@ mod tests {
                         let observed_for_task = Arc::clone(&observed_for_thread);
                         let result = tracker_for_thread.spawn("racer", move |_token| async move {
                             observed_for_task.fetch_add(1, Ordering::Relaxed);
-                            Ok(())
                         });
                         if result.is_ok() {
                             admitted_count_for_thread.fetch_add(1, Ordering::Relaxed);
@@ -1405,14 +1424,18 @@ mod tests {
             }
 
             // Race the closer against the spawners.
-            let tracker_for_close = Arc::clone(&tracker);
+            let tracker_for_close = tracker.clone();
             let runtime_for_close = Arc::clone(&runtime);
             let closer = std::thread::spawn(move || {
                 runtime_for_close.block_on(async move {
-                    tracker_for_close
-                        .cancel_and_drain(Duration::from_secs(5))
-                        .await
-                        .expect("drain should finish within timeout");
+                    assert_eq!(
+                        tracker_for_close
+                            .cancel_and_drain(Duration::from_secs(5))
+                            .await
+                            .expect("drain should not fail"),
+                        DrainOutcome::Drained,
+                        "drain should finish within timeout"
+                    );
                 });
             });
 
@@ -1435,29 +1458,41 @@ mod tests {
         }
     }
 
+    /// A panic inside the admission critical section poisons the admission
+    /// lock. The tracker then reports the poison as an error instead of
+    /// panicking again — the right choice for a daemon — and the task that
+    /// never reached the runtime is still deregistered.
+    #[test]
+    fn poisoned_admission_lock_surfaces_as_error() {
+        let tracker = TaskTracker::new();
+
+        // The inner `tasks.spawn` panics when no runtime is active, and it
+        // runs while the admission lock is held, so the unwind poisons it.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("no-runtime", |_token| async {});
+        }));
+        assert!(outcome.is_err(), "spawn outside a runtime should panic");
+        assert_eq!(tracker.pending_count(), 0, "the guard should deregister");
+
+        assert!(matches!(
+            tracker.spawn("after-poison", |_token| async {}),
+            Err(SpawnError::LockPoisoned)
+        ));
+        assert_eq!(tracker.close(), Err(LockPoisonedError));
+    }
+
+    // ── Miscellaneous ────────────────────────────────────────────────
+
     #[test]
     fn log_pending_with_no_tasks_emits_info() {
         let tracker = TaskTracker::new();
 
-        let logs = SharedLogBuffer::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .without_time()
-            .with_target(false)
-            .with_writer(logs.clone())
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let (logs, _guard) = capture_logs();
 
         tracker.log_pending().expect("log_pending should succeed");
 
         let output = logs.contents();
         assert!(output.contains("no pending tasks"));
-    }
-
-    #[test]
-    fn cancellation_token_default_creates_uncancelled_token() {
-        let token = CancellationToken::default();
-        assert!(!token.is_cancelled());
     }
 
     #[test]
@@ -1468,38 +1503,11 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_token_debug_format() {
-        let token = CancellationToken::new();
-        let s = format!("{token:?}");
-        assert!(s.contains("CancellationToken"));
-        assert!(s.contains("is_cancelled"));
-    }
-
-    #[test]
     fn task_tracker_debug_format() {
         let tracker = TaskTracker::new();
         let s = format!("{tracker:?}");
         assert!(s.contains("TaskTracker"));
         assert!(s.contains("is_closed"));
-    }
-
-    #[test]
-    fn cancelled_error_display() {
-        let e = CancelledError;
-        assert_eq!(e.to_string(), "operation cancelled");
-    }
-
-    #[test]
-    fn drain_error_display() {
-        let e = DrainError::Timeout {
-            pending_count: 3,
-            pending: Vec::new(),
-        };
-        assert_eq!(e.to_string(), "drain timed out with 3 pending task(s)");
-        assert_eq!(
-            DrainError::LockPoisoned.to_string(),
-            "task tracker lock was poisoned"
-        );
     }
 
     #[test]
@@ -1523,9 +1531,9 @@ mod tests {
     }
 
     #[test]
-    fn task_tracker_token_returns_root() {
+    fn task_tracker_root_token_returns_root() {
         let tracker = TaskTracker::new();
-        let token = tracker.token();
+        let token = tracker.root_token();
         assert!(!token.is_cancelled());
         tracker.cancel_children();
         assert!(token.is_cancelled());
@@ -1534,16 +1542,15 @@ mod tests {
     #[test]
     fn log_pending_with_reentrant_writer_does_not_deadlock() {
         let write_calls = run_on_current_thread_runtime(async move {
-            let tracker = Arc::new(TaskTracker::new());
+            let tracker = TaskTracker::new();
             let _handle = tracker
                 .spawn("slow", |_token| async {
                     tokio::time::sleep(Duration::from_hours(1)).await;
-                    Ok(())
                 })
                 .expect("spawn should succeed");
             tokio::task::yield_now().await;
 
-            let (writer, calls) = ReentrantPendingCountBuffer::new(Arc::clone(&tracker));
+            let (writer, calls) = ReentrantPendingCountBuffer::new(tracker.clone());
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
                 .without_time()
