@@ -955,38 +955,41 @@ async fn update_to_new_peer_list_with_writer<F>(
 where
     F: FnOnce(&DocumentMut, &str) -> anyhow::Result<()>,
 {
-    let mut config_doc_guard = config_doc.lock().await;
-    let mut peer_list_guard = peer_list.write().await;
-    let new_peers: Vec<PeerIdentity> = recv_peer_list
-        .into_iter()
-        .filter(|peer| peer.addr != local_address && !peer_list_guard.contains(peer))
-        .collect();
+    let new_peers = {
+        let mut config_doc_guard = config_doc.lock().await;
+        let mut peer_list_guard = peer_list.write().await;
+        let new_peers: Vec<PeerIdentity> = recv_peer_list
+            .into_iter()
+            .filter(|peer| peer.addr != local_address && !peer_list_guard.contains(peer))
+            .collect();
 
-    if new_peers.is_empty() {
-        return Ok(());
-    }
+        if new_peers.is_empty() {
+            return Ok(());
+        }
 
-    let mut updated_peer_list = peer_list_guard.clone();
-    updated_peer_list.extend(new_peers.iter().cloned());
+        let mut updated_peer_list = peer_list_guard.clone();
+        updated_peer_list.extend(new_peers.iter().cloned());
 
-    // Refresh from disk while holding the write-serialization lock so edits are
-    // never applied to the stale document loaded when the peer service started.
-    let mut updated_doc = read_toml_file(path).context("failed to refresh config file")?;
-    insert_toml_peers(
-        &mut updated_doc,
-        Some(updated_peer_list.iter().cloned().collect()),
-    )
-    .map_err(|error| anyhow!(error.message))
-    .context("failed to update peers in config")?;
-    write_config(&updated_doc, path).context("failed to persist peer list")?;
+        // Refresh from disk while holding the write-serialization lock so edits are
+        // never applied to the stale document loaded when the peer service started.
+        let mut updated_doc = read_toml_file(path).context("failed to refresh config file")?;
+        insert_toml_peers(
+            &mut updated_doc,
+            Some(updated_peer_list.iter().cloned().collect()),
+        )
+        .map_err(|error| anyhow!(error.message))
+        .context("failed to update peers in config")?;
+        write_config(&updated_doc, path).context("failed to persist peer list")?;
 
-    *config_doc_guard = updated_doc;
-    *peer_list_guard = updated_peer_list;
-    drop(peer_list_guard);
-    drop(config_doc_guard);
+        *config_doc_guard = updated_doc;
+        *peer_list_guard = updated_peer_list;
+        new_peers
+    };
 
     for peer in new_peers {
-        sender.send(peer).await?;
+        if let Err(error) = sender.send(peer.clone()).await {
+            error!(?peer, %error, "Failed to enqueue peer connection attempt");
+        }
     }
     info!("Peer list updated - {peer_list:?}");
 
@@ -2774,30 +2777,34 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_to_new_peer_list_returns_error_on_channel_send_failure() {
+    async fn test_update_to_new_peer_list_commits_state_on_channel_send_failure() {
         let peer_list = Arc::new(RwLock::new(HashSet::new()));
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         drop(receiver);
         let local_addr: SocketAddr = "127.0.0.1:38383".parse().unwrap();
 
         let doc = "peers = []".parse::<toml_edit::DocumentMut>().unwrap();
+        let config_doc = Arc::new(Mutex::new(doc));
         let config = TempConfig::from_str("peers = []");
 
         let peer_ident = peer_identity("127.0.0.2:38383".parse().unwrap(), "peer2");
-        let recv_peers: HashSet<PeerIdentity> = vec![peer_ident].into_iter().collect();
+        let recv_peers: HashSet<PeerIdentity> = vec![peer_ident.clone()].into_iter().collect();
 
-        let err = update_to_new_peer_list(
+        update_to_new_peer_list(
             recv_peers,
             local_addr,
-            peer_list,
+            peer_list.clone(),
             sender,
-            Arc::new(Mutex::new(doc)),
+            config_doc.clone(),
             config.path(),
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains("channel closed"));
+        assert!(peer_list.read().await.contains(&peer_ident));
+        let persisted = read_toml_file(config.path()).unwrap();
+        assert_eq!(config_doc.lock().await.to_string(), persisted.to_string());
+        assert_eq!(persisted["peers"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -2834,7 +2841,7 @@ pub mod tests {
         assert_eq!(before, after);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_concurrent_peer_list_updates_preserve_union() {
         let peer_list = Arc::new(RwLock::new(HashSet::new()));
         let (sender, _receiver) = tokio::sync::mpsc::channel(2);
@@ -2846,6 +2853,8 @@ pub mod tests {
         let peer_a = peer_identity("127.0.0.2:38383".parse().unwrap(), "peer-a");
         let peer_b = peer_identity("127.0.0.3:38383".parse().unwrap(), "peer-b");
         let path = config.path().to_string();
+        let (first_writer_entered_tx, first_writer_entered_rx) = oneshot::channel();
+        let (release_first_writer_tx, release_first_writer_rx) = std::sync::mpsc::channel();
 
         let update_a = tokio::spawn({
             let peer_list = peer_list.clone();
@@ -2854,35 +2863,62 @@ pub mod tests {
             let peer_a = peer_a.clone();
             let sender = sender.clone();
             async move {
-                update_to_new_peer_list(
+                update_to_new_peer_list_with_writer(
                     HashSet::from([peer_a]),
                     local_addr,
                     peer_list,
                     sender,
                     config_doc,
                     &path,
+                    move |doc, path| {
+                        first_writer_entered_tx.send(()).unwrap();
+                        release_first_writer_rx.recv().unwrap();
+                        write_toml_file(doc, path)
+                    },
                 )
                 .await
             }
         });
+
+        first_writer_entered_rx.await.unwrap();
+        assert!(config_doc.try_lock().is_err());
+
+        let (second_update_started_tx, second_update_started_rx) = oneshot::channel();
+        let (second_writer_entered_tx, mut second_writer_entered_rx) = oneshot::channel();
         let update_b = tokio::spawn({
             let peer_list = peer_list.clone();
             let config_doc = config_doc.clone();
             let peer_b = peer_b.clone();
             async move {
-                update_to_new_peer_list(
+                second_update_started_tx.send(()).unwrap();
+                update_to_new_peer_list_with_writer(
                     HashSet::from([peer_b]),
                     local_addr,
                     peer_list,
                     sender,
                     config_doc,
                     &path,
+                    move |doc, path| {
+                        second_writer_entered_tx.send(()).unwrap();
+                        write_toml_file(doc, path)
+                    },
                 )
                 .await
             }
         });
 
+        second_update_started_rx.await.unwrap();
+        assert!(
+            matches!(
+                second_writer_entered_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "the second writer entered while the first update held the serialization lock"
+        );
+
+        release_first_writer_tx.send(()).unwrap();
         update_a.await.unwrap().unwrap();
+        second_writer_entered_rx.await.unwrap();
         update_b.await.unwrap().unwrap();
 
         let persisted = read_toml_file(config.path()).unwrap();
