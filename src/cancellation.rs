@@ -212,11 +212,12 @@ impl Drop for RegistryGuard {
             return;
         }
         // Logged outside the registry lock: the subscriber's writer may call
-        // back into the tracker.
+        // back into the tracker. The name is recorded with `?` so a dynamic
+        // name cannot break the line-oriented log format.
         if let Some(meta) = meta {
             warn!(
                 id = self.id,
-                name = %meta.name,
+                name = ?meta.name,
                 age = ?meta.started_at.elapsed(),
                 "tracked task did not run to completion"
             );
@@ -1225,7 +1226,7 @@ mod tests {
 
         let output = logs.contents();
         assert!(output.contains(UNFINISHED_TASK_LOG), "got: {output}");
-        assert!(output.contains("name=panicker"), "got: {output}");
+        assert!(output.contains(r#"name="panicker""#), "got: {output}");
         assert!(output.contains("age="), "got: {output}");
     }
 
@@ -1247,7 +1248,7 @@ mod tests {
 
         let output = logs.contents();
         assert!(output.contains(UNFINISHED_TASK_LOG), "got: {output}");
-        assert!(output.contains("name=aborted"), "got: {output}");
+        assert!(output.contains(r#"name="aborted""#), "got: {output}");
     }
 
     #[test]
@@ -1286,7 +1287,7 @@ mod tests {
         assert_eq!(tracker.pending_count(), 0);
         let output = logs.contents();
         assert!(output.contains(UNFINISHED_TASK_LOG), "got: {output}");
-        assert!(output.contains("name=never-polled"), "got: {output}");
+        assert!(output.contains(r#"name="never-polled""#), "got: {output}");
     }
 
     #[tokio::test]
