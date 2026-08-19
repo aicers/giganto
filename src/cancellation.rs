@@ -346,6 +346,12 @@ impl TaskTracker {
     /// String-literal names are stored without allocation; dynamic names can
     /// still be passed with `String` or `format!(...)`.
     ///
+    /// `f` runs before the final admission check, so a losing race against
+    /// [`close`](Self::close) returns [`SpawnError::Closed`] after `f` has
+    /// already run, and the future it built is dropped without ever being
+    /// polled. Keep resource acquisition inside the future rather than in `f`
+    /// when the acquisition needs a matching release.
+    ///
     /// # Errors
     ///
     /// Returns [`SpawnError::Closed`] if the tracker has been closed (via
