@@ -1452,6 +1452,29 @@ mod tests {
         }
     }
 
+    /// A panic inside the admission critical section poisons the admission
+    /// lock. The tracker then reports the poison as an error instead of
+    /// panicking again — the right choice for a daemon — and the task that
+    /// never reached the runtime is still deregistered.
+    #[test]
+    fn poisoned_admission_lock_surfaces_as_error() {
+        let tracker = TaskTracker::new();
+
+        // The inner `tasks.spawn` panics when no runtime is active, and it
+        // runs while the admission lock is held, so the unwind poisons it.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("no-runtime", |_token| async {});
+        }));
+        assert!(outcome.is_err(), "spawn outside a runtime should panic");
+        assert_eq!(tracker.pending_count(), 0, "the guard should deregister");
+
+        assert!(matches!(
+            tracker.spawn("after-poison", |_token| async {}),
+            Err(SpawnError::LockPoisoned)
+        ));
+        assert_eq!(tracker.close(), Err(LockPoisonedError));
+    }
+
     // ── Miscellaneous ────────────────────────────────────────────────
 
     #[test]
