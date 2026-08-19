@@ -1039,7 +1039,7 @@ pub mod tests {
         config_client_for_tests, load_certs,
     };
 
-    mod fixtures {
+    pub(crate) mod fixtures {
         use std::{
             collections::{HashMap, HashSet},
             fs,
@@ -1058,6 +1058,8 @@ pub mod tests {
         use tokio::{select, time::sleep};
         use toml_edit::DocumentMut;
 
+        #[cfg(feature = "bootroot")]
+        use super::super::request_init_info;
         use super::super::{
             IngestSensors, PEER_VERSION_REQ, Peer, PeerCode, PeerConns, PeerIdentity, PeerIdents,
             PeerInfo, Peers, SharedClientConfig, client_connection, client_run, read_toml_file,
@@ -1703,6 +1705,89 @@ pub mod tests {
             assert!(err.to_string().contains(&format!(
                 "peer code mismatch: expected={expected:?}, actual={actual:?}"
             )));
+        }
+
+        /// Runs the real peer server and exposes the sensor-list exchange used
+        /// by tests outside this module.
+        #[cfg(feature = "bootroot")]
+        pub(crate) struct SensorListPeerHarness {
+            client: TestClient,
+            notify_shutdown: Arc<Notify>,
+            peer_handle: tokio::task::JoinHandle<Result<()>>,
+            _config: TempConfig,
+        }
+
+        #[cfg(feature = "bootroot")]
+        impl SensorListPeerHarness {
+            pub(crate) async fn start(
+                ingest_sensors: IngestSensors,
+                notify_sensor: Arc<Notify>,
+            ) -> (Self, HashSet<String>) {
+                init_crypto();
+                let peers = Arc::new(RwLock::new(HashMap::new()));
+                let peer_idents = Arc::new(RwLock::new(HashSet::new()));
+                let config = TempConfig::from_str("peers = []");
+                let notify_shutdown = Arc::new(Notify::new());
+                let (ready_tx, ready_rx) = oneshot::channel();
+                let peer_handle = tokio::spawn(run_peer_with_ready(
+                    peer_init(),
+                    ingest_sensors,
+                    peers,
+                    peer_idents,
+                    notify_sensor,
+                    notify_shutdown.clone(),
+                    config.path().to_string(),
+                    ready_tx,
+                ));
+
+                let server_addr = with_timeout("peer server ready timeout", ready_rx)
+                    .await
+                    .expect("peer server did not report its address");
+                let mut client = TestClient::new(server_addr).await;
+                let (_, initial_sensor_list) =
+                    request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+                        &mut client.send,
+                        &mut client.recv,
+                        PeerCode::UpdatePeerList,
+                        (HashSet::new(), PeerInfo::default()),
+                    )
+                    .await
+                    .expect("initial peer information exchange failed");
+
+                (
+                    Self {
+                        client,
+                        notify_shutdown,
+                        peer_handle,
+                        _config: config,
+                    },
+                    initial_sensor_list.ingest_sensors,
+                )
+            }
+
+            pub(crate) async fn receive_sensor_list(&self) -> HashSet<String> {
+                let (_, mut recv) = with_timeout(
+                    "peer sensor-list update stream timeout",
+                    self.client.conn.accept_bi(),
+                )
+                .await
+                .expect("peer did not open a sensor-list update stream");
+                let (message_type, payload) = receive_peer_data(&mut recv)
+                    .await
+                    .expect("failed to receive peer sensor-list update");
+                assert_eq!(message_type, PeerCode::UpdateSensorList);
+                bincode::deserialize::<PeerInfo>(&payload)
+                    .expect("invalid peer sensor-list update")
+                    .ingest_sensors
+            }
+
+            pub(crate) async fn shutdown(self) {
+                self.notify_shutdown.notify_waiters();
+                with_timeout("peer shutdown timeout", self.peer_handle)
+                    .await
+                    .expect("peer task join failed")
+                    .expect("peer task returned an error");
+            }
         }
     }
 

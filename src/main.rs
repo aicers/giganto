@@ -348,8 +348,11 @@ async fn run_generation(
         database.clone(),
         pcap_sensors.clone(),
         ingest_sensors.clone(),
+        #[cfg(feature = "bootroot")]
         runtime_ingest_sensors.clone(),
+        #[cfg(feature = "bootroot")]
         stream_direct_channels.clone(),
+        #[cfg(feature = "bootroot")]
         notify_sensor_change.clone(),
         peers.clone(),
         process.request_client_pool.clone(),
