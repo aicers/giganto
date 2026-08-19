@@ -578,6 +578,11 @@ async fn wait_for_task_shutdown(
 /// repeat, so calling it again on an already drained tracker returns as soon as
 /// the tracker is observed empty.
 ///
+/// `report_interval` must be non-zero. A zero cadence still drains, because
+/// each round polls the tracker before its deadline is checked, but it spins
+/// the loop and floods the log with one round per poll. Rejecting an
+/// unusable cadence belongs to the settings that supply it.
+///
 /// # Errors
 ///
 /// Returns [`LockPoisonedError`] if an internal tracker mutex is poisoned. A
@@ -1279,6 +1284,7 @@ mod tests {
             drop(blocker);
         }
     }
+
     /// Installs a log-capturing subscriber for the current thread and returns
     /// the buffer it writes into.
     ///
