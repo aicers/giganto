@@ -2,11 +2,12 @@
 
 use core::panic;
 
+use darling::{FromDeriveInput, FromField, FromMeta};
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{
-    Data, DataStruct, DeriveInput, Fields, GenericArgument, Ident, PathArguments, Type, parse_str,
-    parse2,
+    Data, DataStruct, DeriveInput, Expr, Fields, GenericArgument, Ident, PathArguments, Type,
+    parse_str, parse2,
 };
 
 extern crate proc_macro;
@@ -98,9 +99,9 @@ extern crate proc_macro;
 ///             time: node.time,
 ///             orig_port: node.orig_port.map(|x| x as _),
 ///             proto: node.proto as _,
-///             start_time: node.start_time as _,
-///             service: node.service as _,
-///             resp_pkts: node.resp_pkts as _,
+///             start_time: node.start_time,
+///             service: node.service,
+///             resp_pkts: node.resp_pkts,
 ///             ttl: node.ttl.into_iter().map(|x| x as _).collect(),
 ///             filenames: node.filenames,
 ///             ja3s: node.ja3_s,
@@ -115,9 +116,9 @@ extern crate proc_macro;
 ///             time: node.time,
 ///             orig_port: node.orig_port.map(|x| x as _),
 ///             proto: node.proto as _,
-///             start_time: node.start_time as _,
-///             service: node.service as _,
-///             resp_pkts: node.resp_pkts as _,
+///             start_time: node.start_time,
+///             service: node.service,
+///             resp_pkts: node.resp_pkts,
 ///             ttl: node.ttl.into_iter().map(|x| x as _).collect(),
 ///             filenames: node.filenames,
 ///             ja3s: node.ja3_s,
@@ -171,116 +172,79 @@ pub fn derive_from_graphql_client_autogen(input: TokenStream) -> TokenStream {
     }
 }
 
-#[derive(deluxe::ExtractAttributes)]
-#[deluxe(attributes(graphql_client_type))]
+#[derive(FromDeriveInput)]
+#[darling(attributes(graphql_client_type))]
 struct FromGraphQlAutogenStructAttrs {
-    names: Vec<Type>,
+    names: GraphQlClientTypes,
 }
 
-#[derive(deluxe::ExtractAttributes, deluxe::ParseAttributes)]
-#[deluxe(attributes(graphql_client_type))]
+struct GraphQlClientTypes(Vec<Type>);
+
+impl FromMeta for GraphQlClientTypes {
+    fn from_expr(expr: &Expr) -> darling::Result<Self> {
+        match expr {
+            Expr::Array(array) => array
+                .elems
+                .iter()
+                .map(|expr| {
+                    parse2(expr.to_token_stream())
+                        .map_err(|err| darling::Error::from(err).with_span(expr))
+                })
+                .collect::<darling::Result<Vec<_>>>()
+                .map(Self),
+            Expr::Group(group) => Self::from_expr(&group.expr),
+            Expr::Paren(paren) => Self::from_expr(&paren.expr),
+            _ => Err(darling::Error::unexpected_expr_type(expr)),
+        }
+    }
+}
+
+#[derive(FromField)]
+#[darling(attributes(graphql_client_type))]
 struct GraphQlAutogenFieldAttrs {
-    #[deluxe(default = String::new())]
+    #[darling(default)]
     pub from_name: String,
-    #[deluxe(default = false)]
+    #[darling(default)]
     pub recursive_into: bool,
-    #[deluxe(default = false)]
+    #[darling(default)]
     pub skip: bool,
 }
 
 #[allow(clippy::too_many_lines)]
 fn derive_from_graphql_client_autogen_2(
     item: proc_macro2::TokenStream,
-) -> deluxe::Result<proc_macro2::TokenStream> {
-    let mut ast: DeriveInput = parse2(item)?;
+) -> darling::Result<proc_macro2::TokenStream> {
+    let ast: DeriveInput = parse2(item)?;
 
-    let FromGraphQlAutogenStructAttrs { names } = deluxe::extract_attributes(&mut ast)?;
+    let FromGraphQlAutogenStructAttrs {
+        names: GraphQlClientTypes(names),
+    } = FromGraphQlAutogenStructAttrs::from_derive_input(&ast)?;
 
     let struct_ident = &ast.ident;
 
-    if let Data::Struct(DataStruct { fields, .. }) = &ast.data {
-        let implementations = names.into_iter().map(|name| {
-            let field_conversions = match fields {
-                Fields::Named(named_fields) => named_fields.named.iter().map(|field| {
-                    let Ok(GraphQlAutogenFieldAttrs { from_name, recursive_into, skip }) = deluxe::parse_attributes(field) else {
-                        panic!(
-                            "inappropriate use of field attributes on {}. Allowed field attributes are `from_name: String`, `recursive_into: bool`, `skip: bool`. Found {:?}",
-                            field.to_token_stream(),
-                            field.attrs.iter().map(|attr| attr.into_token_stream().to_string()).collect::<Vec<_>>()
-                        );
-                    };
+    let Data::Struct(DataStruct { fields, .. }) = &ast.data else {
+        return Err(darling::Error::custom(
+            "`ConvertGraphQLEdgesNode` can only be derived for structs",
+        )
+        .with_span(struct_ident));
+    };
 
-                    if skip {
-                        return quote! {};
-                    }
+    let Fields::Named(named_fields) = fields else {
+        return Err(darling::Error::custom(
+            "Structs that derive `ConvertGraphQLEdgesNode` should only have named fields",
+        )
+        .with_span(struct_ident));
+    };
 
-                    let Some(to_field_name) = &field.ident.clone() else {
-                        panic!("inappropriate field {}. Please make sure the field is named", field.to_token_stream());
-                    };
-                    let from_field_name = resolve_from_field_name(&from_name, to_field_name);
-                    let field_type = &field.ty;
+    let field_conversions = named_fields
+        .named
+        .iter()
+        .map(graphql_field_conversion)
+        .collect::<darling::Result<Vec<_>>>()?;
 
-                    match segment_type_and_cast_style(field_type, recursive_into) {
-                        (_, CastStyle::None) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name,
-                            }
-                        },
-                        (SegmentType::Vec, CastStyle::As) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name.into_iter().map(|x| x as _).collect(),
-                            }
-                        },
-                        (SegmentType::Option, CastStyle::As) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name.map(|x| x as _),
-                            }
-                        },
-                        (SegmentType::Other, CastStyle::As) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name as _,
-                            }
-                        },
-                        (SegmentType::Vec, CastStyle::Into) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name.into_iter().map(|x| x.into()).collect(),
-                            }
-                        },
-                        (SegmentType::VecVec, CastStyle::As) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name
-                                    .into_iter()
-                                    .map(|inner| inner.into_iter().map(|x| x as _).collect())
-                                    .collect(),
-                            }
-                        },
-                        (SegmentType::VecVec, CastStyle::Into) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name
-                                    .into_iter()
-                                    .map(|inner| inner.into_iter().map(|x| x.into()).collect())
-                                    .collect(),
-                            }
-                        },
-                        (SegmentType::Option, CastStyle::Into) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name.map(|x| x.into()),
-                            }
-                        },
-                        (SegmentType::Other,CastStyle::Into) => {
-                            quote! {
-                                #to_field_name: node.#from_field_name.into(),
-                            }
-                        },
-                    }
-                }),
-                _ => {
-                    panic!(
-                        "Structs that derive `ConvertGraphQLEdgesNode` should only have named fields"
-                    );
-                }
-            };
-
+    let implementations = names
+        .into_iter()
+        .map(|name| {
             quote! {
                 impl From<#name> for #struct_ident {
                     fn from(node: #name) -> Self {
@@ -290,41 +254,105 @@ fn derive_from_graphql_client_autogen_2(
                     }
                 }
             }
-        }).collect::<Vec<_>>();
-
-        Ok(quote! {
-            #(#implementations)*
         })
-    } else {
-        let implementations = names
-            .iter()
-            .map(|name| {
-                quote! {
-                    impl From<#name> for #struct_ident {
-                        fn from(node: #name) -> Self {
-                            Self {}
-                        }
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
+        .collect::<Vec<_>>();
 
-        Ok(quote! {
-            #(#implementations)*
-        })
-    }
+    Ok(quote! {
+        #(#implementations)*
+    })
 }
 
-fn resolve_from_field_name(from_name: &str, field_name: &Ident) -> Ident {
+fn graphql_field_conversion(field: &syn::Field) -> darling::Result<proc_macro2::TokenStream> {
+    let GraphQlAutogenFieldAttrs {
+        from_name,
+        recursive_into,
+        skip,
+    } = GraphQlAutogenFieldAttrs::from_field(field)?;
+
+    if skip {
+        return Ok(quote! {});
+    }
+
+    let Some(to_field_name) = &field.ident else {
+        return Err(darling::Error::custom(
+            "Fields converted by `ConvertGraphQLEdgesNode` should be named",
+        )
+        .with_span(field));
+    };
+    let from_field_name = resolve_from_field_name(&from_name, to_field_name, field)?;
+    let field_type = &field.ty;
+
+    let (segment_type, cast_style) = segment_type_and_cast_style(field_type, recursive_into)
+        .map_err(|err| err.with_span(field))?;
+
+    Ok(match (segment_type, cast_style) {
+        (_, CastStyle::None) => {
+            quote! {
+                #to_field_name: node.#from_field_name,
+            }
+        }
+        (SegmentType::Vec, CastStyle::As) => {
+            quote! {
+                #to_field_name: node.#from_field_name.into_iter().map(|x| x as _).collect(),
+            }
+        }
+        (SegmentType::Option, CastStyle::As) => {
+            quote! {
+                #to_field_name: node.#from_field_name.map(|x| x as _),
+            }
+        }
+        (SegmentType::Other, CastStyle::As) => {
+            quote! {
+                #to_field_name: node.#from_field_name as _,
+            }
+        }
+        (SegmentType::Vec, CastStyle::Into) => {
+            quote! {
+                #to_field_name: node.#from_field_name.into_iter().map(|x| x.into()).collect(),
+            }
+        }
+        (SegmentType::VecVec, CastStyle::As) => {
+            quote! {
+                #to_field_name: node.#from_field_name
+                    .into_iter()
+                    .map(|inner| inner.into_iter().map(|x| x as _).collect())
+                    .collect(),
+            }
+        }
+        (SegmentType::VecVec, CastStyle::Into) => {
+            quote! {
+                #to_field_name: node.#from_field_name
+                    .into_iter()
+                    .map(|inner| inner.into_iter().map(|x| x.into()).collect())
+                    .collect(),
+            }
+        }
+        (SegmentType::Option, CastStyle::Into) => {
+            quote! {
+                #to_field_name: node.#from_field_name.map(|x| x.into()),
+            }
+        }
+        (SegmentType::Other, CastStyle::Into) => {
+            quote! {
+                #to_field_name: node.#from_field_name.into(),
+            }
+        }
+    })
+}
+
+fn resolve_from_field_name(
+    from_name: &str,
+    field_name: &Ident,
+    field: &syn::Field,
+) -> darling::Result<Ident> {
     if from_name.is_empty() {
-        field_name.clone()
+        Ok(field_name.clone())
     } else {
-        let Ok(parsed_ident) = parse_str::<Ident>(from_name) else {
-            panic!(
-                r#"inappropriate use of `from_name`. Please check if the value of `from_name = "{from_name}"` exists in the specified source structs in `names` attribute"#
-            );
-        };
-        parsed_ident
+        parse_str::<Ident>(from_name).map_err(|err| {
+            darling::Error::from(err)
+                .with_span(field)
+                .at(format!(r#"from_name = "{from_name}""#))
+        })
     }
 }
 
@@ -343,7 +371,10 @@ enum CastStyle {
     Into,
 }
 
-fn segment_type_and_cast_style(ty: &Type, recursive_into: bool) -> (SegmentType, CastStyle) {
+fn segment_type_and_cast_style(
+    ty: &Type,
+    recursive_into: bool,
+) -> darling::Result<(SegmentType, CastStyle)> {
     if let Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
     {
@@ -352,9 +383,12 @@ fn segment_type_and_cast_style(ty: &Type, recursive_into: bool) -> (SegmentType,
                 for arg in &vec_element_type_arg.args {
                     if let GenericArgument::Type(el_type) = arg {
                         if let Some(inner_type) = vec_vec_inner_type(el_type) {
-                            return (SegmentType::VecVec, cast_style(inner_type, recursive_into));
+                            return Ok((
+                                SegmentType::VecVec,
+                                cast_style(inner_type, recursive_into)?,
+                            ));
                         }
-                        return (SegmentType::Vec, cast_style(el_type, recursive_into));
+                        return Ok((SegmentType::Vec, cast_style(el_type, recursive_into)?));
                     }
                 }
             }
@@ -362,29 +396,30 @@ fn segment_type_and_cast_style(ty: &Type, recursive_into: bool) -> (SegmentType,
             if let PathArguments::AngleBracketed(option_element_type_arg) = &segment.arguments {
                 for arg in &option_element_type_arg.args {
                     if let GenericArgument::Type(el_type) = arg {
-                        return (SegmentType::Option, cast_style(el_type, recursive_into));
+                        return Ok((SegmentType::Option, cast_style(el_type, recursive_into)?));
                     }
                 }
             }
         } else {
-            return (SegmentType::Other, cast_style(ty, recursive_into));
+            return Ok((SegmentType::Other, cast_style(ty, recursive_into)?));
         }
     }
-    (SegmentType::Other, cast_style(ty, recursive_into))
+    Ok((SegmentType::Other, cast_style(ty, recursive_into)?))
 }
 
-fn cast_style(field_type: &Type, recursive_into: bool) -> CastStyle {
+fn cast_style(field_type: &Type, recursive_into: bool) -> darling::Result<CastStyle> {
     if is_target_of_safe_to_i64_cast(field_type) {
-        assert!(
-            !recursive_into,
-            "inappropriate use of `recursive_into`. Please remove `recursive_into` attribute on a field with `{}`",
-            field_type.to_token_stream()
-        );
-        CastStyle::As
+        if recursive_into {
+            return Err(darling::Error::custom(format!(
+                "inappropriate use of `recursive_into`. Please remove `recursive_into` attribute on a field with `{}`",
+                field_type.to_token_stream()
+            )));
+        }
+        Ok(CastStyle::As)
     } else if recursive_into {
-        CastStyle::Into
+        Ok(CastStyle::Into)
     } else {
-        CastStyle::None
+        Ok(CastStyle::None)
     }
 }
 
@@ -412,4 +447,290 @@ fn extract_vec_inner_type(ty: &Type) -> Option<&Type> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graphql_client_types_parse_array_syntax() {
+        let expr: Expr = syn::parse_quote!([foo::Bar, baz::Qux]);
+
+        let types = GraphQlClientTypes::from_expr(&expr).expect("array syntax should parse");
+
+        assert_eq!(types.0.len(), 2);
+        assert_eq!(types.0[0].to_token_stream().to_string(), "foo :: Bar");
+        assert_eq!(types.0[1].to_token_stream().to_string(), "baz :: Qux");
+    }
+
+    #[test]
+    fn graphql_client_types_parse_parenthesized_array_syntax() {
+        let expr: Expr = syn::parse_quote!(([foo::Bar]));
+
+        let types =
+            GraphQlClientTypes::from_expr(&expr).expect("parenthesized array syntax should parse");
+
+        assert_eq!(types.0.len(), 1);
+        assert_eq!(types.0[0].to_token_stream().to_string(), "foo :: Bar");
+    }
+
+    #[test]
+    fn graphql_client_types_reject_non_array_syntax() {
+        let expr: Expr = syn::parse_quote!(foo::Bar);
+
+        assert!(GraphQlClientTypes::from_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn field_attrs_default_to_disabled_flags() {
+        let field: syn::Field = syn::parse_quote!(value: String);
+
+        let attrs = GraphQlAutogenFieldAttrs::from_field(&field).expect("field should parse");
+
+        assert!(attrs.from_name.is_empty());
+        assert!(!attrs.recursive_into);
+        assert!(!attrs.skip);
+    }
+
+    #[test]
+    fn field_attrs_parse_existing_syntax() {
+        let field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(from_name = "source", recursive_into = true, skip = true)]
+            value: String
+        );
+
+        let attrs = GraphQlAutogenFieldAttrs::from_field(&field).expect("field should parse");
+
+        assert_eq!(attrs.from_name, "source");
+        assert!(attrs.recursive_into);
+        assert!(attrs.skip);
+    }
+
+    #[test]
+    fn field_conversion_uses_from_name() {
+        let field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(from_name = "source")]
+            value: String
+        );
+
+        let conversion = graphql_field_conversion(&field).expect("field should convert");
+
+        assert_eq!(conversion.to_string(), "value : node . source ,");
+    }
+
+    #[test]
+    fn field_conversion_skips_fields() {
+        let field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(skip = true)]
+            value: String
+        );
+
+        let conversion = graphql_field_conversion(&field).expect("field should convert");
+
+        assert!(conversion.is_empty());
+    }
+
+    #[test]
+    fn recursive_into_uses_into_for_plain_fields() {
+        let field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(recursive_into = true)]
+            detail: Detail
+        );
+
+        let conversion = graphql_field_conversion(&field).expect("field should convert");
+
+        assert_eq!(conversion.to_string(), "detail : node . detail . into () ,");
+    }
+
+    #[test]
+    fn recursive_into_uses_into_for_option_fields() {
+        let field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(recursive_into = true)]
+            detail: Option<Detail>
+        );
+
+        let conversion = graphql_field_conversion(&field).expect("field should convert");
+
+        assert_eq!(
+            conversion.to_string(),
+            "detail : node . detail . map (| x | x . into ()) ,"
+        );
+    }
+
+    #[test]
+    fn recursive_into_uses_into_for_vec_fields() {
+        let field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(recursive_into = true)]
+            details: Vec<Detail>
+        );
+
+        let conversion = graphql_field_conversion(&field).expect("field should convert");
+
+        assert_eq!(
+            conversion.to_string(),
+            "details : node . details . into_iter () . map (| x | x . into ()) . collect () ,"
+        );
+    }
+
+    #[test]
+    fn recursive_into_uses_into_for_nested_vec_fields() {
+        let field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(recursive_into = true)]
+            details: Vec<Vec<Detail>>
+        );
+
+        let conversion = graphql_field_conversion(&field).expect("field should convert");
+
+        assert_eq!(
+            conversion.to_string(),
+            "details : node . details . into_iter () . map (| inner | inner . into_iter () . map (| x | x . into ()) . collect ()) . collect () ,"
+        );
+    }
+
+    #[test]
+    fn safe_integer_fields_use_as_casts() {
+        let u8_field: syn::Field = syn::parse_quote!(value: u8);
+        let u16_field: syn::Field = syn::parse_quote!(value: u16);
+        let i8_field: syn::Field = syn::parse_quote!(value: i8);
+        let i16_field: syn::Field = syn::parse_quote!(value: i16);
+        let i32_field: syn::Field = syn::parse_quote!(value: i32);
+
+        assert_eq!(
+            graphql_field_conversion(&u8_field)
+                .expect("u8 field should convert")
+                .to_string(),
+            "value : node . value as _ ,"
+        );
+        assert_eq!(
+            graphql_field_conversion(&u16_field)
+                .expect("u16 field should convert")
+                .to_string(),
+            "value : node . value as _ ,"
+        );
+        assert_eq!(
+            graphql_field_conversion(&i8_field)
+                .expect("i8 field should convert")
+                .to_string(),
+            "value : node . value as _ ,"
+        );
+        assert_eq!(
+            graphql_field_conversion(&i16_field)
+                .expect("i16 field should convert")
+                .to_string(),
+            "value : node . value as _ ,"
+        );
+        assert_eq!(
+            graphql_field_conversion(&i32_field)
+                .expect("i32 field should convert")
+                .to_string(),
+            "value : node . value as _ ,"
+        );
+    }
+
+    #[test]
+    fn safe_integer_container_fields_use_as_casts() {
+        let vec_field: syn::Field = syn::parse_quote!(value: Vec<u8>);
+        let nested_vec_field: syn::Field = syn::parse_quote!(value: Vec<Vec<u16>>);
+        let option_field: syn::Field = syn::parse_quote!(value: Option<i32>);
+
+        assert_eq!(
+            graphql_field_conversion(&vec_field)
+                .expect("Vec integer field should convert")
+                .to_string(),
+            "value : node . value . into_iter () . map (| x | x as _) . collect () ,"
+        );
+        assert_eq!(
+            graphql_field_conversion(&nested_vec_field)
+                .expect("nested Vec integer field should convert")
+                .to_string(),
+            "value : node . value . into_iter () . map (| inner | inner . into_iter () . map (| x | x as _) . collect ()) . collect () ,"
+        );
+        assert_eq!(
+            graphql_field_conversion(&option_field)
+                .expect("Option integer field should convert")
+                .to_string(),
+            "value : node . value . map (| x | x as _) ,"
+        );
+    }
+
+    #[test]
+    fn from_name_rejects_invalid_ident() {
+        let field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(from_name = "not-valid")]
+            value: String
+        );
+
+        let err = graphql_field_conversion(&field).expect_err("invalid from_name should fail");
+
+        assert!(err.to_string().contains("from_name"));
+    }
+
+    #[test]
+    fn derive_generates_from_impl_for_named_struct() {
+        let item = quote! {
+            #[graphql_client_type(names = [source::Node])]
+            struct Target {
+                value: String,
+            }
+        };
+
+        let generated = derive_from_graphql_client_autogen_2(item)
+            .expect("named struct should generate conversion");
+        let generated = generated.to_string();
+
+        assert!(generated.contains("impl From < source :: Node > for Target"));
+        assert!(generated.contains("value : node . value"));
+    }
+
+    #[test]
+    fn derive_generates_from_impl_for_each_client_type() {
+        let item = quote! {
+            #[graphql_client_type(names = [source::Node, other::Node])]
+            struct Target {
+                value: String,
+            }
+        };
+
+        let generated = derive_from_graphql_client_autogen_2(item)
+            .expect("named struct should generate conversions");
+        let generated = generated.to_string();
+
+        assert_eq!(generated.matches("impl From <").count(), 2);
+        assert!(generated.contains("impl From < source :: Node > for Target"));
+        assert!(generated.contains("impl From < other :: Node > for Target"));
+    }
+
+    #[test]
+    fn derive_rejects_tuple_structs() {
+        let item = quote! {
+            #[graphql_client_type(names = [source::Node])]
+            struct Target(String);
+        };
+
+        let err = derive_from_graphql_client_autogen_2(item).expect_err("tuple struct should fail");
+
+        assert!(err.to_string().contains("named fields"));
+    }
+
+    #[test]
+    fn derive_rejects_enums() {
+        let item = quote! {
+            #[graphql_client_type(names = [source::Node])]
+            enum Target {
+                Value,
+            }
+        };
+
+        let err = derive_from_graphql_client_autogen_2(item).expect_err("enum should fail");
+
+        assert!(err.to_string().contains("only be derived for structs"));
+    }
+
+    #[test]
+    fn recursive_into_is_rejected_for_casted_integer_types() {
+        let ty: Type = syn::parse_quote!(u8);
+
+        assert!(segment_type_and_cast_style(&ty, true).is_err());
+    }
 }
