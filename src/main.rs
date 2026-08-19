@@ -625,7 +625,6 @@ async fn drain_top_level_tracker(
 /// the one last reported through `reported_snapshot`. Ages are left out of that
 /// comparison because they advance every round and would make every snapshot
 /// look changed.
-#[allow(dead_code)]
 fn report_pending_round(
     round: u64,
     pending: &[PendingTaskSnapshot],
@@ -1588,5 +1587,35 @@ mod tests {
         assert!(detail[0].contains("id=0"), "got: {output}");
         assert!(detail[1].contains("id=1"), "got: {output}");
         assert!(detail[2].contains("id=1"), "got: {output}");
+    }
+
+    /// A pending round can carry an empty snapshot: the registry may be
+    /// emptied between the drain timing out and the snapshot being read. The
+    /// round is still reported, and the empty snapshot does not suppress the
+    /// next one that has tasks in it.
+    #[test]
+    fn report_pending_round_handles_an_empty_pending_snapshot() {
+        let (logs, _guard) = capture_logs();
+
+        let pending = vec![PendingTaskSnapshot {
+            id: 0,
+            name: "task-zero".to_string(),
+            age: Duration::from_secs(1),
+        }];
+
+        let mut reported = None;
+        report_pending_round(1, &[], &mut reported);
+        report_pending_round(2, &pending, &mut reported);
+
+        let output = captured(&logs);
+        assert!(
+            output.contains("shutdown drain round 1: 0 task(s) still pending"),
+            "an empty round should still be reported, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "pending task id="),
+            1,
+            "the empty snapshot should not suppress the next one, got: {output}"
+        );
     }
 }
