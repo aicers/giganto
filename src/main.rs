@@ -1502,6 +1502,39 @@ mod tests {
         .expect("drain loop should not report a poisoned lock");
     }
 
+    /// A poisoned tracker lock ends the loop instead of being retried. Unlike
+    /// a pending task, a poison never clears, so every later round would fail
+    /// the same way and the loop would spin.
+    ///
+    /// The lock is poisoned the way `cancellation`'s own poison test does it:
+    /// outside a runtime the inner `tasks.spawn` panics while the admission
+    /// lock is held. That has to happen before any runtime is entered, so this
+    /// test builds the runtime itself rather than using `#[tokio::test]`.
+    #[test]
+    fn drain_top_level_tracker_surfaces_a_poisoned_lock() {
+        let tracker = TaskTracker::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("no-runtime", |_token| async {});
+        }));
+        assert!(outcome.is_err(), "spawn outside a runtime should panic");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("current-thread runtime should build");
+        let result = runtime.block_on(async {
+            tokio::time::timeout(
+                DRAIN_LOOP_TIMEOUT,
+                drain_top_level_tracker(&tracker, REPORT_INTERVAL),
+            )
+            .await
+            .expect("a poisoned lock should end the loop, not be retried")
+        });
+
+        assert_eq!(result, Err(LockPoisonedError));
+    }
+
     #[test]
     fn report_pending_round_skips_unchanged_snapshot_and_relogs_changes() {
         let (logs, _guard) = capture_logs();
