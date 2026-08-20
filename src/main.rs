@@ -31,6 +31,7 @@ use tokio::{
     task::{self, JoinHandle},
     time::sleep,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, metadata::LevelFilter, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -369,7 +370,7 @@ async fn run_generation(
     let retain_task_handle: JoinHandle<Result<()>> = top_level_tracker
         .spawn("retention", {
             let db = database.clone();
-            move |cancel| storage::retain_periodically(ONE_DAY, retention, db, cancel)
+            move |cancel| run_retention(ONE_DAY, retention, db, cancel)
         })
         .map_err(|e| anyhow!("failed to register the retention task: {e}"))?;
 
@@ -568,19 +569,49 @@ async fn shutdown_generation(
     finish_generation(generation_end, database).await
 }
 
+/// Runs the retention entry task, reporting a failure the moment it happens.
+///
+/// The handle `main` retains carries whatever this returns to
+/// [`report_retention_outcome`], but that accounting runs only when the
+/// generation ends — which, for a node that is simply left running, is days or
+/// months after a retention pass failed. Retention that stops deleting is the
+/// failure an operator has to hear about at once, not at the post-mortem, so
+/// it is reported here as well, the way the peer subsystem reports its own.
+///
+/// # Errors
+///
+/// Returns whatever [`storage::retain_periodically`] returned, unchanged: the
+/// report is in addition to the return value, never in place of it.
+async fn run_retention(
+    interval: Duration,
+    retention_period: Duration,
+    db: storage::Database,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let result = storage::retain_periodically(interval, retention_period, db, cancel).await;
+    if let Err(e) = &result {
+        error!("Retention terminated unexpectedly: {e:#}");
+    }
+    result
+}
+
 /// Reports how the retention entry task ended.
 ///
 /// A drain waits for tracked tasks to exit but says nothing about how they
-/// exited, so the handle kept at spawn time is the only place a retention
-/// failure can be seen. All four endings are reported: the value it returned,
-/// the error it returned, a panic, and an abort it never asked for. Awaiting
-/// the handle here costs nothing — the drain has already waited for this
-/// task — and it is what makes the report the last word on retention before
-/// the database is closed.
+/// exited, so the handle kept at spawn time is where the generation accounts
+/// for its retention task. All four endings are reported: the value it
+/// returned, the error it returned, a panic, and an abort it never asked for.
+/// Only the first two are anything [`run_retention`] could have reported on
+/// its own; a panic and an abort leave no return value behind, so this is the
+/// only place they can be seen at all. Awaiting the handle here costs
+/// nothing — the drain has already waited for this task — and it is what makes
+/// the report the last word on retention before the database is closed.
 async fn report_retention_outcome(retain_task_handle: JoinHandle<Result<()>>) {
     match retain_task_handle.await {
         Ok(Ok(())) => info!("Retention stopped"),
-        Ok(Err(e)) => error!("Retention terminated unexpectedly: {e:#}"),
+        // [`run_retention`] already reported this one when it happened, so
+        // this line is the shutdown restating it, not news.
+        Ok(Err(e)) => error!("Retention had already terminated unexpectedly: {e:#}"),
         Err(e) if e.is_panic() => error!("Retention panicked: {e}"),
         Err(e) => error!("Retention did not run to completion: {e}"),
     }
@@ -1069,8 +1100,9 @@ mod tests {
         }))
         .await;
         assert!(
-            captured(&logs).contains("retention cleanup failed"),
-            "a returned error should be reported with its cause, got: {}",
+            captured(&logs).contains("Retention had already terminated unexpectedly")
+                && captured(&logs).contains("retention cleanup failed"),
+            "a returned error should be restated with its cause, got: {}",
             captured(&logs)
         );
         drop(guard);
@@ -2452,6 +2484,41 @@ mod tests {
             // What is left of the tail is the pause before the host goes down,
             // and this test is not waiting it out.
             shutdown.abort();
+        }
+
+        /// A retention failure is reported when it happens, not at shutdown.
+        ///
+        /// The generation's accounting for the retention handle runs only when
+        /// the generation ends, so on a node that is simply left running an
+        /// error reported only there would sit unread for as long as the node
+        /// stays up. The retention period used here overflows the nanosecond
+        /// arithmetic the entry task does before its first tick, which is the
+        /// cheapest failure that reaches the same return path a failed cleanup
+        /// pass does.
+        #[tokio::test]
+        async fn a_retention_failure_is_reported_when_it_happens() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            let (logs, _guard) = capture_logs();
+            let result = run_retention(
+                ONE_DAY,
+                Duration::from_secs(u64::MAX),
+                database,
+                CancellationToken::new(),
+            )
+            .await;
+
+            assert!(
+                result.is_err(),
+                "a retention period that cannot be expressed in nanoseconds should fail"
+            );
+            let output = captured(&logs);
+            assert!(
+                output.contains("Retention terminated unexpectedly"),
+                "the failure should be reported where it happened, got: {output}"
+            );
         }
 
         /// A data directory whose compression setting no longer matches the
