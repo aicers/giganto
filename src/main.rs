@@ -107,8 +107,6 @@ async fn main() -> Result<()> {
 
     settings.config.validate()?;
 
-    let cfg_path = settings.cfg_path.clone();
-
     let _guard = init_tracing(args.log_path.as_deref())?;
 
     if args.repair {
@@ -178,7 +176,6 @@ async fn main() -> Result<()> {
 
     let process = ProcessContext {
         cert,
-        cfg_path,
         reload_handle,
         tls_watch,
         notify_terminate,
@@ -206,13 +203,13 @@ async fn main() -> Result<()> {
 ///
 /// `main` builds this once, before the first generation, and lends it to each
 /// one. Everything here is either read-only for a generation — the node
-/// certificate, the configuration file path, the GraphQL client pool — or a
-/// process-wide channel a generation only listens on.
+/// certificate, the GraphQL client pool — or a process-wide channel a
+/// generation only listens on. The configuration is not here: it is the one
+/// piece a generation can rewrite, so it is lent separately as `&mut
+/// Settings`.
 struct ProcessContext {
     /// The node's own certificate chain, which the node name is derived from.
     cert: Vec<CertificateDer<'static>>,
-    /// Path to the configuration file, handed to the peer subsystem.
-    cfg_path: String,
     /// Trigger that re-reads the TLS material from disk.
     reload_handle: ReloadHandle,
     /// The current TLS material, republished on every successful reload.
@@ -378,7 +375,7 @@ async fn run_generation(
             let peer_idents = peer_idents.clone();
             let notify_sensor = notify_sensor.clone();
             let notify_shutdown = notify_shutdown.clone();
-            let cfg_path = process.cfg_path.clone();
+            let cfg_path = settings.cfg_path.clone();
             let tls_watch = process.tls_watch.clone();
             async move {
                 let result = peer_server
@@ -1903,7 +1900,6 @@ mod tests {
 
             ProcessContext {
                 cert,
-                cfg_path: path_string(&dir.join("config.toml")),
                 reload_handle,
                 tls_watch,
                 notify_terminate,
