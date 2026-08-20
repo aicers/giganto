@@ -986,9 +986,10 @@ where
         new_peers
     };
 
-    for peer in new_peers {
-        if let Err(error) = sender.send(peer.clone()).await {
-            error!(?peer, %error, "Failed to enqueue peer connection attempt");
+        if let Err(error) = sender.send(peer).await {
+            let message = error.to_string();
+            let peer = error.0;
+            error!(?peer, %message, "Failed to enqueue peer connection attempt");
         }
     }
     info!("Peer list updated - {peer_list:?}");
