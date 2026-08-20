@@ -126,14 +126,13 @@ async fn main() -> Result<()> {
         key_path: args.key.clone(),
         ca_certs_paths: args.ca_certs.clone(),
     };
-    let loaded = load_tls_material(&cert_paths).context("failed to load initial TLS material")?;
-    let cert = loaded.certs.certs.clone();
-    let initial_material = Arc::new(loaded);
-    let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::clone(&initial_material));
-
     let notify_terminate = Arc::new(Notify::new());
-
     let notify_tls_reload = Arc::new(Notify::new());
+    let process = ProcessContext::new(
+        cert_paths,
+        Arc::clone(&notify_terminate),
+        Arc::clone(&notify_tls_reload),
+    )?;
 
     #[cfg(unix)]
     {
@@ -170,18 +169,6 @@ async fn main() -> Result<()> {
             return Err(anyhow!("failed to set signal handler: {e}"));
         }
     }
-
-    let tls = tls_reload::get_current_tls_material(&tls_watch);
-    let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)?;
-
-    let process = ProcessContext {
-        cert,
-        reload_handle,
-        tls_watch,
-        notify_terminate,
-        notify_tls_reload,
-        request_client_pool,
-    };
 
     loop {
         match run_generation(&mut settings, &process).await? {
@@ -220,6 +207,45 @@ struct ProcessContext {
     notify_tls_reload: Arc<Notify>,
     /// mTLS client pool GraphQL uses to reach peer nodes.
     request_client_pool: reqwest::Client,
+}
+
+impl ProcessContext {
+    /// Builds the state every generation borrows.
+    ///
+    /// The node certificate, the reload watch, and the GraphQL client pool are
+    /// all derived from one load of the TLS material on disk, so they are
+    /// built together here rather than assembled by the caller. This load is
+    /// also where TLS material the process cannot use is caught, before the
+    /// first generation opens the database.
+    ///
+    /// The two notifiers are passed in because the signal handlers `main`
+    /// installs raise them, so `main` needs its own handles on them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TLS material cannot be loaded, or if the mTLS
+    /// GraphQL client pool cannot be built from it.
+    fn new(
+        cert_paths: CertPaths,
+        notify_terminate: Arc<Notify>,
+        notify_tls_reload: Arc<Notify>,
+    ) -> Result<Self> {
+        let loaded =
+            load_tls_material(&cert_paths).context("failed to load initial TLS material")?;
+        let cert = loaded.certs.certs.clone();
+        let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::new(loaded));
+        let tls = tls_reload::get_current_tls_material(&tls_watch);
+        let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)?;
+
+        Ok(Self {
+            cert,
+            reload_handle,
+            tls_watch,
+            notify_terminate,
+            notify_tls_reload,
+            request_client_pool,
+        })
+    }
 }
 
 /// Why a generation ended.
@@ -287,7 +313,7 @@ async fn run_generation(
 
     let database = storage::Database::open(&db_path, &db_options)?;
 
-    let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
+    let (reload_tx, reload_rx) = mpsc::channel::<ConfigVisible>(1);
     let notify_shutdown = Arc::new(Notify::new());
     let notify_reboot = Arc::new(Notify::new());
     let notify_power_off = Arc::new(Notify::new());
@@ -427,17 +453,83 @@ async fn run_generation(
         process.tls_watch.clone(),
     ));
 
-    let generation_end = loop {
+    let mut intents = GenerationIntents {
+        reload_rx,
+        notify_reboot,
+        notify_power_off,
+    };
+    let generation_end = wait_for_generation_end(
+        settings,
+        process,
+        &mut intents,
+        &mut web_controller,
+        &schema,
+        web_addr,
+    )
+    .await;
+
+    // Every intent that ends a generation is shut down the same way, so the
+    // sequence runs once here instead of once per arm. The order is the one
+    // each arm had.
+    shutdown_web(web_controller.take()).await;
+    notify_shutdown.notify_waiters();
+    wait_for_task_shutdown(
+        ingest_task_handle,
+        publish_task_handle,
+        peer_task_handle,
+        retain_task_handle,
+    )
+    .await;
+    drain_top_level_tracker_or_log(&top_level_tracker).await;
+
+    finish_generation(generation_end, &retain_flag, &database).await?;
+
+    Ok(generation_end)
+}
+
+/// The three shutdown intents a generation owns.
+///
+/// Terminate and TLS reload arrive from outside a generation and live in
+/// [`ProcessContext`]; these three are created per generation, handed to the
+/// GraphQL schema, and listened on only here. Grouping them keeps
+/// [`wait_for_generation_end`]'s parameter list readable and gives a test one
+/// place to build the intents from.
+struct GenerationIntents {
+    /// Carries the rewritten configuration a `setConfig` mutation produced.
+    reload_rx: mpsc::Receiver<ConfigVisible>,
+    /// Raised by the GraphQL reboot mutation.
+    notify_reboot: Arc<Notify>,
+    /// Raised by the GraphQL power-off mutation.
+    notify_power_off: Arc<Notify>,
+}
+
+/// Serves until a shutdown intent arrives, and reports which one it was.
+///
+/// This is the whole of a generation's steady state. Four of the five arms end
+/// the generation; the fifth, a TLS reload, rebinds the HTTPS server in place
+/// and keeps serving, which is why the wait is a loop rather than a single
+/// `select!`. A configuration reload that cannot be persisted also keeps
+/// serving, on the configuration the generation started with.
+///
+/// Shutting the generation's own machinery down is the caller's, not this
+/// function's: every arm that ends a generation is torn down the same way, so
+/// the sequence runs once at the call site instead of once per arm.
+async fn wait_for_generation_end<S>(
+    settings: &mut Settings,
+    process: &ProcessContext,
+    intents: &mut GenerationIntents,
+    web_controller: &mut Option<WebController>,
+    schema: &S,
+    web_addr: std::net::SocketAddr,
+) -> GenerationEnd
+where
+    S: async_graphql::Executor + Clone,
+{
+    loop {
         select! {
-            Some(new_config) = reload_rx.recv() => {
+            Some(new_config) = intents.reload_rx.recv() => {
                 match settings.update_config_file(&new_config) {
-                    Ok(()) => {
-                        shutdown_web(web_controller.take()).await;
-                        notify_shutdown.notify_waiters();
-                        wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
-                        drain_top_level_tracker_or_log(&top_level_tracker).await;
-                        break GenerationEnd::ReloadConfig;
-                    }
+                    Ok(()) => break GenerationEnd::ReloadConfig,
                     Err(e) => {
                         warn!("Failed to update configuration: {e:#}, run with previous config");
                     }
@@ -445,47 +537,49 @@ async fn run_generation(
             },
             () = process.notify_terminate.notified() => {
                 info!("Termination signal: daemon exit");
-                shutdown_web(web_controller.take()).await;
-                notify_shutdown.notify_waiters();
-                wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
-                drain_top_level_tracker_or_log(&top_level_tracker).await;
                 break GenerationEnd::Terminate;
             }
-            () = notify_reboot.notified() => {
+            () = intents.notify_reboot.notified() => {
                 info!("Restarting the system...");
-                shutdown_web(web_controller.take()).await;
-                notify_shutdown.notify_waiters();
-                wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
-                drain_top_level_tracker_or_log(&top_level_tracker).await;
                 break GenerationEnd::Reboot;
             }
-            () = notify_power_off.notified() => {
+            () = intents.notify_power_off.notified() => {
                 info!("Power off the system...");
-                shutdown_web(web_controller.take()).await;
-                notify_shutdown.notify_waiters();
-                wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
-                drain_top_level_tracker_or_log(&top_level_tracker).await;
                 break GenerationEnd::PowerOff;
             }
             () = process.notify_tls_reload.notified() => {
                 reload_https_server(
                     &process.reload_handle,
                     &process.tls_watch,
-                    &mut web_controller,
-                    &schema,
+                    web_controller,
+                    schema,
                     web_addr,
                 ).await;
             }
         }
-    };
+    }
+}
 
+/// Runs the tail of a generation, the part that differs by intent.
+///
+/// By the time this runs the subsystems have already been notified and joined,
+/// so what is left is what each intent needs of the database handle before the
+/// generation drops it.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be flushed on the way out.
+async fn finish_generation(
+    generation_end: GenerationEnd,
+    retain_flag: &AtomicBool,
+    database: &storage::Database,
+) -> Result<()> {
     match generation_end {
         // Neither of these closes the database here. On terminate the process
         // is on its way out and the handle goes with it; on a configuration
-        // reload the handle is dropped as this function returns, before the
-        // next generation reopens it. This is the pre-existing shape of the
-        // path, delay included, and the ordering cutover that revisits it is
-        // #1569's.
+        // reload the handle is dropped as the generation returns, before the
+        // next one reopens it. This is the pre-existing shape of the path,
+        // delay included, and the ordering cutover that revisits it is #1569's.
         GenerationEnd::ReloadConfig | GenerationEnd::Terminate => {
             sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
         }
@@ -505,7 +599,7 @@ async fn run_generation(
         }
     }
 
-    Ok(generation_end)
+    Ok(())
 }
 
 /// Initializes the tracing subscriber and returns a `WorkerGuard`.
@@ -1772,28 +1866,28 @@ mod tests {
         );
     }
 
-    /// One whole generation, start to finish.
+    /// A generation, piece by piece and end to end.
     ///
-    /// The generation loop had no test seam before it became a function: its
-    /// body ran only as the process entry point. Now a generation can be built
-    /// against a temporary database and ephemeral ports, ended with a terminate
-    /// intent, and asked what it returned.
-    mod run_generation_tests {
+    /// The generation lifecycle had no test seam before it became a set of
+    /// functions: its body ran only as the process entry point. Now the wait
+    /// that ends a generation, the tail that runs after it, and a whole
+    /// generation over a temporary database and ephemeral ports can each be
+    /// driven directly.
+    mod generation_tests {
         use std::{
+            collections::HashSet,
             fs,
             net::{Ipv4Addr, SocketAddr},
             path::Path,
             sync::Once,
         };
 
+        use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
         use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair};
         use tempfile::tempdir;
 
         use super::*;
-        use crate::{
-            settings::Config,
-            tls_reload::{CertPaths, ReloadHandle, load_tls_material},
-        };
+        use crate::settings::Config;
 
         static INSTALL_PROVIDER: Once = Once::new();
 
@@ -1857,6 +1951,18 @@ mod tests {
             SocketAddr::from((Ipv4Addr::LOCALHOST, 0))
         }
 
+        /// A loopback address a test can name in advance.
+        ///
+        /// The listener is bound only to learn which port the kernel handed
+        /// out and is dropped before the address is returned, so the caller
+        /// gets an address it can either bind itself or hand to code that
+        /// will.
+        fn free_addr() -> SocketAddr {
+            let listener =
+                std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve port");
+            listener.local_addr().expect("local addr")
+        }
+
         fn test_settings(dir: &Path) -> Settings {
             let data_dir = dir.join("data");
             let export_dir = dir.join("export");
@@ -1865,8 +1971,9 @@ mod tests {
 
             Settings {
                 config: Config {
-                    // The peer subsystem is not what this test exercises, and
-                    // leaving it unconfigured is a shape production supports.
+                    // The peer subsystem is not what most of these tests
+                    // exercise, and leaving it unconfigured is a shape
+                    // production supports.
                     peer_srv_addr: None,
                     peers: None,
                     visible: ConfigVisible {
@@ -1888,24 +1995,30 @@ mod tests {
             }
         }
 
+        /// Materializes the configuration file at `cfg_path`.
+        ///
+        /// Two paths need the file to exist: the peer subsystem reads it on
+        /// startup, and a configuration reload backs it up before rewriting
+        /// it. Tests that exercise neither leave it absent, which is also how
+        /// they reach the reload's failure arm.
+        fn write_config_file(settings: &Settings) {
+            let toml = toml::to_string(&settings.config).expect("serialize config");
+            fs::write(&settings.cfg_path, toml).expect("write config file");
+        }
+
         fn test_process_context(dir: &Path, notify_terminate: Arc<Notify>) -> ProcessContext {
             install_crypto_provider();
-            let cert_paths = write_node_pki(dir);
-            let loaded = load_tls_material(&cert_paths).expect("load TLS material");
-            let cert = loaded.certs.certs.clone();
-            let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::new(loaded));
-            let tls = tls_reload::get_current_tls_material(&tls_watch);
-            let request_client_pool =
-                create_graphql_client(&tls.cert_pem, &tls.key_pem).expect("graphql client pool");
-
-            ProcessContext {
-                cert,
-                reload_handle,
-                tls_watch,
+            ProcessContext::new(
+                write_node_pki(dir),
                 notify_terminate,
-                notify_tls_reload: Arc::new(Notify::new()),
-                request_client_pool,
-            }
+                Arc::new(Notify::new()),
+            )
+            .expect("the generated PKI should build a process context")
+        }
+
+        fn test_database(data_dir: &Path) -> storage::Database {
+            let (db_path, db_options) = db_path_and_option(data_dir, 500, 512, 2, 2, false);
+            storage::Database::open(&db_path, &db_options).expect("open database")
         }
 
         /// Waits until every `needle` has appeared in the captured log.
@@ -1925,14 +2038,322 @@ mod tests {
                     sleep(READY_POLL).await;
                 }
             };
-            tokio::time::timeout(READY_TIMEOUT, wait)
+            assert!(
+                tokio::time::timeout(READY_TIMEOUT, wait).await.is_ok(),
+                "expected {needles:?} in the log, got: {}",
+                captured(logs)
+            );
+        }
+
+        struct TestQuery;
+
+        #[Object]
+        impl TestQuery {
+            async fn hello(&self) -> &'static str {
+                "world"
+            }
+        }
+
+        fn test_schema() -> Schema<TestQuery, EmptyMutation, EmptySubscription> {
+            Schema::build(TestQuery, EmptyMutation, EmptySubscription).finish()
+        }
+
+        /// Everything [`wait_for_generation_end`] waits on, and the handles a
+        /// test drives it with.
+        ///
+        /// The wait needs no database and no subsystems — it is the select
+        /// loop and nothing else — so its arms can be exercised one at a time
+        /// without paying for a generation.
+        struct WaitFixture {
+            settings: Settings,
+            process: ProcessContext,
+            intents: GenerationIntents,
+            reload_tx: mpsc::Sender<ConfigVisible>,
+            notify_terminate: Arc<Notify>,
+            notify_reboot: Arc<Notify>,
+            notify_power_off: Arc<Notify>,
+            notify_tls_reload: Arc<Notify>,
+        }
+
+        fn wait_fixture(dir: &Path) -> WaitFixture {
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir, Arc::clone(&notify_terminate));
+            let notify_tls_reload = Arc::clone(&process.notify_tls_reload);
+            let (reload_tx, reload_rx) = mpsc::channel::<ConfigVisible>(1);
+            let notify_reboot = Arc::new(Notify::new());
+            let notify_power_off = Arc::new(Notify::new());
+
+            WaitFixture {
+                settings: test_settings(dir),
+                process,
+                intents: GenerationIntents {
+                    reload_rx,
+                    notify_reboot: Arc::clone(&notify_reboot),
+                    notify_power_off: Arc::clone(&notify_power_off),
+                },
+                reload_tx,
+                notify_terminate,
+                notify_reboot,
+                notify_power_off,
+                notify_tls_reload,
+            }
+        }
+
+        /// Runs the wait with no HTTPS server and an address nothing binds.
+        ///
+        /// Every arm but the TLS reload ignores both, and the tests that drive
+        /// those arms have no server to keep alive.
+        async fn wait_without_web(fixture: &mut WaitFixture) -> GenerationEnd {
+            let schema = test_schema();
+            let mut web_controller = None;
+            wait_for_generation_end(
+                &mut fixture.settings,
+                &fixture.process,
+                &mut fixture.intents,
+                &mut web_controller,
+                &schema,
+                ephemeral_addr(),
+            )
+            .await
+        }
+
+        #[tokio::test]
+        async fn a_terminate_intent_ends_the_wait() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+
+            // `notify_one` leaves a permit behind when nothing is waiting yet,
+            // so the intent is already there when the wait first polls it.
+            fixture.notify_terminate.notify_one();
+
+            assert_eq!(
+                wait_without_web(&mut fixture).await,
+                GenerationEnd::Terminate
+            );
+        }
+
+        #[tokio::test]
+        async fn a_reboot_intent_ends_the_wait() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+
+            fixture.notify_reboot.notify_one();
+
+            assert_eq!(wait_without_web(&mut fixture).await, GenerationEnd::Reboot);
+        }
+
+        #[tokio::test]
+        async fn a_power_off_intent_ends_the_wait() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+
+            fixture.notify_power_off.notify_one();
+
+            assert_eq!(
+                wait_without_web(&mut fixture).await,
+                GenerationEnd::PowerOff
+            );
+        }
+
+        #[tokio::test]
+        async fn a_persisted_configuration_reload_ends_the_wait() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            write_config_file(&fixture.settings);
+
+            let mut new_config = fixture.settings.config.visible.clone();
+            new_config.ack_transmission = 2048;
+            fixture
+                .reload_tx
+                .send(new_config)
                 .await
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "the subsystems should report readiness, got: {}",
-                        captured(logs)
-                    )
-                });
+                .expect("the wait should still hold the receiver");
+
+            assert_eq!(
+                wait_without_web(&mut fixture).await,
+                GenerationEnd::ReloadConfig
+            );
+            // The reload is what the next generation starts from, so the wait
+            // must leave the persisted settings behind it.
+            assert_eq!(fixture.settings.config.visible.ack_transmission, 2048);
+        }
+
+        /// A reload that cannot be written down is not a shutdown.
+        ///
+        /// `cfg_path` names a file that was never created, so the backup that
+        /// precedes the rewrite fails and the generation keeps serving the
+        /// configuration it started with — until a terminate intent ends it
+        /// for real.
+        #[tokio::test]
+        async fn a_configuration_reload_that_cannot_be_persisted_keeps_serving() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            let notify_terminate = Arc::clone(&fixture.notify_terminate);
+            let reload_tx = fixture.reload_tx.clone();
+            let mut new_config = fixture.settings.config.visible.clone();
+            new_config.ack_transmission = 2048;
+
+            let (logs, _guard) = capture_logs();
+            let (end, ()) = tokio::join!(wait_without_web(&mut fixture), async {
+                reload_tx
+                    .send(new_config)
+                    .await
+                    .expect("the wait should still hold the receiver");
+                wait_for_logs(&logs, &["Failed to update configuration"]).await;
+                notify_terminate.notify_one();
+            });
+
+            assert_eq!(end, GenerationEnd::Terminate);
+            assert_eq!(
+                fixture.settings.config.visible.ack_transmission, 1024,
+                "a reload that was not persisted must not change the in-memory configuration"
+            );
+        }
+
+        /// A TLS reload rebinds the HTTPS server and keeps serving.
+        ///
+        /// It is the one arm that does not end the generation, so the wait has
+        /// to come back around and still be able to observe the next intent.
+        #[tokio::test]
+        async fn a_tls_reload_intent_keeps_serving() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            let notify_terminate = Arc::clone(&fixture.notify_terminate);
+            let notify_tls_reload = Arc::clone(&fixture.notify_tls_reload);
+            let schema = test_schema();
+            let mut web_controller = None;
+            let web_addr = free_addr();
+
+            let (logs, _guard) = capture_logs();
+            let (end, ()) = tokio::join!(
+                wait_for_generation_end(
+                    &mut fixture.settings,
+                    &fixture.process,
+                    &mut fixture.intents,
+                    &mut web_controller,
+                    &schema,
+                    web_addr,
+                ),
+                async {
+                    notify_tls_reload.notify_one();
+                    wait_for_logs(&logs, &["HTTPS reload: new GraphQL server started"]).await;
+                    notify_terminate.notify_one();
+                }
+            );
+
+            assert_eq!(end, GenerationEnd::Terminate);
+            assert!(
+                web_controller.is_some(),
+                "the reload should have left a live server behind"
+            );
+            shutdown_web(web_controller.take()).await;
+        }
+
+        /// The tail of a generation that is not shutting the host down.
+        ///
+        /// It only waits out `SERVER_REBOOT_DELAY`, and the database handle is
+        /// left for the caller to drop. Time is paused, so the delay costs no
+        /// wall-clock time.
+        #[tokio::test(start_paused = true)]
+        async fn a_reload_or_terminate_tail_leaves_the_database_open() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+            let retain_flag = AtomicBool::new(false);
+
+            let (logs, _guard) = capture_logs();
+            finish_generation(GenerationEnd::Terminate, &retain_flag, &database)
+                .await
+                .expect("the terminate tail should not fail");
+
+            assert!(
+                !captured(&logs).contains("Before shut down the system"),
+                "only a reboot or a power-off waits for the host"
+            );
+        }
+
+        /// The tail of a generation that is handing the host to `roxy`.
+        ///
+        /// The retention sweep holds a database handle on a blocking thread,
+        /// so the tail may not flush until `retain_flag` clears. Time is
+        /// paused, so both the spin loop and the `WAIT_SHUTDOWN` pause cost no
+        /// wall-clock time.
+        #[tokio::test(start_paused = true)]
+        async fn a_reboot_tail_waits_for_the_retention_sweep_then_flushes() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+            let retain_flag = Arc::new(AtomicBool::new(true));
+
+            let sweep = task::spawn({
+                let retain_flag = Arc::clone(&retain_flag);
+                async move {
+                    sleep(Duration::from_millis(SERVER_REBOOT_DELAY * 3)).await;
+                    retain_flag.store(false, Ordering::Relaxed);
+                }
+            });
+
+            let (logs, _guard) = capture_logs();
+            finish_generation(GenerationEnd::Reboot, &retain_flag, &database)
+                .await
+                .expect("the reboot tail should flush the database");
+            sweep.await.expect("the sweep stand-in should finish");
+
+            assert!(
+                !retain_flag.load(Ordering::Relaxed),
+                "the tail must not flush while the retention sweep still holds the database"
+            );
+            assert!(
+                captured(&logs).contains("Before shut down the system"),
+                "the reboot tail should announce the wait it takes before handing over the host"
+            );
+        }
+
+        /// A data directory whose compression setting no longer matches the
+        /// configuration ends the generation before the database is opened.
+        #[tokio::test]
+        async fn a_generation_refuses_a_changed_compression_setting() {
+            let dir = tempdir().expect("tempdir");
+            let process = test_process_context(dir.path(), Arc::new(Notify::new()));
+            let mut settings = test_settings(dir.path());
+            fs::write(
+                settings.config.visible.data_dir.join("COMPRESSION"),
+                "enabled",
+            )
+            .expect("write compression metadata");
+
+            let (logs, _guard) = capture_logs();
+            let error = run_generation(&mut settings, &process)
+                .await
+                .expect_err("a compression mismatch should end the generation");
+
+            assert!(error.to_string().contains("compression validation failed"));
+            assert!(
+                captured(&logs).contains("Compression validation failed"),
+                "the mismatch itself should be reported, not just the summary"
+            );
+        }
+
+        /// A data directory written by a release too old to migrate from ends
+        /// the generation before the database is opened.
+        #[tokio::test]
+        async fn a_generation_stops_when_the_data_directory_cannot_be_migrated() {
+            let dir = tempdir().expect("tempdir");
+            let process = test_process_context(dir.path(), Arc::new(Notify::new()));
+            let mut settings = test_settings(dir.path());
+            fs::write(settings.config.visible.data_dir.join("VERSION"), "0.1.0")
+                .expect("write version file");
+
+            let (logs, _guard) = capture_logs();
+            let error = run_generation(&mut settings, &process)
+                .await
+                .expect_err("an unsupported data directory should end the generation");
+
+            assert!(error.to_string().contains("migration failed"));
+            assert!(
+                captured(&logs).contains("Migration failed"),
+                "the migration error itself should be reported, not just the summary"
+            );
         }
 
         #[tokio::test]
@@ -1961,10 +2382,10 @@ mod tests {
                     notify_terminate.notify_one();
                 }
             );
-
             let end = end
-                .expect("the generation should end once the terminate intent arrives")
+                .expect("a terminate intent should end the generation")
                 .expect("the generation should not fail");
+
             assert_eq!(end, GenerationEnd::Terminate);
 
             let output = captured(&logs);
@@ -1982,6 +2403,105 @@ mod tests {
                 !output.contains("shutdown drain complete"),
                 "an empty tracker should not report drain progress, got: {output}"
             );
+        }
+
+        /// A generation with the peer subsystem configured and no HTTPS
+        /// server.
+        ///
+        /// `peer_srv_addr` is set, so the branch that builds and spawns the
+        /// peer subsystem runs; the GraphQL address is one this test is
+        /// already listening on, so `web::serve` fails and the generation
+        /// carries on without a web server — which is what production does
+        /// when the port is taken.
+        #[tokio::test]
+        async fn a_generation_serves_peers_and_survives_a_failed_web_bind() {
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+            settings.config.peer_srv_addr = Some(ephemeral_addr());
+            settings.config.peers = Some(HashSet::new());
+            write_config_file(&settings);
+
+            let occupied = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .expect("occupy the GraphQL port");
+            settings.config.visible.graphql_srv_addr =
+                occupied.local_addr().expect("occupied addr");
+
+            let (logs, _guard) = capture_logs();
+            let (end, ()) = tokio::join!(
+                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &[
+                            "Ingest listening on",
+                            "Publish listening on",
+                            // The peer subsystem logs a bare `listening on`,
+                            // so the level that precedes it is what tells it
+                            // apart from the two lines above.
+                            "INFO listening on",
+                            "Database cleanup completed.",
+                        ],
+                    )
+                    .await;
+                    notify_terminate.notify_one();
+                }
+            );
+            let end = end
+                .expect("a terminate intent should end the generation")
+                .expect("the generation should not fail");
+
+            assert_eq!(end, GenerationEnd::Terminate);
+
+            let output = captured(&logs);
+            assert!(
+                output.contains("Failed to start GraphQL server"),
+                "the taken port should have been reported, got: {output}"
+            );
+            assert!(
+                output.contains("Shutting down peer"),
+                "the peer subsystem should have been joined, got: {output}"
+            );
+        }
+
+        /// A peer subsystem that ends on its own does not take the generation
+        /// with it.
+        ///
+        /// The configuration file is never written, so the peer subsystem
+        /// fails the read it performs on startup and returns an error instead
+        /// of parking. The generation keeps serving, reports the failure, and
+        /// still ends on the intent it is given.
+        #[tokio::test]
+        async fn a_generation_reports_a_peer_subsystem_that_ended_early() {
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+            settings.config.peer_srv_addr = Some(ephemeral_addr());
+
+            let (logs, _guard) = capture_logs();
+            let (end, ()) = tokio::join!(
+                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &[
+                            "Ingest listening on",
+                            "Publish listening on",
+                            "Peer subsystem terminated unexpectedly",
+                            "Database cleanup completed.",
+                        ],
+                    )
+                    .await;
+                    notify_terminate.notify_one();
+                }
+            );
+            let end = end
+                .expect("a terminate intent should end the generation")
+                .expect("a failed peer subsystem should not fail the generation");
+
+            assert_eq!(end, GenerationEnd::Terminate);
         }
     }
 }
