@@ -61,6 +61,10 @@ use crate::{
 
 const ONE_DAY: Duration = Duration::from_hours(24);
 const WAIT_SHUTDOWN: u64 = 15;
+/// Cadence at which a shutdown drain that is still waiting reports the tasks
+/// it is waiting on. It is a reporting interval, not a deadline: the drain
+/// keeps retrying until the tracker is empty.
+const DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Creates a reqwest client configured for mTLS GraphQL communication.
 ///
@@ -214,6 +218,11 @@ async fn main() -> Result<()> {
         let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
         let ack_transmission_cnt = settings.config.visible.ack_transmission;
         let retain_flag = Arc::new(AtomicBool::new(false));
+        // The top-level tracker belongs to this generation alone: subsystem
+        // entry tasks register in it and take child tokens from its root, and
+        // it is dropped when the generation ends, so a generation never
+        // inherits the previous one's tasks.
+        let top_level_tracker = TaskTracker::new();
 
         let tls = tls_reload::get_current_tls_material(&tls_watch);
         let certs = Arc::clone(&tls.certs);
@@ -339,6 +348,7 @@ async fn main() -> Result<()> {
                             shutdown_web(web_controller.take()).await;
                             notify_shutdown.notify_waiters();
                             wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                            drain_top_level_tracker_or_log(&top_level_tracker).await;
                             break;
                         }
                         Err(e) => {
@@ -351,6 +361,7 @@ async fn main() -> Result<()> {
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
                     wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    drain_top_level_tracker_or_log(&top_level_tracker).await;
                     sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
                     return Ok(());
                 }
@@ -359,6 +370,7 @@ async fn main() -> Result<()> {
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
                     wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    drain_top_level_tracker_or_log(&top_level_tracker).await;
                     is_reboot = true;
                     break;
                 }
@@ -367,6 +379,7 @@ async fn main() -> Result<()> {
                     shutdown_web(web_controller.take()).await;
                     notify_shutdown.notify_waiters();
                     wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                    drain_top_level_tracker_or_log(&top_level_tracker).await;
                     is_power_off = true;
                     break;
                 }
@@ -588,9 +601,6 @@ async fn wait_for_task_shutdown(
 /// Returns [`LockPoisonedError`] if an internal tracker mutex is poisoned. A
 /// poisoned lock is the one outcome this policy treats as a real error; pending
 /// tasks are not.
-// The top-level tracker has no subsystem registered in it yet, so this loop has
-// no production call site until the shutdown path is cut over to the tracker.
-#[allow(dead_code)]
 async fn drain_top_level_tracker(
     tracker: &TaskTracker,
     report_interval: Duration,
@@ -613,6 +623,23 @@ async fn drain_top_level_tracker(
                 report_pending_round(round, &pending, &mut reported_snapshot);
             }
         }
+    }
+}
+
+/// Drains the per-generation top-level tracker, reporting the one error the
+/// drain can produce rather than propagating it.
+///
+/// A poisoned tracker lock says an earlier panic left the tracker unreadable;
+/// it says nothing about the rest of the shutdown path, which still has to
+/// observe the retained handle and close the database. Returning the error
+/// from `main` would skip all of that, so it is logged and shutdown continues.
+///
+/// The call site is interim. It sits where the tracker drain has to happen
+/// once entry tasks are registered in the tracker, and moves into its final
+/// position when the shutdown path is cut over to it.
+async fn drain_top_level_tracker_or_log(tracker: &TaskTracker) {
+    if let Err(e) = drain_top_level_tracker(tracker, DRAIN_REPORT_INTERVAL).await {
+        error!("shutdown drain could not complete: {e}");
     }
 }
 
@@ -1532,6 +1559,63 @@ mod tests {
         });
 
         assert_eq!(result, Err(LockPoisonedError));
+    }
+
+    /// The shape the four shutdown arms drain today: nothing is registered in
+    /// the per-generation tracker yet, so the wrapper returns before the first
+    /// reporting interval is even due and the shutdown log stays as it was.
+    #[tokio::test(start_paused = true)]
+    async fn drain_top_level_tracker_or_log_is_silent_for_an_empty_tracker() {
+        let (logs, _guard) = capture_logs();
+
+        let tracker = TaskTracker::new();
+        tokio::time::timeout(
+            DRAIN_REPORT_INTERVAL / 2,
+            drain_top_level_tracker_or_log(&tracker),
+        )
+        .await
+        .expect("an empty tracker should drain before the first round is due");
+
+        let output = captured(&logs);
+        assert!(
+            output.is_empty(),
+            "draining an empty tracker should log nothing, got: {output}"
+        );
+    }
+
+    /// A poisoned lock is reported and swallowed rather than propagated: the
+    /// shutdown path still has to observe the retained handle and close the
+    /// database, which returning the error from `main` would skip.
+    ///
+    /// The lock is poisoned as in
+    /// `drain_top_level_tracker_surfaces_a_poisoned_lock`, before any runtime
+    /// exists, so this test builds its own runtime.
+    #[test]
+    fn drain_top_level_tracker_or_log_reports_a_poisoned_lock_and_returns() {
+        let (logs, _guard) = capture_logs();
+
+        let tracker = TaskTracker::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("no-runtime", |_token| async {});
+        }));
+        assert!(outcome.is_err(), "spawn outside a runtime should panic");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(async {
+            tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker_or_log(&tracker))
+                .await
+                .expect("a poisoned lock should end the drain, not hang it");
+        });
+
+        let output = captured(&logs);
+        assert!(
+            output.contains("shutdown drain could not complete"),
+            "the poisoned lock should be reported, got: {output}"
+        );
     }
 
     #[test]
