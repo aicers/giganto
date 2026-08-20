@@ -1395,6 +1395,58 @@ pub mod tests {
             );
         }
 
+        /// Accepts a raw QUIC connection with the same bounded attempt count
+        /// and handshake budget used by the client-side peer fixtures.
+        /// Dropping a timed-out handshake lets the production client observe
+        /// the failed attempt and make a fresh connection attempt.
+        pub(super) async fn accept_quic_with_retry(
+            server_endpoint: Endpoint,
+            what: &'static str,
+        ) -> Connection {
+            // This is the reconnect delay used by the production
+            // `client_connection` error path. After the first failed QUIC
+            // connection, later server attempts must allow for this delay
+            // before granting the next handshake its full timeout budget.
+            const PRODUCTION_CLIENT_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
+            let server_addr = server_endpoint
+                .local_addr()
+                .expect("server endpoint address");
+            let mut last_error = String::new();
+            for attempt_index in 0..DIAL_ATTEMPTS {
+                // The first dial is already in flight, so it only needs the
+                // standard 3-second handshake budget. Later attempts may
+                // begin while the production client is waiting 5 seconds to
+                // reconnect, so they allow that delay plus a fresh 3-second
+                // handshake budget.
+                let attempt_timeout = if attempt_index == 0 {
+                    DIAL_ATTEMPT_TIMEOUT
+                } else {
+                    PRODUCTION_CLIENT_RETRY_INTERVAL + DIAL_ATTEMPT_TIMEOUT
+                };
+                let attempt = async {
+                    let incoming = server_endpoint
+                        .accept()
+                        .await
+                        .ok_or_else(|| "server endpoint closed".to_string())?;
+                    incoming
+                        .await
+                        .map_err(|e| format!("QUIC handshake failed: {e}"))
+                };
+                match tokio::time::timeout(attempt_timeout, attempt).await {
+                    Ok(Ok(connection)) => return connection,
+                    Ok(Err(e)) => last_error = e,
+                    Err(_) => {
+                        last_error = format!("attempt timed out after {attempt_timeout:?}");
+                    }
+                }
+                sleep(DIAL_RETRY_INTERVAL).await;
+            }
+            panic!(
+                "{what} at {server_addr} failed after {DIAL_ATTEMPTS} attempts; last error: {last_error}"
+            );
+        }
+
         /// Establishes a raw client/server QUIC connection pair, retrying
         /// the whole accept+connect pair per attempt so a scheduler stall
         /// on a loaded runner cannot expire quinn's idle timeout and
@@ -3933,6 +3985,14 @@ pub mod tests {
     /// server.
     #[tokio::test]
     async fn client_connection_retries_when_inflight_dial_is_superseded_by_reload() {
+        // A full server-side accept cycle can consume about 35.25 seconds:
+        // 3 seconds for the initial attempt, four subsequent attempts that
+        // each allow the production client's 5-second reconnect delay plus
+        // a fresh 3-second QUIC handshake, and five 50-millisecond retry
+        // intervals. Keep this larger budget local so the shared 10-second
+        // test timeout remains strict for unrelated peer tests.
+        const RELOAD_RACE_TIMEOUT: Duration = Duration::from_secs(40);
+
         init_crypto();
 
         let server_certs = create_certs();
@@ -3972,11 +4032,11 @@ pub mod tests {
             // First dial: complete the QUIC handshake, then pause until the
             // test bumps the shared generation. The client's
             // giganto-client handshake stays blocked until we resume.
-            let incoming1 = server_endpoint_for_task
-                .accept()
-                .await
-                .expect("first accept");
-            let conn1 = incoming1.await.expect("first quic handshake");
+            let conn1 = accept_quic_with_retry(
+                server_endpoint_for_task.clone(),
+                "first QUIC handshake for TLS reload race",
+            )
+            .await;
             first_quic_done_tx.send(()).expect("signal first quic done");
             release_first_handshake_rx
                 .await
@@ -3987,11 +4047,9 @@ pub mod tests {
 
             // Retry dial: extract the client leaf so the test can verify
             // the refreshed config was used, then complete the handshake.
-            let incoming2 = server_endpoint_for_task
-                .accept()
-                .await
-                .expect("second accept");
-            let conn2 = incoming2.await.expect("second quic handshake");
+            let conn2 =
+                accept_quic_with_retry(server_endpoint_for_task, "post-reload QUIC handshake")
+                    .await;
             let observed_fp =
                 leaf(&extract_cert_from_conn(&conn2).expect("extract second client cert"));
             second_dial_observed_tx
@@ -4016,8 +4074,9 @@ pub mod tests {
             }
         });
 
-        with_timeout("first quic handshake", first_quic_done_rx)
+        tokio::time::timeout(RELOAD_RACE_TIMEOUT, first_quic_done_rx)
             .await
+            .expect("first QUIC handshake exceeded the retry budget")
             .expect("server should accept the first dial");
 
         // Simulate a peer TLS reload landing while the first dial is
@@ -4035,8 +4094,9 @@ pub mod tests {
             .send(())
             .expect("release first handshake");
 
-        let observed_fp = with_timeout("retry dial reaches server", second_dial_observed_rx)
+        let observed_fp = tokio::time::timeout(RELOAD_RACE_TIMEOUT, second_dial_observed_rx)
             .await
+            .expect("post-reload QUIC handshake exceeded the retry budget")
             .expect("client_connection should retry after detecting stale snapshot");
         assert_eq!(
             observed_fp,
