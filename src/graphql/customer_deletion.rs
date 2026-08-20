@@ -1,3 +1,5 @@
+#![allow(clippy::unused_async_trait_impl)]
+
 use std::{collections::HashSet, sync::Arc};
 
 use anyhow::{Context as AnyhowContext, Result as AnyhowResult, anyhow};

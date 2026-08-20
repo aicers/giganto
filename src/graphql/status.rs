@@ -136,7 +136,7 @@ impl StatusQuery {
         Ok(usg)
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     #[cfg(feature = "storage_diagnostics")]
     async fn properties_cf(&self, ctx: &Context<'_>, filter: PropertyFilter) -> Result<Properties> {
         let cfname = filter.record_type;
@@ -152,14 +152,14 @@ impl StatusQuery {
     }
 
     /// Returns the current visible Giganto configuration.
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn config(&self, ctx: &Context<'_>) -> Result<ConfigVisible> {
         let s = ctx.data::<Settings>()?;
         Ok(s.config.visible.clone())
     }
 
     /// Returns `true` when the GraphQL service is reachable.
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn ping(&self) -> Result<bool> {
         Ok(true)
     }
@@ -177,7 +177,7 @@ impl ConfigMutation {
     /// `num_of_thread`, or if the `data_dir` or `export_dir` does not exist or is not a directory.
     /// It also returns an error if the `export_dir` is not writable. If the `new` is the same as
     /// the current config, it returns an error.
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn update_config(
         &self,
         ctx: &Context<'_>,
@@ -232,7 +232,7 @@ impl ConfigMutation {
         Ok(new_config)
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn stop(&self, ctx: &Context<'_>) -> Result<bool> {
         info!("Received request to stop service");
         let terminate_notify = ctx.data::<TerminateNotify>()?;
@@ -241,7 +241,7 @@ impl ConfigMutation {
         Ok(true)
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn reboot(&self, ctx: &Context<'_>) -> Result<bool> {
         info!("Received request to reboot system");
         let reboot_notify = ctx.data::<RebootNotify>()?;
@@ -250,7 +250,7 @@ impl ConfigMutation {
         Ok(true)
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn shutdown(&self, ctx: &Context<'_>) -> Result<bool> {
         info!("Received request to shutdown system");
         let power_off_notify = ctx.data::<PowerOffNotify>()?;

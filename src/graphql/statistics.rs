@@ -1,4 +1,4 @@
-#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::module_name_repetitions, clippy::unused_async_trait_impl)]
 
 use std::{
     collections::{HashMap, HashSet},
@@ -253,7 +253,7 @@ impl StatisticsQuery {
     /// * The specified column family is not found
     /// * The feature flag `storage_diagnostics` is not enabled
     #[cfg(feature = "storage_diagnostics")]
-    #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn count_by_protocol(
         &self,
         ctx: &Context<'_>,
