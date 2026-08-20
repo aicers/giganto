@@ -97,7 +97,6 @@ fn create_graphql_client(cert_pem: &[u8], key_pem: &[u8]) -> Result<reqwest::Cli
         .context("failed to build GraphQL client with mTLS support")
 }
 
-#[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize rustls crypto provider
