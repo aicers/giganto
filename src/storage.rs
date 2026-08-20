@@ -2660,7 +2660,8 @@ mod tests {
         assert_eq!(iterations.load(Ordering::SeqCst), 2);
     }
 
-    /// Cancellation during the retry backoff schedules no further iteration.
+    /// Cancellation during the retry backoff ends the pass without waiting the
+    /// backoff out.
     ///
     /// The retry the backoff exists for is retention work like any other, so
     /// once shutdown has begun it is deferred rather than run. The iteration
@@ -2669,6 +2670,12 @@ mod tests {
     /// `BLOCKING_JOIN_BACKOFF` to spare; a cancellation that landed before the
     /// join was observed would fail the pass instead, so this cannot pass by
     /// losing the race.
+    ///
+    /// The bound on how long the pass may take after cancellation is what
+    /// pins the guard down. A backoff that ignored the token would still
+    /// schedule no retry — the check at the top of the loop catches it on the
+    /// way round — but it would hold shutdown open for the rest of the
+    /// backoff, and only the deadline below can tell the two apart.
     #[tokio::test]
     async fn cancellation_during_the_retry_backoff_stops_the_pass() {
         let cancel = CancellationToken::new();
@@ -2700,8 +2707,12 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         cancel.cancel();
 
-        let outcome = pass
+        // Roughly a third of the backoff that is still owed, so a pass that
+        // slept it out would miss this by some 600ms rather than by a margin
+        // a loaded machine could close.
+        let outcome = tokio::time::timeout(std::time::Duration::from_millis(300), pass)
             .await
+            .expect("a cancelled backoff should end the pass, not be slept out")
             .expect("the pass task should not panic")
             .expect("a pass cancelled in its backoff is not a failure");
 
