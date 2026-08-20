@@ -2660,6 +2660,59 @@ mod tests {
         assert_eq!(iterations.load(Ordering::SeqCst), 2);
     }
 
+    /// Cancellation during the retry backoff schedules no further iteration.
+    ///
+    /// The retry the backoff exists for is retention work like any other, so
+    /// once shutdown has begun it is deferred rather than run. The iteration
+    /// signals from the blocking thread just before it panics, which puts the
+    /// cancellation inside the backoff window with nearly the whole of
+    /// `BLOCKING_JOIN_BACKOFF` to spare; a cancellation that landed before the
+    /// join was observed would fail the pass instead, so this cannot pass by
+    /// losing the race.
+    #[tokio::test]
+    async fn cancellation_during_the_retry_backoff_stops_the_pass() {
+        let cancel = CancellationToken::new();
+        let iterations = Arc::new(AtomicUsize::new(0));
+        let (about_to_panic_tx, about_to_panic_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let pass = tokio::spawn({
+            let cancel = cancel.clone();
+            let iterations = Arc::clone(&iterations);
+            let mut about_to_panic_tx = Some(about_to_panic_tx);
+            async move {
+                super::retain_cleanup_pass(&cancel, 0, 0, false, move |_retention_timestamp| {
+                    iterations.fetch_add(1, Ordering::SeqCst);
+                    let about_to_panic_tx = about_to_panic_tx.take().expect("one iteration only");
+                    tokio::task::spawn_blocking(move || {
+                        let _ = about_to_panic_tx.send(());
+                        panic!("cleanup panicked");
+                    })
+                })
+                .await
+            }
+        });
+
+        about_to_panic_rx
+            .await
+            .expect("the iteration should have started");
+        // Long enough for the pass to observe the join failure and settle into
+        // the backoff, and far short of `BLOCKING_JOIN_BACKOFF` itself.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cancel.cancel();
+
+        let outcome = pass
+            .await
+            .expect("the pass task should not panic")
+            .expect("a pass cancelled in its backoff is not a failure");
+
+        assert_eq!(outcome, super::PassOutcome::Cancelled);
+        assert_eq!(
+            iterations.load(Ordering::SeqCst),
+            1,
+            "the deferred retry should not have been scheduled"
+        );
+    }
+
     #[tokio::test]
     async fn test_retain_periodically_deletes_expired_data() {
         let (_dir, db) = setup_db();
