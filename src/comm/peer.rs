@@ -986,6 +986,7 @@ where
         new_peers
     };
 
+    for peer in new_peers {
         if let Err(error) = sender.send(peer).await {
             let message = error.to_string();
             let peer = error.0;
