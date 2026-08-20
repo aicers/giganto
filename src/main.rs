@@ -28,6 +28,7 @@ use comm::{
     peer::{self},
     publish,
 };
+use rustls::pki_types::CertificateDer;
 use settings::{ConfigVisible, Settings};
 use storage::{db_path_and_option, repair_db};
 use tokio::{
@@ -61,6 +62,12 @@ use crate::{
 
 const ONE_DAY: Duration = Duration::from_hours(24);
 const WAIT_SHUTDOWN: u64 = 15;
+/// How often a shutdown drain that is still waiting reports its progress.
+///
+/// A reporting cadence, not a deadline: the drain is retried until the tracker
+/// is empty, and this only decides how often a shutdown that is waiting says
+/// so. Making it configurable belongs to the settings work in #1569.
+const DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Creates a reqwest client configured for mTLS GraphQL communication.
 ///
@@ -127,10 +134,6 @@ async fn main() -> Result<()> {
     let initial_material = Arc::new(loaded);
     let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::clone(&initial_material));
 
-    let mut is_reboot = false;
-    let mut is_power_off = false;
-    let mut is_reload_config = false;
-
     let notify_terminate = Arc::new(Notify::new());
 
     let notify_tls_reload = Arc::new(Notify::new());
@@ -174,215 +177,325 @@ async fn main() -> Result<()> {
     let tls = tls_reload::get_current_tls_material(&tls_watch);
     let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)?;
 
+    let process = ProcessContext {
+        cert,
+        cfg_path,
+        reload_handle,
+        tls_watch,
+        notify_terminate,
+        notify_tls_reload,
+        request_client_pool,
+    };
+
     loop {
-        info!("Data store started");
-        let (db_path, db_options) = db_path_and_option(
-            &settings.config.visible.data_dir,
-            settings.config.visible.max_open_files,
-            settings.config.visible.max_mb_of_level_base,
-            settings.config.visible.num_of_thread,
-            settings.config.visible.max_subcompactions,
-            settings.config.compression,
-        );
-
-        // Validate compression metadata before migration
-        if let Err(e) = validate_compression_metadata(
-            &settings.config.visible.data_dir,
-            settings.config.compression,
-        ) {
-            error!("Compression validation failed: {e}");
-            bail!("compression validation failed")
-        }
-
-        if let Err(e) = migrate_data_dir(&settings.config.visible.data_dir, &db_options) {
-            error!("Migration failed: {e}");
-            bail!("migration failed")
-        }
-
-        let database = storage::Database::open(&db_path, &db_options)?;
-
-        let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
-        let notify_shutdown = Arc::new(Notify::new());
-        let notify_reboot = Arc::new(Notify::new());
-        let notify_power_off = Arc::new(Notify::new());
-        let mut notify_sensor_change = None;
-
-        let pcap_sensors = new_pcap_sensors();
-        let ingest_sensors = new_ingest_sensors(&database);
-        let runtime_ingest_sensors = new_runtime_ingest_sensors();
-        let stream_direct_channels = new_stream_direct_channels();
-        let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
-        let ack_transmission_cnt = settings.config.visible.ack_transmission;
-        let retain_flag = Arc::new(AtomicBool::new(false));
-
-        let tls = tls_reload::get_current_tls_material(&tls_watch);
-        let certs = Arc::clone(&tls.certs);
-
-        let schema = graphql::schema(
-            NodeName(host_fqdn_from_cert(&cert)?),
-            database.clone(),
-            pcap_sensors.clone(),
-            ingest_sensors.clone(),
-            peers.clone(),
-            request_client_pool.clone(),
-            settings.config.visible.export_dir.clone(),
-            reload_tx,
-            notify_reboot.clone(),
-            notify_power_off.clone(),
-            notify_terminate.clone(),
-            settings.clone(),
-        );
-
-        let web_addr = settings.config.visible.graphql_srv_addr;
-        let mut web_controller: Option<WebController> = match web::serve(
-            schema.clone(),
-            web_addr,
-            tls.cert_pem.clone(),
-            tls.key_pem.clone(),
-            tls.ca_pem.clone(),
-        )
-        .await
-        {
-            Ok(controller) => Some(controller),
-            Err(e) => {
-                error!("Failed to start GraphQL server: {e}");
-                None
+        match run_generation(&mut settings, &process).await? {
+            GenerationEnd::ReloadConfig => {}
+            GenerationEnd::Terminate => return Ok(()),
+            GenerationEnd::Reboot => {
+                roxy::reboot().map_err(|e| anyhow!("cannot restart the system: {e}"))?;
+                return Ok(());
             }
-        };
+            GenerationEnd::PowerOff => {
+                roxy::power_off().map_err(|e| anyhow!("cannot power off the system: {e}"))?;
+                return Ok(());
+            }
+        }
+    }
+}
 
-        let retain_task_handle: JoinHandle<()> = task::spawn({
-            let db = database.clone();
-            let notify_shutdown_copy = notify_shutdown.clone();
-            let running_flag = retain_flag.clone();
+/// State that outlives every generation.
+///
+/// `main` builds this once, before the first generation, and lends it to each
+/// one. Everything here is either read-only for a generation — the node
+/// certificate, the configuration file path, the GraphQL client pool — or a
+/// process-wide channel a generation only listens on.
+struct ProcessContext {
+    /// The node's own certificate chain, which the node name is derived from.
+    cert: Vec<CertificateDer<'static>>,
+    /// Path to the configuration file, handed to the peer subsystem.
+    cfg_path: String,
+    /// Trigger that re-reads the TLS material from disk.
+    reload_handle: ReloadHandle,
+    /// The current TLS material, republished on every successful reload.
+    tls_watch: tls_reload::TlsWatch,
+    /// Raised by the SIGTERM/SIGINT handler and by the GraphQL shutdown API.
+    notify_terminate: Arc<Notify>,
+    /// Raised by the SIGHUP handler.
+    notify_tls_reload: Arc<Notify>,
+    /// mTLS client pool GraphQL uses to reach peer nodes.
+    request_client_pool: reqwest::Client,
+}
+
+/// Why a generation ended.
+///
+/// A generation runs until one of these four intents arrives; nothing else
+/// takes it down, and each one names a different thing for `main` to do next.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenerationEnd {
+    /// The configuration file was rewritten. The next generation starts from
+    /// the updated settings.
+    ReloadConfig,
+    /// The daemon was asked to exit.
+    Terminate,
+    /// The host was asked to reboot.
+    Reboot,
+    /// The host was asked to power off.
+    PowerOff,
+}
+
+/// Runs one generation and reports why it ended.
+///
+/// A generation is one turn of the process lifecycle: it opens the database,
+/// starts the subsystems, serves until a shutdown intent arrives, and shuts
+/// everything it built back down. Everything it owns — the database handle,
+/// the subsystem tasks, and the top-level [`TaskTracker`] — is dropped before
+/// it returns, so the next generation starts from a clean slate. That matters
+/// for more than tidiness: RocksDB holds a file lock on the data directory, so
+/// a handle surviving into the next generation would fail its `Database::open`.
+///
+/// `main` keeps only the outer loop and acts on the returned [`GenerationEnd`].
+///
+/// # Errors
+///
+/// Returns an error if the data directory fails compression validation or
+/// migration, if the database cannot be opened, if the node certificate
+/// carries no usable node name, or if the peer subsystem cannot be built.
+#[allow(clippy::too_many_lines)]
+async fn run_generation(
+    settings: &mut Settings,
+    process: &ProcessContext,
+) -> Result<GenerationEnd> {
+    info!("Data store started");
+    let (db_path, db_options) = db_path_and_option(
+        &settings.config.visible.data_dir,
+        settings.config.visible.max_open_files,
+        settings.config.visible.max_mb_of_level_base,
+        settings.config.visible.num_of_thread,
+        settings.config.visible.max_subcompactions,
+        settings.config.compression,
+    );
+
+    // Validate compression metadata before migration
+    if let Err(e) = validate_compression_metadata(
+        &settings.config.visible.data_dir,
+        settings.config.compression,
+    ) {
+        error!("Compression validation failed: {e}");
+        bail!("compression validation failed")
+    }
+
+    if let Err(e) = migrate_data_dir(&settings.config.visible.data_dir, &db_options) {
+        error!("Migration failed: {e}");
+        bail!("migration failed")
+    }
+
+    let database = storage::Database::open(&db_path, &db_options)?;
+
+    let (reload_tx, mut reload_rx) = mpsc::channel::<ConfigVisible>(1);
+    let notify_shutdown = Arc::new(Notify::new());
+    let notify_reboot = Arc::new(Notify::new());
+    let notify_power_off = Arc::new(Notify::new());
+    let mut notify_sensor_change = None;
+
+    let pcap_sensors = new_pcap_sensors();
+    let ingest_sensors = new_ingest_sensors(&database);
+    let runtime_ingest_sensors = new_runtime_ingest_sensors();
+    let stream_direct_channels = new_stream_direct_channels();
+    let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
+    let ack_transmission_cnt = settings.config.visible.ack_transmission;
+    let retain_flag = Arc::new(AtomicBool::new(false));
+
+    // One top-level tracker per generation. It is created here so that it is
+    // in scope where the subsystems below are spawned, it is drained on every
+    // shutdown arm, and it is dropped with the generation — a `TaskTracker`
+    // cannot be reopened once closed, so two generations can never share one
+    // registry. Nothing is registered in it yet; the subsystem entry tasks
+    // move into it in the issues that follow, and until then every drain
+    // below returns on its first round.
+    let top_level_tracker = TaskTracker::new();
+
+    let tls = tls_reload::get_current_tls_material(&process.tls_watch);
+    let certs = Arc::clone(&tls.certs);
+
+    let schema = graphql::schema(
+        NodeName(host_fqdn_from_cert(&process.cert)?),
+        database.clone(),
+        pcap_sensors.clone(),
+        ingest_sensors.clone(),
+        peers.clone(),
+        process.request_client_pool.clone(),
+        settings.config.visible.export_dir.clone(),
+        reload_tx,
+        notify_reboot.clone(),
+        notify_power_off.clone(),
+        process.notify_terminate.clone(),
+        settings.clone(),
+    );
+
+    let web_addr = settings.config.visible.graphql_srv_addr;
+    let mut web_controller: Option<WebController> = match web::serve(
+        schema.clone(),
+        web_addr,
+        tls.cert_pem.clone(),
+        tls.key_pem.clone(),
+        tls.ca_pem.clone(),
+    )
+    .await
+    {
+        Ok(controller) => Some(controller),
+        Err(e) => {
+            error!("Failed to start GraphQL server: {e}");
+            None
+        }
+    };
+
+    let retention = settings.config.visible.retention;
+    let retain_task_handle: JoinHandle<()> = task::spawn({
+        let db = database.clone();
+        let notify_shutdown_copy = notify_shutdown.clone();
+        let running_flag = retain_flag.clone();
+        async move {
+            if let Err(e) = storage::retain_periodically(
+                ONE_DAY,
+                retention,
+                db,
+                notify_shutdown_copy,
+                running_flag,
+            )
+            .await
+            {
+                warn!("retain_periodically task terminated unexpectedly: {e}");
+            }
+        }
+    });
+
+    let peer_task_handle: Option<JoinHandle<Result<()>>>;
+    if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
+        let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
+        let notify_sensor = Arc::new(Notify::new());
+        peer_task_handle = Some(task::spawn({
+            let ingest_sensors = ingest_sensors.clone();
+            let peers = peers.clone();
+            let peer_idents = peer_idents.clone();
+            let notify_sensor = notify_sensor.clone();
+            let notify_shutdown = notify_shutdown.clone();
+            let cfg_path = process.cfg_path.clone();
+            let tls_watch = process.tls_watch.clone();
             async move {
-                if let Err(e) = storage::retain_periodically(
-                    ONE_DAY,
-                    settings.config.visible.retention,
-                    db,
-                    notify_shutdown_copy,
-                    running_flag,
-                )
-                .await
-                {
-                    warn!("retain_periodically task terminated unexpectedly: {e}");
+                let result = peer_server
+                    .run(
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        notify_sensor,
+                        notify_shutdown,
+                        cfg_path,
+                        tls_watch,
+                    )
+                    .await;
+                if let Err(e) = &result {
+                    error!("Peer subsystem terminated unexpectedly: {e:#}");
                 }
+                result
             }
-        });
+        }));
+        notify_sensor_change = Some(notify_sensor);
+    } else {
+        peer_task_handle = None;
+    }
 
-        let peer_task_handle: Option<JoinHandle<Result<()>>>;
-        if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
-            let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
-            let notify_sensor = Arc::new(Notify::new());
-            peer_task_handle = Some(task::spawn({
-                let ingest_sensors = ingest_sensors.clone();
-                let peers = peers.clone();
-                let peer_idents = peer_idents.clone();
-                let notify_sensor = notify_sensor.clone();
-                let notify_shutdown = notify_shutdown.clone();
-                let cfg_path = cfg_path.clone();
-                let tls_watch = tls_watch.clone();
-                async move {
-                    let result = peer_server
-                        .run(
-                            ingest_sensors,
-                            peers,
-                            peer_idents,
-                            notify_sensor,
-                            notify_shutdown,
-                            cfg_path,
-                            tls_watch,
-                        )
-                        .await;
-                    if let Err(e) = &result {
-                        error!("Peer subsystem terminated unexpectedly: {e:#}");
+    let publish_server =
+        publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
+    let publish_task_handle: JoinHandle<()> = task::spawn(publish_server.run(
+        database.clone(),
+        pcap_sensors.clone(),
+        stream_direct_channels.clone(),
+        ingest_sensors.clone(),
+        peers.clone(),
+        peer_idents.clone(),
+        process.tls_watch.clone(),
+        notify_shutdown.clone(),
+    ));
+
+    let ingest_server =
+        ingest::Server::new(settings.config.visible.ingest_srv_addr, &certs.clone());
+    let ingest_task_handle: JoinHandle<()> = task::spawn(ingest_server.run(
+        database.clone(),
+        pcap_sensors,
+        ingest_sensors,
+        runtime_ingest_sensors,
+        stream_direct_channels,
+        notify_shutdown.clone(),
+        notify_sensor_change,
+        ack_transmission_cnt,
+        process.tls_watch.clone(),
+    ));
+
+    let generation_end = loop {
+        select! {
+            Some(new_config) = reload_rx.recv() => {
+                match settings.update_config_file(&new_config) {
+                    Ok(()) => {
+                        shutdown_web(web_controller.take()).await;
+                        notify_shutdown.notify_waiters();
+                        wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                        drain_top_level_tracker_or_log(&top_level_tracker).await;
+                        break GenerationEnd::ReloadConfig;
                     }
-                    result
-                }
-            }));
-            notify_sensor_change = Some(notify_sensor);
-        } else {
-            peer_task_handle = None;
-        }
-
-        let publish_server =
-            publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
-        let publish_task_handle: JoinHandle<()> = task::spawn(publish_server.run(
-            database.clone(),
-            pcap_sensors.clone(),
-            stream_direct_channels.clone(),
-            ingest_sensors.clone(),
-            peers.clone(),
-            peer_idents.clone(),
-            tls_watch.clone(),
-            notify_shutdown.clone(),
-        ));
-
-        let ingest_server =
-            ingest::Server::new(settings.config.visible.ingest_srv_addr, &certs.clone());
-        let ingest_task_handle: JoinHandle<()> = task::spawn(ingest_server.run(
-            database.clone(),
-            pcap_sensors,
-            ingest_sensors,
-            runtime_ingest_sensors,
-            stream_direct_channels,
-            notify_shutdown.clone(),
-            notify_sensor_change,
-            ack_transmission_cnt,
-            tls_watch.clone(),
-        ));
-
-        loop {
-            select! {
-                Some(new_config) = reload_rx.recv() => {
-                    match settings.update_config_file(&new_config) {
-                        Ok(()) => {
-                            shutdown_web(web_controller.take()).await;
-                            notify_shutdown.notify_waiters();
-                            wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
-                            break;
-                        }
-                        Err(e) => {
-                            warn!("Failed to update configuration: {e:#}, run with previous config");
-                        }
+                    Err(e) => {
+                        warn!("Failed to update configuration: {e:#}, run with previous config");
                     }
-                },
-                () = notify_terminate.notified() => {
-                    info!("Termination signal: daemon exit");
-                    shutdown_web(web_controller.take()).await;
-                    notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
-                    sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
-                    return Ok(());
                 }
-                () = notify_reboot.notified() => {
-                    info!("Restarting the system...");
-                    shutdown_web(web_controller.take()).await;
-                    notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
-                    is_reboot = true;
-                    break;
-                }
-                () = notify_power_off.notified() => {
-                    info!("Power off the system...");
-                    shutdown_web(web_controller.take()).await;
-                    notify_shutdown.notify_waiters();
-                    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
-                    is_power_off = true;
-                    break;
-                }
-                () = notify_tls_reload.notified() => {
-                    reload_https_server(
-                        &reload_handle,
-                        &tls_watch,
-                        &mut web_controller,
-                        &schema,
-                        web_addr,
-                    ).await;
-                }
+            },
+            () = process.notify_terminate.notified() => {
+                info!("Termination signal: daemon exit");
+                shutdown_web(web_controller.take()).await;
+                notify_shutdown.notify_waiters();
+                wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                drain_top_level_tracker_or_log(&top_level_tracker).await;
+                break GenerationEnd::Terminate;
+            }
+            () = notify_reboot.notified() => {
+                info!("Restarting the system...");
+                shutdown_web(web_controller.take()).await;
+                notify_shutdown.notify_waiters();
+                wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                drain_top_level_tracker_or_log(&top_level_tracker).await;
+                break GenerationEnd::Reboot;
+            }
+            () = notify_power_off.notified() => {
+                info!("Power off the system...");
+                shutdown_web(web_controller.take()).await;
+                notify_shutdown.notify_waiters();
+                wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle, retain_task_handle).await;
+                drain_top_level_tracker_or_log(&top_level_tracker).await;
+                break GenerationEnd::PowerOff;
+            }
+            () = process.notify_tls_reload.notified() => {
+                reload_https_server(
+                    &process.reload_handle,
+                    &process.tls_watch,
+                    &mut web_controller,
+                    &schema,
+                    web_addr,
+                ).await;
             }
         }
+    };
 
-        if is_reboot || is_power_off || is_reload_config {
+    match generation_end {
+        // Neither of these closes the database here. On terminate the process
+        // is on its way out and the handle goes with it; on a configuration
+        // reload the handle is dropped as this function returns, before the
+        // next generation reopens it. This is the pre-existing shape of the
+        // path, delay included, and the ordering cutover that revisits it is
+        // #1569's.
+        GenerationEnd::ReloadConfig | GenerationEnd::Terminate => {
+            sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
+        }
+        // The retention sweep runs on a blocking thread holding a database
+        // handle, so the database cannot be closed until that flag clears.
+        GenerationEnd::Reboot | GenerationEnd::PowerOff => {
             loop {
                 if !retain_flag.load(Ordering::Relaxed) {
                     break;
@@ -391,27 +504,12 @@ async fn main() -> Result<()> {
             }
             database.shutdown()?;
 
-            if is_reload_config {
-                info!("Before reloading config, wait {SERVER_REBOOT_DELAY} seconds...");
-                is_reload_config = false;
-            } else {
-                info!("Before shut down the system, wait {WAIT_SHUTDOWN} seconds...");
-                sleep(tokio::time::Duration::from_secs(WAIT_SHUTDOWN)).await;
-                break;
-            }
+            info!("Before shut down the system, wait {WAIT_SHUTDOWN} seconds...");
+            sleep(tokio::time::Duration::from_secs(WAIT_SHUTDOWN)).await;
         }
-        sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
     }
 
-    if is_reboot || is_power_off {
-        if is_reboot {
-            roxy::reboot().map_err(|e| anyhow!("cannot restart the system: {e}"))?;
-        }
-        if is_power_off {
-            roxy::power_off().map_err(|e| anyhow!("cannot power off the system: {e}"))?;
-        }
-    }
-    Ok(())
+    Ok(generation_end)
 }
 
 /// Initializes the tracing subscriber and returns a `WorkerGuard`.
@@ -588,9 +686,6 @@ async fn wait_for_task_shutdown(
 /// Returns [`LockPoisonedError`] if an internal tracker mutex is poisoned. A
 /// poisoned lock is the one outcome this policy treats as a real error; pending
 /// tasks are not.
-// The top-level tracker has no subsystem registered in it yet, so this loop has
-// no production call site until the shutdown path is cut over to the tracker.
-#[allow(dead_code)]
 async fn drain_top_level_tracker(
     tracker: &TaskTracker,
     report_interval: Duration,
@@ -613,6 +708,19 @@ async fn drain_top_level_tracker(
                 report_pending_round(round, &pending, &mut reported_snapshot);
             }
         }
+    }
+}
+
+/// Drains the per-generation top-level tracker for one shutdown arm, logging a
+/// poisoned tracker lock instead of propagating it.
+///
+/// A poisoned lock says nothing about the rest of the shutdown path, and
+/// carrying it out of the generation would skip the work that still has to run
+/// after the drain — the retained-handle observation and `database.shutdown()`.
+/// So it is reported where it happens and shutdown carries on.
+async fn drain_top_level_tracker_or_log(tracker: &TaskTracker) {
+    if let Err(e) = drain_top_level_tracker(tracker, DRAIN_REPORT_INTERVAL).await {
+        error!("shutdown drain could not read the top-level tracker: {e}");
     }
 }
 
@@ -1617,5 +1725,268 @@ mod tests {
             1,
             "the empty snapshot should not suppress the next one, got: {output}"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drain_top_level_tracker_or_log_is_silent_for_an_empty_tracker() {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+
+        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker_or_log(&tracker))
+            .await
+            .expect("an empty tracker should drain on the first round");
+
+        assert!(tracker.is_closed());
+        assert_eq!(tracker.pending_count(), 0);
+        let output = captured(&logs);
+        assert!(
+            output.is_empty(),
+            "draining an empty tracker should log nothing, got: {output}"
+        );
+    }
+
+    /// The wrapper exists so a poisoned tracker lock does not travel out of the
+    /// generation: it is reported where it happens and shutdown carries on. The
+    /// lock is poisoned the way the drain-loop poison test does it, which has to
+    /// happen before any runtime is entered.
+    #[test]
+    fn drain_top_level_tracker_or_log_reports_a_poisoned_lock() {
+        let tracker = TaskTracker::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("no-runtime", |_token| async {});
+        }));
+        assert!(outcome.is_err(), "spawn outside a runtime should panic");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("current-thread runtime should build");
+        let (logs, _guard) = capture_logs();
+        runtime.block_on(async {
+            tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker_or_log(&tracker))
+                .await
+                .expect("a poisoned lock should end the wrapper, not be retried");
+        });
+
+        let output = captured(&logs);
+        assert!(
+            output.contains("task tracker lock was poisoned"),
+            "the poisoned lock should be reported, got: {output}"
+        );
+    }
+
+    /// One whole generation, start to finish.
+    ///
+    /// The generation loop had no test seam before it became a function: its
+    /// body ran only as the process entry point. Now a generation can be built
+    /// against a temporary database and ephemeral ports, ended with a terminate
+    /// intent, and asked what it returned.
+    mod run_generation_tests {
+        use std::{
+            fs,
+            net::{Ipv4Addr, SocketAddr},
+            path::Path,
+            sync::Once,
+        };
+
+        use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair};
+        use tempfile::tempdir;
+
+        use super::*;
+        use crate::{
+            settings::Config,
+            tls_reload::{CertPaths, ReloadHandle, load_tls_material},
+        };
+
+        static INSTALL_PROVIDER: Once = Once::new();
+
+        /// Upper bound on one generation. The terminate arm waits
+        /// `SERVER_REBOOT_DELAY` on its way out, so this is deliberately loose:
+        /// it is here so a generation that never ends fails the test instead of
+        /// hanging it.
+        const GENERATION_TIMEOUT: Duration = Duration::from_mins(2);
+        /// Upper bound on the subsystems reporting that they are up. Same
+        /// purpose — a bound, not a wait.
+        const READY_TIMEOUT: Duration = Duration::from_mins(1);
+        /// How often the readiness wait rechecks the captured log.
+        const READY_POLL: Duration = Duration::from_millis(5);
+
+        fn install_crypto_provider() {
+            INSTALL_PROVIDER.call_once(|| {
+                let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            });
+        }
+
+        fn path_string(path: &Path) -> String {
+            path.to_str().expect("utf-8 path").to_string()
+        }
+
+        /// Writes a self-signed node certificate carrying both identities
+        /// giganto knows how to read — the legacy `{service}@{hostname}` CN of
+        /// the default build and the four-label SAN DNS name of the `bootroot`
+        /// build — so the generation resolves a node name in either build.
+        fn write_node_pki(dir: &Path) -> CertPaths {
+            let key_pair = KeyPair::generate().expect("generate key pair");
+            let mut params =
+                CertificateParams::new(vec!["001.giganto.node1.example.test".to_string()])
+                    .expect("cert params");
+            params.distinguished_name = rcgen::DistinguishedName::new();
+            params
+                .distinguished_name
+                .push(DnType::CommonName, "giganto@node1");
+            params.extended_key_usages = vec![
+                ExtendedKeyUsagePurpose::ServerAuth,
+                ExtendedKeyUsagePurpose::ClientAuth,
+            ];
+            let cert = params.self_signed(&key_pair).expect("self-signed cert");
+
+            let cert_path = dir.join("cert.pem");
+            let key_path = dir.join("key.pem");
+            let ca_path = dir.join("ca.pem");
+            fs::write(&cert_path, cert.pem()).expect("write cert");
+            fs::write(&key_path, key_pair.serialize_pem()).expect("write key");
+            fs::write(&ca_path, cert.pem()).expect("write ca");
+
+            CertPaths {
+                cert_path: path_string(&cert_path),
+                key_path: path_string(&key_path),
+                ca_certs_paths: vec![path_string(&ca_path)],
+            }
+        }
+
+        /// Port 0 on the loopback: the kernel picks a free port at bind time,
+        /// so no port has to be reserved and nothing depends on which it picks.
+        fn ephemeral_addr() -> SocketAddr {
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0))
+        }
+
+        fn test_settings(dir: &Path) -> Settings {
+            let data_dir = dir.join("data");
+            let export_dir = dir.join("export");
+            fs::create_dir_all(&data_dir).expect("create data dir");
+            fs::create_dir_all(&export_dir).expect("create export dir");
+
+            Settings {
+                config: Config {
+                    // The peer subsystem is not what this test exercises, and
+                    // leaving it unconfigured is a shape production supports.
+                    peer_srv_addr: None,
+                    peers: None,
+                    visible: ConfigVisible {
+                        graphql_srv_addr: ephemeral_addr(),
+                        ingest_srv_addr: ephemeral_addr(),
+                        publish_srv_addr: ephemeral_addr(),
+                        retention: ONE_DAY * 100,
+                        export_dir,
+                        data_dir,
+                        max_open_files: 500,
+                        max_mb_of_level_base: 512,
+                        num_of_thread: 2,
+                        max_subcompactions: 2,
+                        ack_transmission: 1024,
+                    },
+                    compression: false,
+                },
+                cfg_path: path_string(&dir.join("config.toml")),
+            }
+        }
+
+        fn test_process_context(dir: &Path, notify_terminate: Arc<Notify>) -> ProcessContext {
+            install_crypto_provider();
+            let cert_paths = write_node_pki(dir);
+            let loaded = load_tls_material(&cert_paths).expect("load TLS material");
+            let cert = loaded.certs.certs.clone();
+            let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::new(loaded));
+            let tls = tls_reload::get_current_tls_material(&tls_watch);
+            let request_client_pool =
+                create_graphql_client(&tls.cert_pem, &tls.key_pem).expect("graphql client pool");
+
+            ProcessContext {
+                cert,
+                cfg_path: path_string(&dir.join("config.toml")),
+                reload_handle,
+                tls_watch,
+                notify_terminate,
+                notify_tls_reload: Arc::new(Notify::new()),
+                request_client_pool,
+            }
+        }
+
+        /// Waits until every `needle` has appeared in the captured log.
+        ///
+        /// This is the synchronization the terminate intent needs.
+        /// `notify_shutdown` is delivered with `notify_waiters`, which reaches
+        /// only the tasks already parked on it, so signalling before the
+        /// subsystems are up would notify nobody and the join that follows
+        /// would never return. Each subsystem announces itself with no await
+        /// between the announcement and the park, and on this test's
+        /// current-thread runtime the announcement can only be observed after
+        /// that poll has finished — so a subsystem whose line is in the log is
+        /// parked.
+        async fn wait_for_logs(logs: &Arc<Mutex<Vec<u8>>>, needles: &[&str]) {
+            let wait = async {
+                while !needles.iter().all(|needle| captured(logs).contains(needle)) {
+                    sleep(READY_POLL).await;
+                }
+            };
+            tokio::time::timeout(READY_TIMEOUT, wait)
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "the subsystems should report readiness, got: {}",
+                        captured(logs)
+                    )
+                });
+        }
+
+        #[tokio::test]
+        async fn a_generation_ends_on_a_terminate_intent() {
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+
+            let (logs, _guard) = capture_logs();
+            // `join!` drives both on this task: the generation runs while the
+            // other side watches the log for readiness and then sends the
+            // intent that ends it.
+            let (end, ()) = tokio::join!(
+                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &[
+                            "Ingest listening on",
+                            "Publish listening on",
+                            "Database cleanup completed.",
+                        ],
+                    )
+                    .await;
+                    notify_terminate.notify_one();
+                }
+            );
+
+            let end = end
+                .expect("the generation should end once the terminate intent arrives")
+                .expect("the generation should not fail");
+            assert_eq!(end, GenerationEnd::Terminate);
+
+            let output = captured(&logs);
+            assert!(
+                output.contains("Termination signal: daemon exit"),
+                "the terminate arm should have run, got: {output}"
+            );
+            // Nothing is registered in the top-level tracker yet, so its drain
+            // returns on the first round with nothing to report.
+            assert!(
+                !output.contains("shutdown drain round"),
+                "an empty tracker should not report a drain round, got: {output}"
+            );
+            assert!(
+                !output.contains("shutdown drain complete"),
+                "an empty tracker should not report drain progress, got: {output}"
+            );
+        }
     }
 }
