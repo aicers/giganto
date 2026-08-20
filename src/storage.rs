@@ -7,10 +7,7 @@ use std::{
     marker::PhantomData,
     ops::Deref,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -44,7 +41,8 @@ use rocksdb::{
 use serde::de::DeserializeOwned;
 #[cfg(feature = "bootroot")]
 use serde::{Deserialize, Serialize};
-use tokio::{select, sync::Notify, time};
+use tokio::{select, task::JoinHandle, time};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::datetime::DateTime;
@@ -1203,107 +1201,195 @@ fn retain_cleanup_iteration(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+/// How long a cleanup pass waits before retrying an iteration whose blocking
+/// task failed to join.
+const BLOCKING_JOIN_BACKOFF: Duration = Duration::from_secs(1);
+
+/// One day, in nanoseconds.
+///
+/// The step by which a pass relaxes its retention timestamp when disk usage
+/// stays above `USAGE_LOW` after an iteration.
+const ONE_DAY_TIMESTAMP_NANOS: i64 = 86_400_000_000_000;
+
+/// How a cleanup pass ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PassOutcome {
+    /// The pass ran every iteration it wanted to run.
+    Completed,
+    /// The pass observed cancellation and stopped early.
+    Cancelled,
+}
+
+/// Runs the blocking cleanup iterations of one retention pass.
+///
+/// A pass is normally a single iteration. It repeats only while disk usage
+/// stays above `USAGE_LOW`, each repeat relaxing `retention_timestamp` by a
+/// further day until the pass either brings usage down or reaches
+/// `now_timestamp` with nothing left to give.
+///
+/// `spawn_iteration` is what the pass calls to put one iteration on the
+/// blocking pool; taking it as an argument is what lets a test drive the
+/// cancellation and failure branches below without a database behind them.
+///
+/// # Cancellation
+///
+/// The pass never abandons an iteration it has already started: a blocking
+/// task holds a database handle, and returning while it still runs would let
+/// the lifecycle owner close the database underneath it. It stops between
+/// iterations instead, so the permitted loss is the cleanup that was not
+/// started yet. Nothing is lost by that: retention only deletes data that has
+/// aged out, and data that has aged out stays aged out, so the next pass —
+/// in this generation or the next — deletes exactly what this one skipped.
+///
+/// # Errors
+///
+/// Returns an error if an iteration reports one, or if an iteration's blocking
+/// task cannot be joined while cancellation is in progress. A join failure
+/// outside shutdown is retried after [`BLOCKING_JOIN_BACKOFF`] instead.
+async fn retain_cleanup_pass<F>(
+    cancel: &CancellationToken,
+    mut retention_timestamp: i64,
+    now_timestamp: i64,
+    usage_flag: bool,
+    mut spawn_iteration: F,
+) -> Result<PassOutcome>
+where
+    F: FnMut(i64) -> JoinHandle<Result<()>>,
+{
+    loop {
+        // Nothing is in flight here, so this is the cheap place to stop: the
+        // iteration that is not scheduled is the one the next pass picks up.
+        if cancel.is_cancelled() {
+            return Ok(PassOutcome::Cancelled);
+        }
+
+        // Awaited, never aborted. `JoinHandle::abort` cannot stop a blocking
+        // task that has already begun anyway, so aborting would only detach a
+        // live RocksDB operation from the task that is supposed to be waiting
+        // for it.
+        match spawn_iteration(retention_timestamp).await {
+            Ok(Ok(())) => {}
+            // A cleanup error is the pass's own failure and is surfaced
+            // whether or not shutdown is under way.
+            Ok(Err(e)) => return Err(e),
+            // The blocking task panicked or was aborted. During shutdown there
+            // is no next pass to retry it, so it leaves through the return
+            // value rather than a log line nobody is watching for.
+            Err(e) if cancel.is_cancelled() => return Err(e.into()),
+            Err(e) => {
+                warn!(
+                    "retention cleanup blocking task failed: {e}; \
+                    retrying after backoff"
+                );
+                if cancel
+                    .run_until_cancelled(time::sleep(BLOCKING_JOIN_BACKOFF))
+                    .await
+                    .is_none()
+                {
+                    return Ok(PassOutcome::Cancelled);
+                }
+                continue;
+            }
+        }
+
+        // The iteration that was in flight has finished. Report the stop here
+        // rather than falling through to the disk-usage decision, which would
+        // announce a pass that shutdown cut short as a completed one.
+        if cancel.is_cancelled() {
+            return Ok(PassOutcome::Cancelled);
+        }
+
+        if !cfg!(test) && check_db_usage().await.1 && usage_flag {
+            retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
+            if retention_timestamp > now_timestamp {
+                warn!("cannot delete data to usage under {USAGE_LOW}");
+                return Ok(PassOutcome::Completed);
+            }
+        } else if usage_flag {
+            info!("Disk usage is under {USAGE_LOW}%");
+            return Ok(PassOutcome::Completed);
+        } else {
+            return Ok(PassOutcome::Completed);
+        }
+    }
+}
+
+/// Deletes data that has aged out of the retention window, once per
+/// `interval`, until `cancel` is cancelled.
+///
+/// This is the retention subsystem's entry task. It is registered in the
+/// generation's top-level tracker, which is where `cancel` comes from and what
+/// waits for this function to return; the lifecycle owner keeps the
+/// [`JoinHandle`] so the value returned here — and a panic in place of one —
+/// stays observable.
+///
+/// # Cancellation
+///
+/// Once cancellation begins no further pass is scheduled, and a pass that is
+/// under way stops between iterations. The cleanup that shutdown defers this
+/// way is not lost work: expired data stays expired, so the next pass deletes
+/// it. What this function will not do is return while an iteration is still
+/// running on the blocking pool, because the caller closes the database as
+/// soon as this returns.
+///
+/// # Errors
+///
+/// Returns an error if the retention period cannot be expressed in
+/// nanoseconds, or if a cleanup pass fails.
 pub async fn retain_periodically(
     interval: Duration,
     retention_period: Duration,
     db: Database,
-    notify_shutdown: Arc<Notify>,
-    running_flag: Arc<AtomicBool>,
+    cancel: CancellationToken,
 ) -> Result<()> {
     const DEFAULT_FROM_TIMESTAMP_NANOS: i64 = 61_000_000_000;
-    const ONE_DAY_TIMESTAMP_NANOS: i64 = 86_400_000_000_000;
-    const BLOCKING_JOIN_BACKOFF: Duration = Duration::from_secs(1);
 
     let mut itv = time::interval(interval);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
     let from_timestamp = DEFAULT_FROM_TIMESTAMP_NANOS.to_be_bytes();
     loop {
         select! {
-            _ = itv.tick() => {
-                info!("Begin to cleanup the database based on retention period.");
-                running_flag.store(true, Ordering::Relaxed);
-
-                let now = DateTime::now();
-                let mut retention_timestamp = now
-                    .timestamp_nanos_opt()
-                    .unwrap_or(retention_duration)
-                    - retention_duration;
-                let mut usage_flag = false;
-
-                if !cfg!(test) && check_db_usage().await.0 {
-                    info!(
-                        "Disk usage is over {USAGE_THRESHOLD}%. \
-                        Retention period is temporarily reduced."
-                    );
-                    retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
-                    usage_flag = true;
-                }
-
-                let now_timestamp = now.timestamp_nanos_opt().unwrap_or(0);
-                loop {
-                    let mut handle = tokio::task::spawn_blocking({
-                        let db = db.clone();
-                        let retention_timestamp = retention_timestamp;
-                        move || retain_cleanup_iteration(&db, retention_timestamp, from_timestamp)
-                    });
-
-                    let mut shutdown_requested = false;
-
-                    let blocking_result = select! {
-                        result = &mut handle => result,
-                        () = notify_shutdown.notified() => {
-                            shutdown_requested = true;
-                            handle.await
-                        }
-                    };
-
-                    match blocking_result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => {
-                            running_flag.store(false, Ordering::Relaxed);
-                            return Err(e);
-                        }
-                        Err(e) => {
-                            if shutdown_requested {
-                                running_flag.store(false, Ordering::Relaxed);
-                                return Err(e.into());
-                            }
-
-                            warn!(
-                                "retention cleanup blocking task failed: {e}; \
-                                retrying after backoff"
-                            );
-                            time::sleep(BLOCKING_JOIN_BACKOFF).await;
-                            continue;
-                        }
-                    }
-
-                    if shutdown_requested {
-                        running_flag.store(false, Ordering::Relaxed);
-                        return Ok(());
-                    }
-
-                    if !cfg!(test) && check_db_usage().await.1 && usage_flag {
-                        retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
-                        if retention_timestamp > now_timestamp {
-                            warn!("cannot delete data to usage under {USAGE_LOW}");
-                            break;
-                        }
-                    } else if usage_flag {
-                        info!("Disk usage is under {USAGE_LOW}%");
-                        break;
-                    } else {
-                        break;
-                    }
-                }
-                info!("Database cleanup completed.");
-                running_flag.store(false, Ordering::Relaxed);
-            },
-            () = notify_shutdown.notified() => {
-                return Ok(());
-            },
+            // Biased so that a tick that came due in the same poll as the
+            // cancellation cannot win the race and open one more pass.
+            biased;
+            () = cancel.cancelled() => return Ok(()),
+            _ = itv.tick() => {}
         }
+
+        info!("Begin to cleanup the database based on retention period.");
+        let now = DateTime::now();
+        let mut retention_timestamp =
+            now.timestamp_nanos_opt().unwrap_or(retention_duration) - retention_duration;
+        let mut usage_flag = false;
+
+        if !cfg!(test) && check_db_usage().await.0 {
+            info!(
+                "Disk usage is over {USAGE_THRESHOLD}%. \
+                Retention period is temporarily reduced."
+            );
+            retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
+            usage_flag = true;
+        }
+
+        let now_timestamp = now.timestamp_nanos_opt().unwrap_or(0);
+        let outcome = retain_cleanup_pass(
+            &cancel,
+            retention_timestamp,
+            now_timestamp,
+            usage_flag,
+            |retention_timestamp| {
+                let db = db.clone();
+                tokio::task::spawn_blocking(move || {
+                    retain_cleanup_iteration(&db, retention_timestamp, from_timestamp)
+                })
+            },
+        )
+        .await?;
+
+        if outcome == PassOutcome::Cancelled {
+            return Ok(());
+        }
+        info!("Database cleanup completed.");
     }
 }
 
@@ -1486,10 +1572,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    use anyhow::anyhow;
     use giganto_client::ingest::network::Conn;
     use giganto_client::ingest::statistics::Statistics;
     use tempfile::TempDir;
-    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
 
     use super::{
         BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
@@ -2352,24 +2439,195 @@ mod tests {
     #[tokio::test]
     async fn test_retain_periodically_shutdown() {
         let (_dir, db) = setup_db();
-        let notify_shutdown = Arc::new(Notify::new());
-        let running_flag = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
 
-        let shutdown_clone = notify_shutdown.clone();
-        let task = tokio::spawn(async move {
-            super::retain_periodically(
-                std::time::Duration::from_millis(10),
-                std::time::Duration::from_hours(1),
-                db,
-                shutdown_clone,
-                running_flag,
-            )
-            .await
-        });
+        let task = tokio::spawn(super::retain_periodically(
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_hours(1),
+            db,
+            cancel.clone(),
+        ));
 
-        notify_shutdown.notify_one();
+        cancel.cancel();
         let result = task.await.unwrap();
         assert!(result.is_ok());
+    }
+
+    /// A token cancelled before the entry task is ever polled opens no pass.
+    ///
+    /// The interval fires its first tick immediately, so this is the race the
+    /// biased `select!` decides: cancellation wins, and the expired data is
+    /// left for the next generation to delete.
+    #[tokio::test]
+    async fn cancellation_before_the_first_tick_opens_no_pass() {
+        let (_dir, db) = setup_db();
+        let sensor = "cancelled_before_start";
+        register_sensor(&db, sensor);
+
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let expired_key = conn_key(sensor, now_nanos - 10_000_000_000);
+        insert_conn(
+            &db.conn_store().unwrap(),
+            sensor,
+            now_nanos - 10_000_000_000,
+            b"old",
+        );
+        assert_conn_key_exists(&db, &expired_key);
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let result = super::retain_periodically(
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(2),
+            db.clone(),
+            cancel,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        // The permitted loss, stated as a test: cleanup that never started is
+        // deferred, not performed.
+        assert_conn_key_exists(&db, &expired_key);
+    }
+
+    /// A pass that is cancelled does not schedule another iteration.
+    #[tokio::test]
+    async fn a_cancelled_pass_schedules_no_iteration() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let outcome = super::retain_cleanup_pass(&cancel, 0, 0, true, |_retention_timestamp| {
+            panic!("a cancelled pass must not schedule an iteration");
+        })
+        .await
+        .expect("a cancelled pass is not a failure");
+
+        assert_eq!(outcome, super::PassOutcome::Cancelled);
+    }
+
+    /// Cancellation waits out the blocking iteration that is already running.
+    ///
+    /// The stand-in iteration blocks until the test releases it, which is what
+    /// lets the test assert the thing that matters: the pass is still waiting
+    /// while the iteration runs, and the iteration ran to its end rather than
+    /// being abandoned.
+    #[tokio::test]
+    async fn cancellation_awaits_the_running_blocking_iteration() {
+        let cancel = CancellationToken::new();
+        let started = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+
+        let pass = tokio::spawn({
+            let cancel = cancel.clone();
+            let started = Arc::clone(&started);
+            let finished = Arc::clone(&finished);
+            let mut release_rx = Some(release_rx);
+            async move {
+                super::retain_cleanup_pass(&cancel, 0, 0, false, move |_retention_timestamp| {
+                    let release_rx = release_rx.take().expect("one iteration only");
+                    let started = Arc::clone(&started);
+                    let finished = Arc::clone(&finished);
+                    tokio::task::spawn_blocking(move || {
+                        started.store(true, Ordering::SeqCst);
+                        release_rx.recv().expect("the test releases the iteration");
+                        finished.store(true, Ordering::SeqCst);
+                        Ok(())
+                    })
+                })
+                .await
+            }
+        });
+
+        while !started.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        cancel.cancel();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            !pass.is_finished(),
+            "the pass returned while its blocking iteration was still running"
+        );
+        assert!(!finished.load(Ordering::SeqCst));
+
+        release_tx.send(()).expect("the iteration is waiting");
+        let outcome = pass
+            .await
+            .expect("the pass task should not panic")
+            .expect("a cancelled pass is not a failure");
+
+        assert_eq!(outcome, super::PassOutcome::Cancelled);
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "the blocking iteration should have run to its end"
+        );
+    }
+
+    /// A cleanup error leaves through the return value, cancelled or not.
+    #[tokio::test]
+    async fn a_failed_iteration_is_reported_to_the_caller() {
+        let cancel = CancellationToken::new();
+
+        let error = super::retain_cleanup_pass(&cancel, 0, 0, false, |_retention_timestamp| {
+            tokio::task::spawn_blocking(|| Err(anyhow!("cleanup failed")))
+        })
+        .await
+        .expect_err("a failed iteration should fail the pass");
+
+        assert!(error.to_string().contains("cleanup failed"));
+    }
+
+    /// A blocking iteration that panics during shutdown is not swallowed.
+    ///
+    /// Outside shutdown the pass retries, so there is a next iteration to
+    /// report the trouble. During shutdown there is not, and the lifecycle
+    /// owner reads the return value.
+    #[tokio::test]
+    async fn a_panic_during_cancellation_is_reported_to_the_caller() {
+        let cancel = CancellationToken::new();
+
+        let error = super::retain_cleanup_pass(&cancel, 0, 0, false, {
+            let cancel = cancel.clone();
+            move |_retention_timestamp| {
+                let cancel = cancel.clone();
+                tokio::task::spawn_blocking(move || {
+                    cancel.cancel();
+                    panic!("cleanup panicked");
+                })
+            }
+        })
+        .await
+        .expect_err("a panicking iteration should fail the pass during shutdown");
+
+        assert!(error.to_string().contains("panic"));
+    }
+
+    /// A blocking iteration that panics outside shutdown is retried.
+    ///
+    /// Time is paused, so the backoff between the two iterations costs no
+    /// wall-clock time.
+    #[tokio::test(start_paused = true)]
+    async fn a_panicking_iteration_is_retried_outside_shutdown() {
+        let cancel = CancellationToken::new();
+        let iterations = Arc::new(AtomicUsize::new(0));
+
+        let outcome = super::retain_cleanup_pass(&cancel, 0, 0, false, {
+            let iterations = Arc::clone(&iterations);
+            move |_retention_timestamp| {
+                let attempt = iterations.fetch_add(1, Ordering::SeqCst);
+                tokio::task::spawn_blocking(move || {
+                    assert!(attempt > 0, "cleanup panicked");
+                    Ok(())
+                })
+            }
+        })
+        .await
+        .expect("the retry should carry the pass to completion");
+
+        assert_eq!(outcome, super::PassOutcome::Completed);
+        assert_eq!(iterations.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -2401,14 +2659,12 @@ mod tests {
         assert_conn_key_exists(&db, &old_key);
         assert_conn_key_exists(&db, &new_key);
 
-        let notify_shutdown = Arc::new(Notify::new());
-        let running_flag = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
             retention_period,
             db.clone(),
-            notify_shutdown.clone(),
-            running_flag.clone(),
+            cancel.clone(),
         ));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -2430,7 +2686,7 @@ mod tests {
 
         assert_conn_key_exists(&db, &new_key);
 
-        notify_shutdown.notify_one();
+        cancel.cancel();
         let result = task.await.unwrap();
         assert!(result.is_ok());
     }
@@ -2453,14 +2709,12 @@ mod tests {
 
         assert_conn_key_exists(&db, &boundary_key);
 
-        let notify_shutdown = Arc::new(Notify::new());
-        let running_flag = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
             retention_period,
             db.clone(),
-            notify_shutdown.clone(),
-            running_flag.clone(),
+            cancel.clone(),
         ));
 
         // Give retain loop a chance to run.
@@ -2468,7 +2722,7 @@ mod tests {
 
         assert_conn_key_exists(&db, &boundary_key);
 
-        notify_shutdown.notify_one();
+        cancel.cancel();
         let result = task.await.unwrap();
         assert!(result.is_ok());
     }
@@ -2487,14 +2741,12 @@ mod tests {
 
         assert_conn_key_exists(&db, &orphan_key);
 
-        let notify_shutdown = Arc::new(Notify::new());
-        let running_flag = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
             retention_period,
             db.clone(),
-            notify_shutdown.clone(),
-            running_flag.clone(),
+            cancel.clone(),
         ));
 
         // Wait briefly to give retain loop a chance to run.
@@ -2502,7 +2754,7 @@ mod tests {
 
         assert_conn_key_exists(&db, &orphan_key);
 
-        notify_shutdown.notify_one();
+        cancel.cancel();
         let result = task.await.unwrap();
         assert!(result.is_ok());
     }
@@ -2522,8 +2774,7 @@ mod tests {
             insert_conn(&store, sensor, old_ts_nanos + offset, b"old");
         }
 
-        let notify_shutdown = Arc::new(Notify::new());
-        let running_flag = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         let progress = Arc::new(AtomicUsize::new(0));
 
         let progress_clone = progress.clone();
@@ -2539,24 +2790,18 @@ mod tests {
             std::time::Duration::from_millis(10),
             retention_period,
             db.clone(),
-            notify_shutdown.clone(),
-            running_flag.clone(),
+            cancel.clone(),
         ));
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !running_flag.load(Ordering::Relaxed) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "retention did not start"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-
+        // The interval's first tick is immediate and a pass repeats every
+        // 10ms, so cleanup is running for most of this window. Cleanup that
+        // ran on the runtime instead of the blocking pool would stall the
+        // ticker for it.
         let progress_before = progress.load(Ordering::Relaxed);
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let progress_after = progress.load(Ordering::Relaxed);
 
-        notify_shutdown.notify_one();
+        cancel.cancel();
         let result = task.await.unwrap();
         assert!(result.is_ok());
         ticker.abort();

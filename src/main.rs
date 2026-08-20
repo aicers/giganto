@@ -10,16 +10,7 @@ mod test_bootroot;
 mod tls_reload;
 mod web;
 
-use std::{
-    fs::OpenOptions,
-    path::Path,
-    process::exit,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{fs::OpenOptions, path::Path, process::exit, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
@@ -325,15 +316,13 @@ async fn run_generation(
     let stream_direct_channels = new_stream_direct_channels();
     let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
     let ack_transmission_cnt = settings.config.visible.ack_transmission;
-    let retain_flag = Arc::new(AtomicBool::new(false));
 
     // One top-level tracker per generation. It is created here so that it is
     // in scope where the subsystems below are spawned, it is drained on every
     // shutdown arm, and it is dropped with the generation — a `TaskTracker`
     // cannot be reopened once closed, so two generations can never share one
-    // registry. Nothing is registered in it yet; the subsystem entry tasks
-    // move into it in the issues that follow, and until then every drain
-    // below returns on its first round.
+    // registry. Retention is registered in it below; the remaining subsystem
+    // entry tasks move into it in the issues that follow.
     let top_level_tracker = TaskTracker::new();
 
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
@@ -371,25 +360,18 @@ async fn run_generation(
         }
     };
 
+    // Retention is tracked, not detached: the tracker's cancellation is what
+    // stops it, the tracker's drain is what waits for it, and the handle kept
+    // here is what says how it ended. Its child token reaches it through the
+    // closure argument, so nothing about its shutdown travels on
+    // `notify_shutdown`.
     let retention = settings.config.visible.retention;
-    let retain_task_handle: JoinHandle<()> = task::spawn({
-        let db = database.clone();
-        let notify_shutdown_copy = notify_shutdown.clone();
-        let running_flag = retain_flag.clone();
-        async move {
-            if let Err(e) = storage::retain_periodically(
-                ONE_DAY,
-                retention,
-                db,
-                notify_shutdown_copy,
-                running_flag,
-            )
-            .await
-            {
-                warn!("retain_periodically task terminated unexpectedly: {e}");
-            }
-        }
-    });
+    let retain_task_handle: JoinHandle<Result<()>> = top_level_tracker
+        .spawn("retention", {
+            let db = database.clone();
+            move |cancel| storage::retain_periodically(ONE_DAY, retention, db, cancel)
+        })
+        .map_err(|e| anyhow!("failed to register the retention task: {e}"))?;
 
     let peer_task_handle: Option<JoinHandle<Result<()>>>;
     if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
@@ -473,16 +455,14 @@ async fn run_generation(
     // each arm had.
     shutdown_web(web_controller.take()).await;
     notify_shutdown.notify_waiters();
-    wait_for_task_shutdown(
-        ingest_task_handle,
-        publish_task_handle,
-        peer_task_handle,
+    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle).await;
+    shutdown_generation(
+        &top_level_tracker,
         retain_task_handle,
+        generation_end,
+        &database,
     )
-    .await;
-    drain_top_level_tracker_or_log(&top_level_tracker).await;
-
-    finish_generation(generation_end, &retain_flag, &database).await?;
+    .await?;
 
     Ok(generation_end)
 }
@@ -560,18 +540,64 @@ where
     }
 }
 
+/// Stops what the generation registered in its top-level tracker, then runs
+/// the tail the ending intent asks for.
+///
+/// The order is the whole of it. The drain cancels the tracker and does not
+/// return until every tracked task has returned, so the retention entry task —
+/// and with it any cleanup still running on the blocking pool — has stopped
+/// before the handle is read and before [`finish_generation`] is in a position
+/// to close the database. Retention holds a database handle on a blocking
+/// thread; closing the database while it still ran would pull the store out
+/// from under a live RocksDB operation, which is why nothing here is
+/// reordered.
+///
+/// # Errors
+///
+/// Returns an error if the tail cannot flush the database. A retention failure
+/// is reported, not returned: the generation is already ending, and the tail
+/// still has to run.
+async fn shutdown_generation(
+    top_level_tracker: &TaskTracker,
+    retain_task_handle: JoinHandle<Result<()>>,
+    generation_end: GenerationEnd,
+    database: &storage::Database,
+) -> Result<()> {
+    drain_top_level_tracker_or_log(top_level_tracker).await;
+    report_retention_outcome(retain_task_handle).await;
+    finish_generation(generation_end, database).await
+}
+
+/// Reports how the retention entry task ended.
+///
+/// A drain waits for tracked tasks to exit but says nothing about how they
+/// exited, so the handle kept at spawn time is the only place a retention
+/// failure can be seen. All four endings are reported: the value it returned,
+/// the error it returned, a panic, and an abort it never asked for. Awaiting
+/// the handle here costs nothing — the drain has already waited for this
+/// task — and it is what makes the report the last word on retention before
+/// the database is closed.
+async fn report_retention_outcome(retain_task_handle: JoinHandle<Result<()>>) {
+    match retain_task_handle.await {
+        Ok(Ok(())) => info!("Retention stopped"),
+        Ok(Err(e)) => error!("Retention terminated unexpectedly: {e:#}"),
+        Err(e) if e.is_panic() => error!("Retention panicked: {e}"),
+        Err(e) => error!("Retention did not run to completion: {e}"),
+    }
+}
+
 /// Runs the tail of a generation, the part that differs by intent.
 ///
-/// By the time this runs the subsystems have already been notified and joined,
-/// so what is left is what each intent needs of the database handle before the
-/// generation drops it.
+/// By the time this runs the subsystems have already been notified and joined
+/// and the top-level tracker has drained, so nothing is left holding the
+/// database and what remains is what each intent needs of the handle before
+/// the generation drops it.
 ///
 /// # Errors
 ///
 /// Returns an error if the database cannot be flushed on the way out.
 async fn finish_generation(
     generation_end: GenerationEnd,
-    retain_flag: &AtomicBool,
     database: &storage::Database,
 ) -> Result<()> {
     match generation_end {
@@ -583,15 +609,11 @@ async fn finish_generation(
         GenerationEnd::ReloadConfig | GenerationEnd::Terminate => {
             sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
         }
-        // The retention sweep runs on a blocking thread holding a database
-        // handle, so the database cannot be closed until that flag clears.
+        // The host is about to go down, so the store is flushed and its
+        // background work stopped first. The caller has already drained the
+        // tracker, so no retention cleanup is running on a blocking thread to
+        // be surprised by it.
         GenerationEnd::Reboot | GenerationEnd::PowerOff => {
-            loop {
-                if !retain_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-                sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
-            }
             database.shutdown()?;
 
             info!("Before shut down the system, wait {WAIT_SHUTDOWN} seconds...");
@@ -733,21 +755,21 @@ async fn reload_https_server<S>(
     }
 }
 
+/// Joins the subsystems that still shut down on `notify_shutdown`.
+///
+/// Retention is not among them: it is registered in the per-generation
+/// top-level tracker, so it is cancelled and waited for by
+/// [`shutdown_generation`] instead. The subsystems left here move the same way
+/// in the issues that follow.
 async fn wait_for_task_shutdown(
     ingest_task_handle: JoinHandle<()>,
     publish_task_handle: JoinHandle<()>,
     peer_task_handle: Option<JoinHandle<Result<()>>>,
-    retain_task_handle: JoinHandle<()>,
 ) {
     if let Some(handle_peers) = peer_task_handle {
-        let _ = tokio::join!(
-            ingest_task_handle,
-            publish_task_handle,
-            handle_peers,
-            retain_task_handle
-        );
+        let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
     } else {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle, retain_task_handle);
+        let _ = tokio::join!(ingest_task_handle, publish_task_handle);
     }
 }
 
@@ -780,8 +802,13 @@ async fn drain_top_level_tracker(
     tracker: &TaskTracker,
     report_interval: Duration,
 ) -> Result<(), LockPoisonedError> {
-    tracker.close()?;
+    // Cancellation is delivered even when the close cannot be completed. The
+    // caller reads retained handles once this returns, and a task that was
+    // never told to stop would leave that read waiting forever; a poisoned
+    // lock is worth reporting, not worth hanging shutdown over.
+    let close_result = tracker.close();
     tracker.cancel_children();
+    close_result?;
 
     let mut round: u64 = 0;
     let mut reported_snapshot: Option<Vec<(u64, String)>> = None;
@@ -988,7 +1015,6 @@ mod tests {
         let ingest_done = Arc::new(AtomicBool::new(false));
         let publish_done = Arc::new(AtomicBool::new(false));
         let peer_done = Arc::new(AtomicBool::new(false));
-        let retain_done = Arc::new(AtomicBool::new(false));
 
         let ingest_task_handle = tokio::spawn({
             let ingest_done = ingest_done.clone();
@@ -1015,26 +1041,66 @@ mod tests {
             }
         }));
 
-        let retain_task_handle = tokio::spawn({
-            let retain_done = retain_done.clone();
-            async move {
-                sleep(Duration::from_millis(20)).await;
-                retain_done.store(true, Ordering::SeqCst);
-            }
-        });
-
-        wait_for_task_shutdown(
-            ingest_task_handle,
-            publish_task_handle,
-            peer_task_handle,
-            retain_task_handle,
-        )
-        .await;
+        wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle).await;
 
         assert!(ingest_done.load(Ordering::SeqCst));
         assert!(publish_done.load(Ordering::SeqCst));
         assert!(peer_done.load(Ordering::SeqCst));
-        assert!(retain_done.load(Ordering::SeqCst));
+    }
+
+    /// Every ending the retention handle can carry reaches the log.
+    ///
+    /// The drain that precedes this report says only that the task exited, so
+    /// if the report loses an ending, that ending is lost outright.
+    #[tokio::test]
+    async fn report_retention_outcome_reports_every_ending() {
+        let (logs, guard) = capture_logs();
+        report_retention_outcome(tokio::spawn(async { Ok(()) })).await;
+        assert!(
+            captured(&logs).contains("Retention stopped"),
+            "a clean stop should be reported, got: {}",
+            captured(&logs)
+        );
+        drop(guard);
+
+        let (logs, guard) = capture_logs();
+        report_retention_outcome(tokio::spawn(async {
+            Err(anyhow!("retention cleanup failed"))
+        }))
+        .await;
+        assert!(
+            captured(&logs).contains("retention cleanup failed"),
+            "a returned error should be reported with its cause, got: {}",
+            captured(&logs)
+        );
+        drop(guard);
+
+        let (logs, guard) = capture_logs();
+        report_retention_outcome(tokio::spawn(async {
+            panic!("retention panicked");
+        }))
+        .await;
+        assert!(
+            captured(&logs).contains("Retention panicked"),
+            "a panic should be reported, got: {}",
+            captured(&logs)
+        );
+        drop(guard);
+
+        let (logs, _guard) = capture_logs();
+        let (block_tx, block_rx) = oneshot::channel::<()>();
+        let aborted: JoinHandle<Result<()>> = tokio::spawn(async move {
+            let _ = block_rx.await;
+            Ok(())
+        });
+        aborted.abort();
+        report_retention_outcome(aborted).await;
+        drop(block_tx);
+        assert!(
+            captured(&logs).contains("Retention did not run to completion"),
+            "an abort nobody asked for should be reported, got: {}",
+            captured(&logs)
+        );
     }
 
     mod reload_https_server_tests {
@@ -2259,10 +2325,9 @@ mod tests {
             let dir = tempdir().expect("tempdir");
             let settings = test_settings(dir.path());
             let database = test_database(&settings.config.visible.data_dir);
-            let retain_flag = AtomicBool::new(false);
 
             let (logs, _guard) = capture_logs();
-            finish_generation(GenerationEnd::Terminate, &retain_flag, &database)
+            finish_generation(GenerationEnd::Terminate, &database)
                 .await
                 .expect("the terminate tail should not fail");
 
@@ -2274,39 +2339,119 @@ mod tests {
 
         /// The tail of a generation that is handing the host to `roxy`.
         ///
-        /// The retention sweep holds a database handle on a blocking thread,
-        /// so the tail may not flush until `retain_flag` clears. Time is
-        /// paused, so both the spin loop and the `WAIT_SHUTDOWN` pause cost no
-        /// wall-clock time.
+        /// Time is paused, so the `WAIT_SHUTDOWN` pause it takes before the
+        /// host goes down costs no wall-clock time.
         #[tokio::test(start_paused = true)]
-        async fn a_reboot_tail_waits_for_the_retention_sweep_then_flushes() {
+        async fn a_reboot_tail_flushes_the_database() {
             let dir = tempdir().expect("tempdir");
             let settings = test_settings(dir.path());
             let database = test_database(&settings.config.visible.data_dir);
-            let retain_flag = Arc::new(AtomicBool::new(true));
-
-            let sweep = task::spawn({
-                let retain_flag = Arc::clone(&retain_flag);
-                async move {
-                    sleep(Duration::from_millis(SERVER_REBOOT_DELAY * 3)).await;
-                    retain_flag.store(false, Ordering::Relaxed);
-                }
-            });
 
             let (logs, _guard) = capture_logs();
-            finish_generation(GenerationEnd::Reboot, &retain_flag, &database)
+            finish_generation(GenerationEnd::Reboot, &database)
                 .await
                 .expect("the reboot tail should flush the database");
-            sweep.await.expect("the sweep stand-in should finish");
 
-            assert!(
-                !retain_flag.load(Ordering::Relaxed),
-                "the tail must not flush while the retention sweep still holds the database"
-            );
             assert!(
                 captured(&logs).contains("Before shut down the system"),
                 "the reboot tail should announce the wait it takes before handing over the host"
             );
+        }
+
+        /// The database is not closed while retention still holds it.
+        ///
+        /// The stand-in retention task is written the way the real one is: it
+        /// waits for cancellation, and then waits out a cleanup already
+        /// running on the blocking pool before returning. The shutdown
+        /// sequence must not reach `database.shutdown()` until that blocking
+        /// cleanup has finished, so the test releases the blocking work only
+        /// after checking that the sequence is still waiting, and reads the
+        /// log line that follows the flush as the marker for it.
+        #[tokio::test]
+        async fn the_database_is_not_closed_until_retention_has_stopped() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+            let tracker = TaskTracker::new();
+
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let cleanup_started = Arc::new(AtomicBool::new(false));
+            let cleanup_finished = Arc::new(AtomicBool::new(false));
+            let retain_task_handle: JoinHandle<Result<()>> = tracker
+                .spawn("retention", {
+                    let db = database.clone();
+                    let cleanup_started = Arc::clone(&cleanup_started);
+                    let cleanup_finished = Arc::clone(&cleanup_finished);
+                    move |cancel| async move {
+                        cancel.cancelled().await;
+                        // The handle is awaited, never aborted: the blocking
+                        // cleanup holds a database handle.
+                        task::spawn_blocking(move || {
+                            cleanup_started.store(true, Ordering::SeqCst);
+                            let _ = release_rx.recv();
+                            // Touching the store is the point: it is what
+                            // would race a database closed too early.
+                            db.sensors_store().expect("sensors store");
+                            cleanup_finished.store(true, Ordering::SeqCst);
+                        })
+                        .await?;
+                        Ok(())
+                    }
+                })
+                .expect("a fresh tracker admits the retention task");
+
+            let (logs, _guard) = capture_logs();
+            let shutdown = task::spawn({
+                let tracker = tracker.clone();
+                let database = database.clone();
+                async move {
+                    shutdown_generation(
+                        &tracker,
+                        retain_task_handle,
+                        GenerationEnd::Reboot,
+                        &database,
+                    )
+                    .await
+                }
+            });
+
+            // Cancellation has to reach the stand-in and its blocking cleanup
+            // has to be running before the ordering under test means anything.
+            let started = async {
+                while !cleanup_started.load(Ordering::SeqCst) {
+                    sleep(READY_POLL).await;
+                }
+            };
+            assert!(
+                tokio::time::timeout(READY_TIMEOUT, started).await.is_ok(),
+                "the drain should have cancelled the retention stand-in"
+            );
+
+            // A shutdown that did not wait would have flushed by now: the
+            // drain is the only thing between it and the tail.
+            sleep(Duration::from_millis(100)).await;
+            assert!(
+                !captured(&logs).contains("Before shut down the system"),
+                "the database was closed while a blocking cleanup was still running"
+            );
+
+            release_tx
+                .send(())
+                .expect("the blocking cleanup is waiting");
+            wait_for_logs(&logs, &["Before shut down the system"]).await;
+            assert!(
+                cleanup_finished.load(Ordering::SeqCst),
+                "the blocking cleanup should have run to the end before the flush"
+            );
+            let output = captured(&logs);
+            assert!(
+                output.contains("Retention stopped"),
+                "the retention handle should have been read, got: {output}"
+            );
+
+            // What is left of the tail is the pause before the host goes down,
+            // and this test is not waiting it out.
+            shutdown.abort();
         }
 
         /// A data directory whose compression setting no longer matches the
@@ -2393,15 +2538,24 @@ mod tests {
                 output.contains("Termination signal: daemon exit"),
                 "the terminate arm should have run, got: {output}"
             );
-            // Nothing is registered in the top-level tracker yet, so its drain
-            // returns on the first round with nothing to report.
+            // Retention is the one task in the top-level tracker, and it stops
+            // on the cancellation the drain delivers, so the drain returns on
+            // its first round with nothing to report.
+            assert!(
+                output.contains("Retention stopped"),
+                "the retention task should have stopped cleanly, got: {output}"
+            );
             assert!(
                 !output.contains("shutdown drain round"),
-                "an empty tracker should not report a drain round, got: {output}"
+                "a tracker that drains at once should not report a round, got: {output}"
             );
             assert!(
                 !output.contains("shutdown drain complete"),
-                "an empty tracker should not report drain progress, got: {output}"
+                "a tracker that drains at once should not report progress, got: {output}"
+            );
+            assert!(
+                !output.contains("tracked task did not run to completion"),
+                "the retention task should have returned, not vanished, got: {output}"
             );
         }
 
