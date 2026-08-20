@@ -1220,6 +1220,56 @@ enum PassOutcome {
     Cancelled,
 }
 
+/// Applies the shortened retention window a pass runs under while the disk is
+/// over `USAGE_THRESHOLD`.
+///
+/// Returns the timestamp the pass starts from, and whether it runs under disk
+/// pressure — the flag [`retain_cleanup_pass`] reads to decide whether asking
+/// `roxy` about usage again is worth it.
+///
+/// `over_threshold` is passed in rather than read here so that the decision
+/// this makes is exercised by tests, which have no disk to fill.
+fn open_under_disk_pressure(retention_timestamp: i64, over_threshold: bool) -> (i64, bool) {
+    if !over_threshold {
+        return (retention_timestamp, false);
+    }
+    info!(
+        "Disk usage is over {USAGE_THRESHOLD}%. \
+        Retention period is temporarily reduced."
+    );
+    (
+        retention_timestamp.saturating_add(ONE_DAY_TIMESTAMP_NANOS),
+        true,
+    )
+}
+
+/// Moves the retention window a further day forward for a pass that is still
+/// over `USAGE_LOW` after an iteration.
+///
+/// Returns `None` when the pass is done: either the disk has come back under
+/// `USAGE_LOW`, or the window has caught up with `now_timestamp` and every
+/// record the retention policy allows deleting is already gone, so no further
+/// iteration could bring usage down.
+///
+/// `still_over_low` is passed in rather than read here so that the decision
+/// this makes is exercised by tests, which have no disk to fill.
+fn relax_retention_timestamp(
+    retention_timestamp: i64,
+    now_timestamp: i64,
+    still_over_low: bool,
+) -> Option<i64> {
+    if !still_over_low {
+        info!("Disk usage is under {USAGE_LOW}%");
+        return None;
+    }
+    let relaxed = retention_timestamp.saturating_add(ONE_DAY_TIMESTAMP_NANOS);
+    if relaxed > now_timestamp {
+        warn!("cannot delete data to usage under {USAGE_LOW}");
+        return None;
+    }
+    Some(relaxed)
+}
+
 /// Runs the blocking cleanup iterations of one retention pass.
 ///
 /// A pass is normally a single iteration. It repeats only while disk usage
@@ -1306,16 +1356,13 @@ where
         if !usage_flag {
             return Ok(PassOutcome::Completed);
         }
-        if !cfg!(test) && check_db_usage().await.1 {
-            retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
-            if retention_timestamp > now_timestamp {
-                warn!("cannot delete data to usage under {USAGE_LOW}");
-                return Ok(PassOutcome::Completed);
-            }
-        } else {
-            info!("Disk usage is under {USAGE_LOW}%");
+        let still_over_low = !cfg!(test) && check_db_usage().await.1;
+        let Some(relaxed) =
+            relax_retention_timestamp(retention_timestamp, now_timestamp, still_over_low)
+        else {
             return Ok(PassOutcome::Completed);
-        }
+        };
+        retention_timestamp = relaxed;
     }
 }
 
@@ -1363,18 +1410,10 @@ pub async fn retain_periodically(
 
         info!("Begin to cleanup the database based on retention period.");
         let now = DateTime::now();
-        let mut retention_timestamp =
+        let retention_timestamp =
             now.timestamp_nanos_opt().unwrap_or(retention_duration) - retention_duration;
-        let mut usage_flag = false;
-
-        if !cfg!(test) && check_db_usage().await.0 {
-            info!(
-                "Disk usage is over {USAGE_THRESHOLD}%. \
-                Retention period is temporarily reduced."
-            );
-            retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
-            usage_flag = true;
-        }
+        let (retention_timestamp, usage_flag) =
+            open_under_disk_pressure(retention_timestamp, !cfg!(test) && check_db_usage().await.0);
 
         let now_timestamp = now.timestamp_nanos_opt().unwrap_or(0);
         let outcome = retain_cleanup_pass(
@@ -2502,13 +2541,96 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
 
-        let outcome = super::retain_cleanup_pass(&cancel, 0, 0, true, |_retention_timestamp| {
-            panic!("a cancelled pass must not schedule an iteration");
+        let iterations = Arc::new(AtomicUsize::new(0));
+        let outcome = super::retain_cleanup_pass(&cancel, 0, 0, true, {
+            let iterations = Arc::clone(&iterations);
+            move |_retention_timestamp| {
+                iterations.fetch_add(1, Ordering::SeqCst);
+                tokio::task::spawn_blocking(|| Ok(()))
+            }
         })
         .await
         .expect("a cancelled pass is not a failure");
 
         assert_eq!(outcome, super::PassOutcome::Cancelled);
+        assert_eq!(
+            iterations.load(Ordering::SeqCst),
+            0,
+            "a cancelled pass must not schedule an iteration"
+        );
+    }
+
+    /// A disk under `USAGE_THRESHOLD` leaves the retention window alone.
+    #[test]
+    fn a_healthy_disk_shortens_no_retention_window() {
+        let retention_timestamp = 1_700_000_000_000_000_000;
+
+        let (opened, usage_flag) = super::open_under_disk_pressure(retention_timestamp, false);
+
+        assert_eq!(opened, retention_timestamp);
+        assert!(!usage_flag);
+    }
+
+    /// A disk over `USAGE_THRESHOLD` opens the pass a day further along.
+    #[test]
+    fn disk_pressure_shortens_the_retention_window_by_a_day() {
+        let retention_timestamp = 1_700_000_000_000_000_000;
+
+        let (opened, usage_flag) = super::open_under_disk_pressure(retention_timestamp, true);
+
+        assert_eq!(
+            opened,
+            retention_timestamp + super::ONE_DAY_TIMESTAMP_NANOS,
+            "the shortened window should reach a day further into the data"
+        );
+        assert!(
+            usage_flag,
+            "a pass opened under disk pressure should be told so"
+        );
+    }
+
+    /// A window that has not caught up with the present is relaxed by a day.
+    #[test]
+    fn a_relaxed_window_reaches_one_day_further() {
+        let retention_timestamp = 1_700_000_000_000_000_000;
+        let now_timestamp = retention_timestamp + 2 * super::ONE_DAY_TIMESTAMP_NANOS;
+
+        assert_eq!(
+            super::relax_retention_timestamp(retention_timestamp, now_timestamp, true),
+            Some(retention_timestamp + super::ONE_DAY_TIMESTAMP_NANOS)
+        );
+    }
+
+    /// A disk back under `USAGE_LOW` ends the pass where it stands.
+    #[test]
+    fn a_recovered_disk_relaxes_the_window_no_further() {
+        let retention_timestamp = 1_700_000_000_000_000_000;
+        let now_timestamp = retention_timestamp + 2 * super::ONE_DAY_TIMESTAMP_NANOS;
+
+        assert_eq!(
+            super::relax_retention_timestamp(retention_timestamp, now_timestamp, false),
+            None
+        );
+    }
+
+    /// Once the window would pass the present there is nothing left to delete.
+    ///
+    /// The pass has to stop there rather than keep relaxing: every record the
+    /// retention policy allows deleting is already gone, so another iteration
+    /// would do nothing but reread the same data.
+    #[test]
+    fn a_window_that_caught_up_with_the_present_is_not_relaxed() {
+        let now_timestamp = 1_700_000_000_000_000_000;
+
+        assert_eq!(
+            super::relax_retention_timestamp(now_timestamp, now_timestamp, true),
+            None
+        );
+        assert_eq!(
+            super::relax_retention_timestamp(i64::MAX, now_timestamp, true),
+            None,
+            "a window at the end of the range should stop, not overflow"
+        );
     }
 
     /// A pass opened by disk pressure still runs one iteration and completes.

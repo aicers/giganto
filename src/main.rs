@@ -1087,10 +1087,10 @@ mod tests {
     async fn report_retention_outcome_reports_every_ending() {
         let (logs, guard) = capture_logs();
         report_retention_outcome(tokio::spawn(async { Ok(()) })).await;
+        let output = captured(&logs);
         assert!(
-            captured(&logs).contains("Retention stopped"),
-            "a clean stop should be reported, got: {}",
-            captured(&logs)
+            output.contains("Retention stopped"),
+            "a clean stop should be reported, got: {output}"
         );
         drop(guard);
 
@@ -1099,11 +1099,11 @@ mod tests {
             Err(anyhow!("retention cleanup failed"))
         }))
         .await;
+        let output = captured(&logs);
         assert!(
-            captured(&logs).contains("Retention had already terminated unexpectedly")
-                && captured(&logs).contains("retention cleanup failed"),
-            "a returned error should be restated with its cause, got: {}",
-            captured(&logs)
+            output.contains("Retention had already terminated unexpectedly")
+                && output.contains("retention cleanup failed"),
+            "a returned error should be restated with its cause, got: {output}"
         );
         drop(guard);
 
@@ -1112,26 +1112,32 @@ mod tests {
             panic!("retention panicked");
         }))
         .await;
+        let output = captured(&logs);
         assert!(
-            captured(&logs).contains("Retention panicked"),
-            "a panic should be reported, got: {}",
-            captured(&logs)
+            output.contains("Retention panicked"),
+            "a panic should be reported, got: {output}"
         );
         drop(guard);
 
         let (logs, _guard) = capture_logs();
+        let (started_tx, started_rx) = oneshot::channel::<()>();
         let (block_tx, block_rx) = oneshot::channel::<()>();
         let aborted: JoinHandle<Result<()>> = tokio::spawn(async move {
+            let _ = started_tx.send(());
             let _ = block_rx.await;
             Ok(())
         });
+        // Aborted while it is parked on `block_rx`, so the handle carries the
+        // cancellation of a task that was running — the shape a retention task
+        // aborted from outside the lifecycle would arrive in.
+        started_rx.await.expect("the task should have started");
         aborted.abort();
         report_retention_outcome(aborted).await;
         drop(block_tx);
+        let output = captured(&logs);
         assert!(
-            captured(&logs).contains("Retention did not run to completion"),
-            "an abort nobody asked for should be reported, got: {}",
-            captured(&logs)
+            output.contains("Retention did not run to completion"),
+            "an abort nobody asked for should be reported, got: {output}"
         );
     }
 
