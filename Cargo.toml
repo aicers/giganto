@@ -72,6 +72,10 @@ rcgen = "0.14"
 regex = "1"
 serial_test = "4"
 tempfile = "3"
+# `test-util` gives tests the paused clock (`#[tokio::test(start_paused =
+# true)]`), so a timing-dependent test advances virtual time instead of
+# sleeping. It is a dev-dependency feature, so it is not enabled in the binary.
+tokio = { version = "1", features = ["test-util"] }
 url = "2"
 
 [features]

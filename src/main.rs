@@ -46,6 +46,7 @@ use tracing_subscriber::{
 };
 
 use crate::{
+    cancellation::{DrainOutcome, LockPoisonedError, PendingTaskSnapshot, TaskTracker},
     comm::{
         new_ingest_sensors, new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors,
         new_stream_direct_channels,
@@ -562,6 +563,105 @@ async fn wait_for_task_shutdown(
     }
 }
 
+/// Closes and cancels the per-generation top-level task tracker, then drains it
+/// repeatedly until every tracked task has returned.
+///
+/// `report_interval` is a reporting cadence, not a deadline. Each time it
+/// expires with tasks still tracked, the round is reported and the drain is
+/// retried. Stragglers are never aborted: `JoinHandle::abort` drops a task
+/// future at an arbitrary await point, which voids the cleanup-before-return
+/// contract every tracked task is written to. Shutdown therefore ends only when
+/// the tasks themselves return, and the repeated report is what narrows down a
+/// task that never does.
+///
+/// The loop is re-callable. `TaskTracker::close` is idempotent and the wait can
+/// repeat, so calling it again on an already drained tracker returns as soon as
+/// the tracker is observed empty.
+///
+/// `report_interval` must be non-zero. A zero cadence still drains, because
+/// each round polls the tracker before its deadline is checked, but it spins
+/// the loop and floods the log with one round per poll. Rejecting an
+/// unusable cadence belongs to the settings that supply it.
+///
+/// # Errors
+///
+/// Returns [`LockPoisonedError`] if an internal tracker mutex is poisoned. A
+/// poisoned lock is the one outcome this policy treats as a real error; pending
+/// tasks are not.
+// The top-level tracker has no subsystem registered in it yet, so this loop has
+// no production call site until the shutdown path is cut over to the tracker.
+#[allow(dead_code)]
+async fn drain_top_level_tracker(
+    tracker: &TaskTracker,
+    report_interval: Duration,
+) -> Result<(), LockPoisonedError> {
+    tracker.close()?;
+    tracker.cancel_children();
+
+    let mut round: u64 = 0;
+    let mut reported_snapshot: Option<Vec<(u64, String)>> = None;
+    loop {
+        match tracker.drain(report_interval).await? {
+            DrainOutcome::Drained => {
+                if round > 0 {
+                    info!("shutdown drain complete after {round} pending round(s)");
+                }
+                return Ok(());
+            }
+            DrainOutcome::Pending(pending) => {
+                round = round.saturating_add(1);
+                report_pending_round(round, &pending, &mut reported_snapshot);
+            }
+        }
+    }
+}
+
+/// Reports one drain round that timed out with tasks still pending.
+///
+/// Every round emits a single progress line, so a shutdown that is waiting is
+/// always visible. The detailed snapshot is one line per task, and the wait is
+/// unbounded, so repeating it every round would bury the log while the same
+/// tasks hang; it is emitted only when the set of pending tasks differs from
+/// the one last reported through `reported_snapshot`. Ages are left out of that
+/// comparison because they advance every round and would make every snapshot
+/// look changed.
+fn report_pending_round(
+    round: u64,
+    pending: &[PendingTaskSnapshot],
+    reported_snapshot: &mut Option<Vec<(u64, String)>>,
+) {
+    warn!(
+        "shutdown drain round {round}: {} task(s) still pending",
+        pending.len()
+    );
+
+    // The registry is a hash map, so order by id to keep both the comparison
+    // and the report stable across rounds.
+    let mut pending: Vec<&PendingTaskSnapshot> = pending.iter().collect();
+    pending.sort_unstable_by_key(|task| task.id);
+    let snapshot: Vec<(u64, String)> = pending
+        .iter()
+        .map(|task| (task.id, task.name.clone()))
+        .collect();
+
+    if reported_snapshot
+        .as_ref()
+        .is_some_and(|last| *last == snapshot)
+    {
+        return;
+    }
+
+    for task in pending {
+        warn!(
+            "  pending task id={id} name={:?} age={:?}",
+            task.name,
+            task.age,
+            id = task.id,
+        );
+    }
+    *reported_snapshot = Some(snapshot);
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -574,10 +674,19 @@ mod tests {
     };
 
     use regex::Regex;
-    use tokio::time::sleep;
+    use tokio::{sync::oneshot, time::sleep};
+    use tracing::subscriber::DefaultGuard;
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
+
+    /// Reporting cadence used by the drain-loop tests. The tests run on a
+    /// paused clock, so this is virtual time only — no test waits on it.
+    const REPORT_INTERVAL: Duration = Duration::from_secs(5);
+    /// Upper bound on how long a drain loop may take to finish once its tasks
+    /// have been released. Also virtual time: a loop that fails to make
+    /// progress cannot hang the test, it fails it.
+    const DRAIN_LOOP_TIMEOUT: Duration = Duration::from_mins(10);
 
     struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
 
@@ -1173,5 +1282,340 @@ mod tests {
             drop(probe);
             drop(blocker);
         }
+    }
+
+    /// Installs a log-capturing subscriber for the current thread and returns
+    /// the buffer it writes into.
+    ///
+    /// The drain-loop tests run on a current-thread runtime, so the tasks they
+    /// spawn are polled on this same thread and their events land in this
+    /// buffer.
+    fn capture_logs() -> (Arc<Mutex<Vec<u8>>>, DefaultGuard) {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = fmt::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(CaptureBuf(Arc::clone(&buf)))
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        (buf, guard)
+    }
+
+    fn captured(buf: &Arc<Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 log output")
+    }
+
+    fn count_lines_containing(output: &str, needle: &str) -> usize {
+        output.lines().filter(|line| line.contains(needle)).count()
+    }
+
+    /// Spawns a task on `tracker` that stays pending until `release` fires,
+    /// deliberately ignoring cancellation so the drain loop has to report
+    /// progress across several rounds. The returned flag is set only if the
+    /// task runs to the end, so an aborted task leaves it `false`.
+    fn spawn_pending_task(
+        tracker: &TaskTracker,
+        name: &'static str,
+        release: oneshot::Receiver<()>,
+    ) -> (JoinHandle<()>, Arc<AtomicBool>) {
+        let completed = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&completed);
+        let handle = tracker
+            .spawn(name, move |_token| async move {
+                let _ = release.await;
+                flag.store(true, Ordering::SeqCst);
+            })
+            .expect("spawn should succeed");
+        (handle, completed)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drain_top_level_tracker_reports_each_round_until_drained() {
+        let (logs, _guard) = capture_logs();
+
+        let tracker = TaskTracker::new();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (task_handle, completed) = spawn_pending_task(&tracker, "synthetic-top", release_rx);
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_top_level_tracker(&tracker, REPORT_INTERVAL).await }
+        });
+
+        // Virtual time: the clock only advances while every task is idle, so
+        // this lets exactly two drain rounds expire without any wall-clock
+        // wait, and releases the task while the third round is in flight.
+        sleep(REPORT_INTERVAL * 2 + REPORT_INTERVAL / 2).await;
+        assert!(!completed.load(Ordering::SeqCst));
+        release_tx
+            .send(())
+            .expect("drain loop should still be waiting");
+
+        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
+            .await
+            .expect("drain loop should finish once the task returns")
+            .expect("drain loop task should not panic")
+            .expect("drain loop should not report a poisoned lock");
+
+        // The task returned on its own; it was neither aborted nor dropped.
+        task_handle
+            .await
+            .expect("task should not have been aborted");
+        assert!(completed.load(Ordering::SeqCst));
+        assert!(tracker.is_closed());
+        assert_eq!(tracker.pending_count(), 0);
+
+        let output = captured(&logs);
+        assert!(
+            !output.contains("tracked task did not run to completion"),
+            "no task should have been aborted, got: {output}"
+        );
+
+        // Every round reports progress ...
+        assert!(
+            output.contains("shutdown drain round 1: 1 task(s) still pending"),
+            "round 1 should be reported, got: {output}"
+        );
+        assert!(
+            output.contains("shutdown drain round 2: 1 task(s) still pending"),
+            "round 2 should be reported, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "shutdown drain round"),
+            2,
+            "exactly the pending rounds should be reported, got: {output}"
+        );
+        // ... while the unchanged detailed snapshot is logged only once.
+        assert_eq!(
+            count_lines_containing(&output, "pending task id="),
+            1,
+            "the unchanged snapshot should not be repeated, got: {output}"
+        );
+        assert!(
+            output.contains("shutdown drain complete after 2 pending round(s)"),
+            "completion should be reported, got: {output}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drain_top_level_tracker_relogs_snapshot_when_pending_set_changes() {
+        let (logs, _guard) = capture_logs();
+
+        let tracker = TaskTracker::new();
+        let (first_tx, first_rx) = oneshot::channel();
+        let (second_tx, second_rx) = oneshot::channel();
+        let (first_handle, first_done) = spawn_pending_task(&tracker, "synthetic-a", first_rx);
+        let (second_handle, second_done) = spawn_pending_task(&tracker, "synthetic-b", second_rx);
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_top_level_tracker(&tracker, REPORT_INTERVAL).await }
+        });
+
+        // Two rounds see both tasks, then one task returns and the next round
+        // sees a changed set.
+        sleep(REPORT_INTERVAL * 2 + REPORT_INTERVAL / 2).await;
+        first_tx
+            .send(())
+            .expect("drain loop should still be waiting");
+        first_handle
+            .await
+            .expect("task should not have been aborted");
+        sleep(REPORT_INTERVAL * 2).await;
+        second_tx
+            .send(())
+            .expect("drain loop should still be waiting");
+
+        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
+            .await
+            .expect("drain loop should finish once the tasks return")
+            .expect("drain loop task should not panic")
+            .expect("drain loop should not report a poisoned lock");
+
+        second_handle
+            .await
+            .expect("task should not have been aborted");
+        assert!(first_done.load(Ordering::SeqCst));
+        assert!(second_done.load(Ordering::SeqCst));
+
+        let output = captured(&logs);
+        assert!(
+            !output.contains("tracked task did not run to completion"),
+            "no task should have been aborted, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "shutdown drain round"),
+            4,
+            "each pending round should be reported, got: {output}"
+        );
+        // Round 1 lists both tasks, round 2 repeats nothing, and the round
+        // after the set shrinks lists the one that is left.
+        assert_eq!(
+            count_lines_containing(&output, "pending task id="),
+            3,
+            "the snapshot should be relogged only when the set changes, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "synthetic-a"),
+            1,
+            "the task that returned should be listed once, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "synthetic-b"),
+            2,
+            "the remaining task should be listed in both snapshots, got: {output}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drain_top_level_tracker_is_re_callable() {
+        let tracker = TaskTracker::new();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancelled);
+        let handle = tracker
+            .spawn("cooperative", move |token| async move {
+                token.cancelled().await;
+                flag.store(true, Ordering::SeqCst);
+            })
+            .expect("spawn should succeed");
+
+        tokio::time::timeout(
+            DRAIN_LOOP_TIMEOUT,
+            drain_top_level_tracker(&tracker, REPORT_INTERVAL),
+        )
+        .await
+        .expect("a cooperative task should drain on the first round")
+        .expect("drain loop should not report a poisoned lock");
+        handle.await.expect("task should not have been aborted");
+        assert!(cancelled.load(Ordering::SeqCst));
+
+        // `close` is idempotent and the wait can repeat, so the drained
+        // tracker can be handed to the loop again.
+        tokio::time::timeout(
+            DRAIN_LOOP_TIMEOUT,
+            drain_top_level_tracker(&tracker, REPORT_INTERVAL),
+        )
+        .await
+        .expect("a second call should return immediately")
+        .expect("drain loop should not report a poisoned lock");
+    }
+
+    /// A poisoned tracker lock ends the loop instead of being retried. Unlike
+    /// a pending task, a poison never clears, so every later round would fail
+    /// the same way and the loop would spin.
+    ///
+    /// The lock is poisoned the way `cancellation`'s own poison test does it:
+    /// outside a runtime the inner `tasks.spawn` panics while the admission
+    /// lock is held. That has to happen before any runtime is entered, so this
+    /// test builds the runtime itself rather than using `#[tokio::test]`.
+    #[test]
+    fn drain_top_level_tracker_surfaces_a_poisoned_lock() {
+        let tracker = TaskTracker::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("no-runtime", |_token| async {});
+        }));
+        assert!(outcome.is_err(), "spawn outside a runtime should panic");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("current-thread runtime should build");
+        let result = runtime.block_on(async {
+            tokio::time::timeout(
+                DRAIN_LOOP_TIMEOUT,
+                drain_top_level_tracker(&tracker, REPORT_INTERVAL),
+            )
+            .await
+            .expect("a poisoned lock should end the loop, not be retried")
+        });
+
+        assert_eq!(result, Err(LockPoisonedError));
+    }
+
+    #[test]
+    fn report_pending_round_skips_unchanged_snapshot_and_relogs_changes() {
+        let (logs, _guard) = capture_logs();
+
+        let first = vec![
+            PendingTaskSnapshot {
+                id: 1,
+                name: "task-one".to_string(),
+                age: Duration::from_secs(1),
+            },
+            PendingTaskSnapshot {
+                id: 0,
+                name: "task-zero".to_string(),
+                age: Duration::from_secs(2),
+            },
+        ];
+        // Same tasks, different ages and iteration order: still unchanged.
+        let unchanged = vec![
+            PendingTaskSnapshot {
+                id: 0,
+                name: "task-zero".to_string(),
+                age: Duration::from_secs(7),
+            },
+            PendingTaskSnapshot {
+                id: 1,
+                name: "task-one".to_string(),
+                age: Duration::from_secs(7),
+            },
+        ];
+        let changed = vec![PendingTaskSnapshot {
+            id: 1,
+            name: "task-one".to_string(),
+            age: Duration::from_secs(9),
+        }];
+
+        let mut reported = None;
+        report_pending_round(1, &first, &mut reported);
+        report_pending_round(2, &unchanged, &mut reported);
+        report_pending_round(3, &changed, &mut reported);
+
+        let output = captured(&logs);
+        assert_eq!(count_lines_containing(&output, "shutdown drain round"), 3);
+        assert_eq!(count_lines_containing(&output, "pending task id="), 3);
+
+        // The first snapshot is ordered by id regardless of the order the
+        // registry handed the tasks over in.
+        let detail: Vec<&str> = output
+            .lines()
+            .filter(|line| line.contains("pending task id="))
+            .collect();
+        assert!(detail[0].contains("id=0"), "got: {output}");
+        assert!(detail[1].contains("id=1"), "got: {output}");
+        assert!(detail[2].contains("id=1"), "got: {output}");
+    }
+
+    /// A pending round can carry an empty snapshot: the registry may be
+    /// emptied between the drain timing out and the snapshot being read. The
+    /// round is still reported, and the empty snapshot does not suppress the
+    /// next one that has tasks in it.
+    #[test]
+    fn report_pending_round_handles_an_empty_pending_snapshot() {
+        let (logs, _guard) = capture_logs();
+
+        let pending = vec![PendingTaskSnapshot {
+            id: 0,
+            name: "task-zero".to_string(),
+            age: Duration::from_secs(1),
+        }];
+
+        let mut reported = None;
+        report_pending_round(1, &[], &mut reported);
+        report_pending_round(2, &pending, &mut reported);
+
+        let output = captured(&logs);
+        assert!(
+            output.contains("shutdown drain round 1: 0 task(s) still pending"),
+            "an empty round should still be reported, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "pending task id="),
+            1,
+            "the empty snapshot should not suppress the next one, got: {output}"
+        );
     }
 }
