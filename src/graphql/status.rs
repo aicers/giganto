@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, io::Write, time::Duration};
+use std::{io::Write, path::Path, time::Duration};
 
 use anyhow::{Context as AnyhowContext, anyhow};
 #[cfg(feature = "storage_diagnostics")]
@@ -266,14 +266,44 @@ pub fn read_toml_file(path: &str) -> anyhow::Result<DocumentMut> {
     Ok(doc)
 }
 
+fn parent_directory(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
 pub fn write_toml_file(doc: &DocumentMut, path: &str) -> anyhow::Result<()> {
     let output = doc.to_string();
-    let mut config_file = OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .create(true)
-        .open(path)?;
-    writeln!(config_file, "{output}")?;
+    let path = Path::new(path);
+    let parent = parent_directory(path);
+    let mut config_file = tempfile::Builder::new()
+        .prefix(".giganto-config-")
+        .tempfile_in(parent)
+        .context("failed to create temporary config file")?;
+    if let Ok(metadata) = path.metadata() {
+        config_file
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .context("failed to preserve config file permissions")?;
+    }
+    config_file
+        .write_all(output.as_bytes())
+        .context("failed to write temporary config file")?;
+    if !output.ends_with('\n') {
+        writeln!(config_file).context("failed to finish temporary config file")?;
+    }
+    config_file
+        .as_file()
+        .sync_all()
+        .context("failed to sync temporary config file")?;
+    config_file
+        .persist(path)
+        .map_err(|error| error.error)
+        .context("failed to atomically replace config file")?;
+    std::fs::File::open(parent)
+        .context("failed to open config directory")?
+        .sync_all()
+        .context("failed to sync config directory")?;
     Ok(())
 }
 
@@ -308,11 +338,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, str::FromStr};
+    use std::{net::SocketAddr, path::Path, str::FromStr};
 
     use toml_edit::DocumentMut;
 
-    use super::{insert_toml_peers, parse_toml_element_to_string, read_toml_file, write_toml_file};
+    use super::{
+        insert_toml_peers, parent_directory, parse_toml_element_to_string, read_toml_file,
+        write_toml_file,
+    };
     use crate::{comm::peer::PeerIdentity, graphql::tests::TestSchema};
 
     #[tokio::test]
@@ -664,6 +697,11 @@ mod tests {
         let read_doc = read_toml_file(path.to_str().unwrap()).unwrap();
 
         assert_eq!(read_doc.to_string().trim_end(), doc.to_string().trim_end());
+    }
+
+    #[test]
+    fn parent_directory_uses_current_directory_for_bare_filename() {
+        assert_eq!(parent_directory(Path::new("config.toml")), Path::new("."));
     }
 
     #[test]
