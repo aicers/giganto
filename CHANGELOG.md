@@ -39,6 +39,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   atomically replace the configuration file. Configuration refresh, update,
   and persistence failures are now returned to the peer handler instead of
   being logged and ignored.
+- Fixed retention shutdown to stop through the same cooperative cancellation
+  as the rest of the node. A cleanup pass that was in flight when shutdown
+  began could previously miss the shutdown signal and leave the node waiting
+  on retention indefinitely, and a reboot or power off polled for the pass in
+  three-second steps before flushing the database. Shutdown now cancels
+  retention, waits out only the blocking cleanup already running — reporting
+  the wait every five seconds while it lasts — and closes the database once
+  retention has stopped. A retention failure is reported at `ERROR` when it
+  happens and restated as the node shuts down.
 
 ### Changed
 

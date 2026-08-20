@@ -1299,16 +1299,21 @@ where
             return Ok(PassOutcome::Cancelled);
         }
 
-        if !cfg!(test) && check_db_usage().await.1 && usage_flag {
+        // Only a pass that started because the disk was over `USAGE_THRESHOLD`
+        // has a reason to look at usage again, so the check is behind
+        // `usage_flag` rather than beside it: a pass on a healthy disk asks
+        // `roxy` nothing.
+        if !usage_flag {
+            return Ok(PassOutcome::Completed);
+        }
+        if !cfg!(test) && check_db_usage().await.1 {
             retention_timestamp += ONE_DAY_TIMESTAMP_NANOS;
             if retention_timestamp > now_timestamp {
                 warn!("cannot delete data to usage under {USAGE_LOW}");
                 return Ok(PassOutcome::Completed);
             }
-        } else if usage_flag {
-            info!("Disk usage is under {USAGE_LOW}%");
-            return Ok(PassOutcome::Completed);
         } else {
+            info!("Disk usage is under {USAGE_LOW}%");
             return Ok(PassOutcome::Completed);
         }
     }
@@ -2504,6 +2509,31 @@ mod tests {
         .expect("a cancelled pass is not a failure");
 
         assert_eq!(outcome, super::PassOutcome::Cancelled);
+    }
+
+    /// A pass opened by disk pressure still runs one iteration and completes.
+    ///
+    /// Under `cfg!(test)` the pass asks `roxy` nothing, so the repeat that
+    /// disk pressure would drive never triggers here; what this pins down is
+    /// that raising `usage_flag` neither skips the iteration nor turns a
+    /// finished pass into a repeating one.
+    #[tokio::test]
+    async fn a_disk_pressure_pass_completes_after_one_iteration() {
+        let cancel = CancellationToken::new();
+        let iterations = Arc::new(AtomicUsize::new(0));
+
+        let outcome = super::retain_cleanup_pass(&cancel, 0, i64::MAX, true, {
+            let iterations = Arc::clone(&iterations);
+            move |_retention_timestamp| {
+                iterations.fetch_add(1, Ordering::SeqCst);
+                tokio::task::spawn_blocking(|| Ok(()))
+            }
+        })
+        .await
+        .expect("a pass with no failing iteration should complete");
+
+        assert_eq!(outcome, super::PassOutcome::Completed);
+        assert_eq!(iterations.load(Ordering::SeqCst), 1);
     }
 
     /// Cancellation waits out the blocking iteration that is already running.
