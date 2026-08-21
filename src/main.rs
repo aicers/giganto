@@ -352,8 +352,8 @@ async fn run_generation(
     // in scope where the subsystems below are spawned, it is drained on every
     // shutdown arm, and it is dropped with the generation — a `TaskTracker`
     // cannot be reopened once closed, so two generations can never share one
-    // registry. Ingest and retention are registered in it below; publish and
-    // peer move into it in the issues that follow.
+    // registry. Ingest, retention, and peer are registered in it below;
+    // publish moves into it in the issue that follows.
     let top_level_tracker = TaskTracker::new();
 
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
