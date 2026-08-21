@@ -51,6 +51,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cleanup already running, and closes the database once retention has stopped.
   A retention failure is reported at `ERROR` when it
   happens and restated as the node shuts down.
+- Fixed peer shutdown so that it waits for peer work to finish instead of
+  timing it. Shutting the node down previously paused for a fixed 300 ms
+  before closing the peer listener and 200 ms before closing each peer
+  connection, then moved on regardless: a peer exchange still in flight was
+  cut off mid-write, and a peer waiting on a remote that had stopped
+  responding was left running while the node closed its database. Peer now
+  stops admitting work as soon as shutdown begins, closes its listener, its
+  outbound endpoint, and every peer connection so nothing stays blocked on an
+  unresponsive remote, and returns only once every peer task has finished and
+  removed its entry from the peer state. Peer-list and sensor-list updates
+  that fail on the way out are reported instead of disappearing, and shutdown
+  no longer spends a fixed half-second on peers that had nothing left to do.
 - Fixed a shutdown that could hang indefinitely when the signal arrived in the
   first moments after startup. A subsystem that had not yet begun listening
   missed the one-shot notification and then waited out its own interval before

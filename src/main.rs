@@ -278,7 +278,8 @@ enum GenerationEnd {
     /// exit ends the generation through the same shutdown sequence as the
     /// intents, and `main` reports it as a failure rather than exiting
     /// cleanly. Ingest is the only entry task the top-level tracker watches
-    /// for now; publish and peer join it as they move into the tracker.
+    /// for now: peer is registered in the tracker but its handle is not kept,
+    /// and publish joins it as it moves into the tracker.
     IngestExited,
 }
 
@@ -409,40 +410,44 @@ async fn run_generation(
         })
         .map_err(|e| anyhow!("failed to register the retention task: {e}"))?;
 
-    let peer_task_handle: Option<JoinHandle<Result<()>>>;
+    // Peer is tracked the way retention and ingest are: the tracker hands it
+    // the generation's cancellation token and waits for its entry task in the
+    // drain below. Unlike theirs, its handle is dropped. Peer reports its own
+    // failure where it happens and the tracker's registry guard names a panic
+    // or an abort, so the only outcome a retained handle would add is a normal
+    // early exit — supervising that, and ordering the read against
+    // `database.shutdown()`, is process-level lifecycle work (#1569).
     if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
         let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
         let notify_sensor = notify_sensor_change
             .clone()
             .expect("peer notify exists when peer server is configured");
-        peer_task_handle = Some(task::spawn({
-            let ingest_sensors = ingest_sensors.clone();
-            let peers = peers.clone();
-            let peer_idents = peer_idents.clone();
-            let notify_sensor = notify_sensor.clone();
-            let notify_shutdown = notify_shutdown.clone();
-            let cfg_path = settings.cfg_path.clone();
-            let tls_watch = process.tls_watch.clone();
-            async move {
-                let result = peer_server
-                    .run(
-                        ingest_sensors,
-                        peers,
-                        peer_idents,
-                        notify_sensor,
-                        notify_shutdown,
-                        cfg_path,
-                        tls_watch,
-                    )
-                    .await;
-                if let Err(e) = &result {
-                    error!("Peer subsystem terminated unexpectedly: {e:#}");
+        top_level_tracker
+            .spawn("peer", {
+                let ingest_sensors = ingest_sensors.clone();
+                let peers = peers.clone();
+                let peer_idents = peer_idents.clone();
+                let cfg_path = settings.cfg_path.clone();
+                let tls_watch = process.tls_watch.clone();
+                move |token| async move {
+                    let result = peer_server
+                        .run(
+                            ingest_sensors,
+                            peers,
+                            peer_idents,
+                            notify_sensor,
+                            cfg_path,
+                            tls_watch,
+                            token,
+                        )
+                        .await;
+                    if let Err(e) = &result {
+                        error!("Peer subsystem terminated unexpectedly: {e:#}");
+                    }
+                    result
                 }
-                result
-            }
-        }));
-    } else {
-        peer_task_handle = None;
+            })
+            .context("failed to register the peer entry task")?;
     }
 
     let publish_server =
@@ -524,7 +529,7 @@ async fn run_generation(
     // ones that are still notified. `shutdown_generation` cancels again, which
     // is idempotent.
     top_level_tracker.cancel_children();
-    wait_for_task_shutdown(&notify_shutdown, publish_task_handle, peer_task_handle).await;
+    wait_for_task_shutdown(&notify_shutdown, publish_task_handle).await;
     shutdown_generation(
         &top_level_tracker,
         retain_task_handle,
@@ -884,10 +889,10 @@ async fn reload_https_server<S>(
 /// Waits for the subsystems that still take their signal from
 /// `notify_shutdown`, repeating the signal until every one of them has joined.
 ///
-/// Ingest and retention are not among them: they are registered in the
+/// Ingest, retention, and peer are not among them: they are registered in the
 /// per-generation top-level tracker, so they are cancelled and waited for by
-/// [`shutdown_generation`] instead. The subsystems left here move the same way
-/// in the issues that follow.
+/// [`shutdown_generation`] instead. Publish, the one subsystem left here,
+/// moves the same way in the issue that follows.
 ///
 /// `Notify::notify_waiters` leaves nothing behind for a task that is not
 /// waiting yet. A publish server still binding its listener misses the
@@ -897,21 +902,13 @@ async fn reload_https_server<S>(
 /// reaches it, and does so at exactly the moment the window is widest.
 ///
 /// So the signal is repeated. A subsystem that has already observed it ignores
-/// the extra wakeup, and the loop goes away as publish and peer move onto the
-/// cancellation token in the issues that follow. This is a retry cadence and
+/// the extra wakeup, and the loop goes away as publish moves onto the
+/// cancellation token in the issue that follows. This is a retry cadence and
 /// not a delay: nothing waits out `SHUTDOWN_NOTIFY_RETRY` once the handles are
 /// ready to join.
-async fn wait_for_task_shutdown(
-    notify_shutdown: &Notify,
-    publish_task_handle: JoinHandle<()>,
-    peer_task_handle: Option<JoinHandle<Result<()>>>,
-) {
+async fn wait_for_task_shutdown(notify_shutdown: &Notify, publish_task_handle: JoinHandle<()>) {
     let joined = async {
-        if let Some(handle_peers) = peer_task_handle {
-            let _ = tokio::join!(publish_task_handle, handle_peers);
-        } else {
-            let _ = publish_task_handle.await;
-        }
+        let _ = publish_task_handle.await;
     };
     tokio::pin!(joined);
 
@@ -1087,9 +1084,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_for_task_shutdown_joins_all_handles() {
+    async fn wait_for_task_shutdown_joins_the_publish_handle() {
         let publish_done = Arc::new(AtomicBool::new(false));
-        let peer_done = Arc::new(AtomicBool::new(false));
 
         let publish_task_handle = tokio::spawn({
             let publish_done = publish_done.clone();
@@ -1099,19 +1095,9 @@ mod tests {
             }
         });
 
-        let peer_task_handle = Some(tokio::spawn({
-            let peer_done = peer_done.clone();
-            async move {
-                sleep(Duration::from_millis(35)).await;
-                peer_done.store(true, Ordering::SeqCst);
-                Ok(())
-            }
-        }));
-
-        wait_for_task_shutdown(&Notify::new(), publish_task_handle, peer_task_handle).await;
+        wait_for_task_shutdown(&Notify::new(), publish_task_handle).await;
 
         assert!(publish_done.load(Ordering::SeqCst));
-        assert!(peer_done.load(Ordering::SeqCst));
     }
 
     /// Every ending the retention handle can carry reaches the log.
@@ -1201,7 +1187,7 @@ mod tests {
         notify_shutdown.notify_waiters();
         tokio::time::timeout(
             Duration::from_secs(10),
-            wait_for_task_shutdown(&notify_shutdown, late, None),
+            wait_for_task_shutdown(&notify_shutdown, late),
         )
         .await
         .expect("a subsystem that missed the first signal should still be joined");
@@ -2502,6 +2488,21 @@ mod tests {
             assert!(
                 output.contains("Shutting down peer"),
                 "the peer subsystem should have been joined, got: {output}"
+            );
+            // Peer is registered in the top-level tracker, so a peer task
+            // still running when the generation moved on would show up as a
+            // pending round in one of the two drains.
+            assert!(
+                !output.contains("shutdown drain round"),
+                "the top-level drain should not have reported a pending task, got: {output}"
+            );
+            assert!(
+                !output.contains("peer drain round"),
+                "the peer drain should not have reported a pending task, got: {output}"
+            );
+            assert!(
+                !output.contains("tracked task did not run to completion"),
+                "every peer task should have returned, not vanished, got: {output}"
             );
         }
 
