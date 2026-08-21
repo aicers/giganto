@@ -845,7 +845,6 @@ async fn handle_file_delete_detected_events(
 }
 
 #[Object]
-#[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
 impl SysmonQuery {
     async fn process_create_events(
         &self,

@@ -10,7 +10,7 @@ macro_rules! events_in_cluster {
      $result_type:tt
      $(, with_extra_handler_args ($($handler_arg:expr ),* ))?
      $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
-        $handler($ctx, &$filter, $($($handler_arg)*)*)
+        crate::graphql::ready($handler($ctx, &$filter, $($($handler_arg)*)*)).await
     }};
 
     // This variant of the macro is for the case where API request comes with

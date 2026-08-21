@@ -2456,7 +2456,6 @@ async fn handle_network_raw_events(
 }
 
 #[Object]
-#[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
 impl NetworkQuery {
     async fn conn_raw_events(
         &self,

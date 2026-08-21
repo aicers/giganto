@@ -1,4 +1,4 @@
-#![allow(clippy::module_name_repetitions, clippy::unused_async_trait_impl)]
+#![allow(clippy::module_name_repetitions)]
 
 use std::{
     collections::{HashMap, HashSet},
@@ -253,7 +253,6 @@ impl StatisticsQuery {
     /// * The specified column family is not found
     /// * The feature flag `storage_diagnostics` is not enabled
     #[cfg(feature = "storage_diagnostics")]
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn count_by_protocol(
         &self,
         ctx: &Context<'_>,
@@ -262,7 +261,7 @@ impl StatisticsQuery {
         tracing::info!("Counting events for protocol: {protocol:?}");
         let db = ctx.data::<Database>()?;
         let n = count_cf_snapshot(db, protocol)?;
-        Ok(StringNumberU64(n))
+        crate::graphql::ready(Ok(StringNumberU64(n))).await
     }
 }
 

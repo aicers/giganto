@@ -136,7 +136,6 @@ impl StatusQuery {
         Ok(usg)
     }
 
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     #[cfg(feature = "storage_diagnostics")]
     async fn properties_cf(&self, ctx: &Context<'_>, filter: PropertyFilter) -> Result<Properties> {
         let cfname = filter.record_type;
@@ -144,24 +143,23 @@ impl StatusQuery {
 
         let props = db.properties_cf(&cfname)?;
 
-        Ok(Properties {
+        crate::graphql::ready(Ok(Properties {
             estimate_live_data_size: props.estimate_live_data_size,
             estimate_num_keys: props.estimate_num_keys,
             stats: props.stats,
-        })
+        }))
+        .await
     }
 
     /// Returns the current visible Giganto configuration.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn config(&self, ctx: &Context<'_>) -> Result<ConfigVisible> {
         let s = ctx.data::<Settings>()?;
-        Ok(s.config.visible.clone())
+        crate::graphql::ready(Ok(s.config.visible.clone())).await
     }
 
     /// Returns `true` when the GraphQL service is reachable.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn ping(&self) -> Result<bool> {
-        Ok(true)
+        crate::graphql::ready(Ok(true)).await
     }
 }
 
@@ -177,7 +175,6 @@ impl ConfigMutation {
     /// `num_of_thread`, or if the `data_dir` or `export_dir` does not exist or is not a directory.
     /// It also returns an error if the `export_dir` is not writable. If the `new` is the same as
     /// the current config, it returns an error.
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn update_config(
         &self,
         ctx: &Context<'_>,
@@ -229,34 +226,31 @@ impl ConfigMutation {
         });
         info!("New config applied");
 
-        Ok(new_config)
+        crate::graphql::ready(Ok(new_config)).await
     }
 
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn stop(&self, ctx: &Context<'_>) -> Result<bool> {
         info!("Received request to stop service");
         let terminate_notify = ctx.data::<TerminateNotify>()?;
         terminate_notify.0.notify_one();
 
-        Ok(true)
+        crate::graphql::ready(Ok(true)).await
     }
 
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn reboot(&self, ctx: &Context<'_>) -> Result<bool> {
         info!("Received request to reboot system");
         let reboot_notify = ctx.data::<RebootNotify>()?;
         reboot_notify.0.notify_one();
 
-        Ok(true)
+        crate::graphql::ready(Ok(true)).await
     }
 
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn shutdown(&self, ctx: &Context<'_>) -> Result<bool> {
         info!("Received request to shutdown system");
         let power_off_notify = ctx.data::<PowerOffNotify>()?;
         power_off_notify.0.notify_one();
 
-        Ok(true)
+        crate::graphql::ready(Ok(true)).await
     }
 }
 

@@ -58,6 +58,11 @@ pub const TIMESTAMP_SIZE: usize = 8;
 #[allow(unused)]
 pub(crate) const SCHEMA_PATH: &str = "src/graphql/client/schema/schema.graphql";
 
+/// Returns an immediately ready future for synchronous resolver paths.
+pub(crate) fn ready<T>(value: T) -> std::future::Ready<T> {
+    std::future::ready(value)
+}
+
 #[derive(Default, MergedObject)]
 pub struct Query(
     log::LogQuery,
