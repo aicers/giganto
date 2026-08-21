@@ -35,8 +35,8 @@ use crate::{
         parse_toml_element_to_string, read_toml_file, write_toml_file,
     },
     server::{
-        Certs, SERVER_CONNNECTION_DELAY, SERVER_ENDPOINT_DELAY, config_client, config_server,
-        extract_cert_from_conn, peer_dedup_key_from_cert, peer_name_from_cert,
+        Certs, config_client, config_server, extract_cert_from_conn, peer_dedup_key_from_cert,
+        peer_name_from_cert,
     },
     tls_reload::{TlsMaterial, TlsWatch},
 };
@@ -102,6 +102,13 @@ fn current_applied_generation(slot: &SharedClientConfig) -> u64 {
 //   all Gigantos in the cluster to use the same protocol version for compatibility.
 const PEER_VERSION_REQ: &str = ">=0.28.0,<0.29.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
+/// Milliseconds the peer subsystem waits out before closing its endpoint or a
+/// connection on shutdown. They stand in for a drain peer does not yet
+/// perform, and #1567 replaces them with cooperative cancellation the way
+/// ingest did. Kept private to this module, and named for peer rather than for
+/// the server at large, so nothing else adopts them in the meantime.
+const PEER_ENDPOINT_DELAY: u64 = 300;
+const PEER_CONNECTION_DELAY: u64 = 200;
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
 #[allow(clippy::module_name_repetitions)]
@@ -335,7 +342,7 @@ impl Peer {
                     );
                 },
                 () = notify_shutdown.notified() => {
-                    sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;      // Wait time for connection to be ready for shutdown.
+                    sleep(Duration::from_millis(PEER_ENDPOINT_DELAY)).await;      // Wait time for connection to be ready for shutdown.
                     server_endpoint.close(0_u32.into(), &[]);
                     info!("Shutting down peer");
                     return Ok(())
@@ -606,7 +613,7 @@ async fn client_connection(
                         },
                         () = notify_shutdown.notified() => {
                             // Wait time for channels to be ready for shutdown.
-                            sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
+                            sleep(Duration::from_millis(PEER_CONNECTION_DELAY)).await;
                             connection.close(0_u32.into(), &[]);
                             return Ok(())
                         },
@@ -771,7 +778,7 @@ async fn server_connection(
             },
             () = notify_shutdown.notified() => {
                 // Wait time for channels to be ready for shutdown.
-                sleep(Duration::from_millis(SERVER_CONNNECTION_DELAY)).await;
+                sleep(Duration::from_millis(PEER_CONNECTION_DELAY)).await;
                 connection.close(0_u32.into(), &[]);
                 return Ok(())
             },
@@ -1061,14 +1068,14 @@ pub mod tests {
         #[cfg(feature = "bootroot")]
         use super::super::request_init_info;
         use super::super::{
-            IngestSensors, PEER_VERSION_REQ, Peer, PeerCode, PeerConns, PeerIdentity, PeerIdents,
-            PeerInfo, Peers, SharedClientConfig, client_connection, client_run, read_toml_file,
-            server_connection,
+            IngestSensors, PEER_ENDPOINT_DELAY, PEER_VERSION_REQ, Peer, PeerCode, PeerConns,
+            PeerIdentity, PeerIdents, PeerInfo, Peers, SharedClientConfig, client_connection,
+            client_run, read_toml_file, server_connection,
         };
         use crate::comm::peer::{receive_peer_data, response_init_info};
         #[cfg(not(feature = "bootroot"))]
         use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
-        use crate::server::{Certs, SERVER_ENDPOINT_DELAY, config_client, config_server};
+        use crate::server::{Certs, config_client, config_server};
         #[cfg(feature = "bootroot")]
         use crate::test_bootroot::{
             TestNode, bootroot_cluster_certs, bootroot_cluster_server_name,
@@ -1712,7 +1719,7 @@ pub mod tests {
                             ));
                     },
                     () = notify_shutdown.notified() => {
-                        sleep(Duration::from_millis(SERVER_ENDPOINT_DELAY)).await;
+                        sleep(Duration::from_millis(PEER_ENDPOINT_DELAY)).await;
                         server_endpoint.close(0_u32.into(), &[]);
                         return Ok(());
                     }

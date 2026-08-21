@@ -39,7 +39,7 @@ use tracing_subscriber::{
 };
 
 use crate::{
-    cancellation::{DrainOutcome, LockPoisonedError, PendingTaskSnapshot, TaskTracker},
+    cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report},
     comm::{
         new_ingest_sensors, new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors,
         new_stream_direct_channels,
@@ -54,12 +54,18 @@ use crate::{
 
 const ONE_DAY: Duration = Duration::from_hours(24);
 const WAIT_SHUTDOWN: u64 = 15;
-/// How often a shutdown drain that is still waiting reports its progress.
+/// Names the per-generation top-level tracker in the drain progress log.
 ///
-/// A reporting cadence, not a deadline: the drain is retried until the tracker
-/// is empty, and this only decides how often a shutdown that is waiting says
-/// so. Making it configurable belongs to the settings work in #1569.
-const DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+/// Every tracker in the process is drained by the same policy, so the label is
+/// what tells a shutdown that is waiting on a subsystem apart from one waiting
+/// on the top level.
+const TOP_LEVEL_DRAIN_LABEL: &str = "shutdown";
+/// How often the shutdown signal is re-sent to the subsystems that still
+/// listen on a `Notify` while their handles are joined.
+///
+/// Short enough that a subsystem which missed the first signal is not what a
+/// shutdown is waiting on, long enough that the repeat is not a spin.
+const SHUTDOWN_NOTIFY_RETRY: Duration = Duration::from_millis(100);
 
 /// Creates a reqwest client configured for mTLS GraphQL communication.
 ///
@@ -174,6 +180,13 @@ async fn main() -> Result<()> {
                 roxy::power_off().map_err(|e| anyhow!("cannot power off the system: {e}"))?;
                 return Ok(());
             }
+            // The generation has already drained and closed itself down; what
+            // is left is to tell the process manager that this exit was not
+            // asked for, so a unit configured to restart on failure does.
+            // What failed was reported where it happened.
+            GenerationEnd::IngestExited => {
+                return Err(anyhow!("the ingest subsystem ended before the daemon did"));
+            }
         }
     }
 }
@@ -242,8 +255,9 @@ impl ProcessContext {
 
 /// Why a generation ended.
 ///
-/// A generation runs until one of these four intents arrives; nothing else
-/// takes it down, and each one names a different thing for `main` to do next.
+/// Four of these are intents that arrive from outside; the fifth is a
+/// subsystem entry task ending on its own, which is not an intent but is just
+/// as final. Each one names a different thing for `main` to do next.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GenerationEnd {
     /// The configuration file was rewritten. The next generation starts from
@@ -255,6 +269,17 @@ enum GenerationEnd {
     Reboot,
     /// The host was asked to power off.
     PowerOff,
+    /// The ingest entry task ended while the generation was still serving.
+    ///
+    /// Nobody asked for this one. An entry task returns on its own only when
+    /// it cannot do its job — a listener whose address is taken — or when it
+    /// panics, and a node that keeps serving GraphQL and publish while
+    /// ingesting nothing is not a node anyone asked for either. So the early
+    /// exit ends the generation through the same shutdown sequence as the
+    /// intents, and `main` reports it as a failure rather than exiting
+    /// cleanly. Ingest is the only entry task the top-level tracker watches
+    /// for now; publish and peer join it as they move into the tracker.
+    IngestExited,
 }
 
 /// Runs one generation and reports why it ended.
@@ -326,8 +351,8 @@ async fn run_generation(
     // in scope where the subsystems below are spawned, it is drained on every
     // shutdown arm, and it is dropped with the generation — a `TaskTracker`
     // cannot be reopened once closed, so two generations can never share one
-    // registry. Retention is registered in it below; the remaining subsystem
-    // entry tasks move into it in the issues that follow.
+    // registry. Ingest and retention are registered in it below; publish and
+    // peer move into it in the issues that follow.
     let top_level_tracker = TaskTracker::new();
 
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
@@ -435,17 +460,43 @@ async fn run_generation(
 
     let ingest_server =
         ingest::Server::new(settings.config.visible.ingest_srv_addr, &certs.clone());
-    let ingest_task_handle: JoinHandle<()> = task::spawn(ingest_server.run(
-        database.clone(),
-        pcap_sensors,
-        ingest_sensors,
-        runtime_ingest_sensors,
-        stream_direct_channels,
-        notify_shutdown.clone(),
-        notify_sensor_change,
-        ack_transmission_cnt,
-        process.tls_watch.clone(),
-    ));
+    // Ingest is tracked the way retention is: the tracker hands it the
+    // generation's cancellation token, and the drain below waits for the entry
+    // task to return before the generation lets go of the database handle. The handle is kept because the tracker cannot stand in
+    // for it: the wait below watches it so an entry task that ends on its own
+    // takes the generation down with it rather than leaving a node serving
+    // everything but ingest, and reading it back after the drain adds the
+    // outcome the drain cannot see — a panic as a `JoinError`.
+    let mut ingest_task_handle = top_level_tracker
+        .spawn("ingest", {
+            let db = database.clone();
+            let tls_watch = process.tls_watch.clone();
+            move |token| async move {
+                let result = ingest_server
+                    .run(
+                        db,
+                        pcap_sensors,
+                        ingest_sensors,
+                        runtime_ingest_sensors,
+                        stream_direct_channels,
+                        notify_sensor_change,
+                        ack_transmission_cnt,
+                        tls_watch,
+                        token,
+                    )
+                    .await;
+                // Reported here, the way the peer subsystem reports its own,
+                // rather than where the handle is read back: this task can end
+                // long before the generation does — a listener whose address
+                // is taken returns at once — and a node left running without
+                // ingest must not go unreported until shutdown.
+                if let Err(e) = &result {
+                    error!("Ingest subsystem terminated unexpectedly: {e:#}");
+                }
+                result
+            }
+        })
+        .context("failed to register the ingest entry task")?;
 
     let mut intents = GenerationIntents {
         reload_rx,
@@ -456,6 +507,7 @@ async fn run_generation(
         settings,
         process,
         &mut intents,
+        &mut ingest_task_handle,
         &mut web_controller,
         &schema,
         web_addr,
@@ -467,10 +519,20 @@ async fn run_generation(
     // each arm had.
     shutdown_web(web_controller.take()).await;
     notify_shutdown.notify_waiters();
-    wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle).await;
+    // The tracked subsystems take their signal from the token rather than from
+    // `notify_shutdown`, so cancelling here starts them draining alongside the
+    // ones that are still notified. `shutdown_generation` cancels again, which
+    // is idempotent.
+    top_level_tracker.cancel_children();
+    wait_for_task_shutdown(&notify_shutdown, publish_task_handle, peer_task_handle).await;
     shutdown_generation(
         &top_level_tracker,
         retain_task_handle,
+        // Handed over only when the wait ended on something else. If the entry
+        // task is what ended it, its arm has already read the handle back and
+        // reported it, and a `JoinHandle` polled again after it has completed
+        // is not a handle that resolves a second time.
+        (generation_end != GenerationEnd::IngestExited).then_some(ingest_task_handle),
         generation_end,
         &database,
     )
@@ -495,13 +557,20 @@ struct GenerationIntents {
     notify_power_off: Arc<Notify>,
 }
 
-/// Serves until a shutdown intent arrives, and reports which one it was.
+/// Serves until a shutdown intent arrives or a subsystem entry task ends, and
+/// reports which it was.
 ///
-/// This is the whole of a generation's steady state. Four of the five arms end
-/// the generation; the fifth, a TLS reload, rebinds the HTTPS server in place
+/// This is the whole of a generation's steady state. Five of the six arms end
+/// the generation; the sixth, a TLS reload, rebinds the HTTPS server in place
 /// and keeps serving, which is why the wait is a loop rather than a single
 /// `select!`. A configuration reload that cannot be persisted also keeps
 /// serving, on the configuration the generation started with.
+///
+/// The ingest arm is why the entry task's handle is borrowed here rather than
+/// only read back after the drain: an entry task that ends on its own is an
+/// event the generation has to act on, not one it can discover at shutdown.
+/// Borrowing leaves the handle with the caller, so an arm that loses the race
+/// has taken nothing from it.
 ///
 /// Shutting the generation's own machinery down is the caller's, not this
 /// function's: every arm that ends a generation is torn down the same way, so
@@ -510,6 +579,7 @@ async fn wait_for_generation_end<S>(
     settings: &mut Settings,
     process: &ProcessContext,
     intents: &mut GenerationIntents,
+    ingest_task: &mut JoinHandle<Result<()>>,
     web_controller: &mut Option<WebController>,
     schema: &S,
     web_addr: std::net::SocketAddr,
@@ -539,6 +609,10 @@ where
                 info!("Power off the system...");
                 break GenerationEnd::PowerOff;
             }
+            outcome = &mut *ingest_task => {
+                report_early_ingest_exit(&outcome);
+                break GenerationEnd::IngestExited;
+            }
             () = process.notify_tls_reload.notified() => {
                 reload_https_server(
                     &process.reload_handle,
@@ -556,13 +630,18 @@ where
 /// the tail the ending intent asks for.
 ///
 /// The order is the whole of it. The drain cancels the tracker and does not
-/// return until every tracked task has returned, so the retention entry task —
-/// and with it any cleanup still running on the blocking pool — has stopped
-/// before the handle is read and before [`finish_generation`] is in a position
-/// to close the database. Retention holds a database handle on a blocking
-/// thread; closing the database while it still ran would pull the store out
-/// from under a live RocksDB operation, which is why nothing here is
-/// reordered.
+/// return until every tracked task has returned, so the retention and ingest
+/// entry tasks — and with them any cleanup still running on the blocking pool
+/// or any handler still writing — have stopped before their handles are read
+/// and before [`finish_generation`] is in a position to close the database.
+/// Retention holds a database handle on a blocking thread; closing the
+/// database while it still ran would pull the store out from under a live
+/// RocksDB operation, which is why nothing here is reordered.
+///
+/// `ingest_task_handle` is `None` when the generation ended because that very
+/// task returned: the wait has already read the handle back, and a
+/// `JoinHandle` polled again after it has completed is not a handle that
+/// resolves a second time.
 ///
 /// # Errors
 ///
@@ -572,11 +651,15 @@ where
 async fn shutdown_generation(
     top_level_tracker: &TaskTracker,
     retain_task_handle: JoinHandle<Result<()>>,
+    ingest_task_handle: Option<JoinHandle<Result<()>>>,
     generation_end: GenerationEnd,
     database: &storage::Database,
 ) -> Result<()> {
     drain_top_level_tracker_or_log(top_level_tracker).await;
     report_retention_outcome(retain_task_handle).await;
+    if let Some(ingest_task_handle) = ingest_task_handle {
+        observe_ingest_shutdown(ingest_task_handle).await;
+    }
     finish_generation(generation_end, database).await
 }
 
@@ -643,12 +726,13 @@ async fn finish_generation(
     database: &storage::Database,
 ) -> Result<()> {
     match generation_end {
-        // Neither of these closes the database here. On terminate the process
-        // is on its way out and the handle goes with it; on a configuration
-        // reload the handle is dropped as the generation returns, before the
-        // next one reopens it. This is the pre-existing shape of the path,
-        // delay included, and the ordering cutover that revisits it is #1569's.
-        GenerationEnd::ReloadConfig | GenerationEnd::Terminate => {
+        // None of these closes the database here. On terminate, and on an
+        // entry task that ended early, the process is on its way out and the
+        // handle goes with it; on a configuration reload the handle is dropped
+        // as the generation returns, before the next one reopens it. This is
+        // the pre-existing shape of the path, delay included, and the ordering
+        // cutover that revisits it is #1569's.
+        GenerationEnd::ReloadConfig | GenerationEnd::Terminate | GenerationEnd::IngestExited => {
             sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
         }
         // The host is about to go down, so the store is flushed and its
@@ -797,76 +881,75 @@ async fn reload_https_server<S>(
     }
 }
 
-/// Joins the subsystems that still shut down on `notify_shutdown`.
+/// Waits for the subsystems that still take their signal from
+/// `notify_shutdown`, repeating the signal until every one of them has joined.
 ///
-/// Retention is not among them: it is registered in the per-generation
-/// top-level tracker, so it is cancelled and waited for by
+/// Ingest and retention are not among them: they are registered in the
+/// per-generation top-level tracker, so they are cancelled and waited for by
 /// [`shutdown_generation`] instead. The subsystems left here move the same way
 /// in the issues that follow.
+///
+/// `Notify::notify_waiters` leaves nothing behind for a task that is not
+/// waiting yet. A publish server still binding its listener misses the
+/// notification outright, and then waits on its own interval. Until now the
+/// only thing that ended a generation was an intent that arrived long after
+/// startup, so the window was out of reach; an entry task that ends on its own
+/// reaches it, and does so at exactly the moment the window is widest.
+///
+/// So the signal is repeated. A subsystem that has already observed it ignores
+/// the extra wakeup, and the loop goes away as publish and peer move onto the
+/// cancellation token in the issues that follow. This is a retry cadence and
+/// not a delay: nothing waits out `SHUTDOWN_NOTIFY_RETRY` once the handles are
+/// ready to join.
 async fn wait_for_task_shutdown(
-    ingest_task_handle: JoinHandle<()>,
+    notify_shutdown: &Notify,
     publish_task_handle: JoinHandle<()>,
     peer_task_handle: Option<JoinHandle<Result<()>>>,
 ) {
-    if let Some(handle_peers) = peer_task_handle {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle, handle_peers);
-    } else {
-        let _ = tokio::join!(ingest_task_handle, publish_task_handle);
+    let joined = async {
+        if let Some(handle_peers) = peer_task_handle {
+            let _ = tokio::join!(publish_task_handle, handle_peers);
+        } else {
+            let _ = publish_task_handle.await;
+        }
+    };
+    tokio::pin!(joined);
+
+    loop {
+        select! {
+            () = &mut joined => break,
+            () = sleep(SHUTDOWN_NOTIFY_RETRY) => notify_shutdown.notify_waiters(),
+        }
     }
 }
 
-/// Closes and cancels the per-generation top-level task tracker, then drains it
-/// repeatedly until every tracked task has returned.
+/// Reports how the ingest entry task ended once the generation is shutting
+/// down.
 ///
-/// `report_interval` is a reporting cadence, not a deadline. Each time it
-/// expires with tasks still tracked, the round is reported and the drain is
-/// retried. Stragglers are never aborted: `JoinHandle::abort` drops a task
-/// future at an arbitrary await point, which voids the cleanup-before-return
-/// contract every tracked task is written to. Shutdown therefore ends only when
-/// the tasks themselves return, and the repeated report is what narrows down a
-/// task that never does.
-///
-/// The loop is re-callable. `TaskTracker::close` is idempotent and the wait can
-/// repeat, so calling it again on an already drained tracker returns as soon as
-/// the tracker is observed empty.
-///
-/// `report_interval` must be non-zero. A zero cadence still drains, because
-/// each round polls the tracker before its deadline is checked, but it spins
-/// the loop and floods the log with one round per poll. Rejecting an
-/// unusable cadence belongs to the settings that supply it.
-///
-/// # Errors
-///
-/// Returns [`LockPoisonedError`] if an internal tracker mutex is poisoned. A
-/// poisoned lock is the one outcome this policy treats as a real error; pending
-/// tasks are not.
-async fn drain_top_level_tracker(
-    tracker: &TaskTracker,
-    report_interval: Duration,
-) -> Result<(), LockPoisonedError> {
-    // Cancellation is delivered even when the close cannot be completed. The
-    // caller reads retained handles once this returns, and a task that was
-    // never told to stop would leave that read waiting forever; a poisoned
-    // lock is worth reporting, not worth hanging shutdown over.
-    let close_result = tracker.close();
-    tracker.cancel_children();
-    close_result?;
+/// The task reports its own `Err` where it happens, so what is left for the
+/// handle to add is the outcome only a `JoinError` carries: a panic, or an
+/// abort. The top-level drain waits for the task to return but looks at
+/// neither, so this is where it becomes visible. It runs after the drain, so
+/// the handle is already resolved and this only reads it back.
+async fn observe_ingest_shutdown(handle: JoinHandle<Result<()>>) {
+    if let Err(e) = handle.await {
+        error!("Ingest task did not join: {e}");
+    }
+}
 
-    let mut round: u64 = 0;
-    let mut reported_snapshot: Option<Vec<(u64, String)>> = None;
-    loop {
-        match tracker.drain(report_interval).await? {
-            DrainOutcome::Drained => {
-                if round > 0 {
-                    info!("shutdown drain complete after {round} pending round(s)");
-                }
-                return Ok(());
-            }
-            DrainOutcome::Pending(pending) => {
-                round = round.saturating_add(1);
-                report_pending_round(round, &pending, &mut reported_snapshot);
-            }
-        }
+/// Reports an ingest entry task that ended while the generation was still
+/// serving.
+///
+/// Nothing here is expected: the task returns on its own only when it cannot
+/// keep the listener, and the caller ends the generation on it either way. An
+/// `Err` has already been reported by the task itself, where the context that
+/// produced it was still at hand, so repeating it here would only say the same
+/// thing twice; the other two outcomes have gone unsaid until now.
+fn report_early_ingest_exit(outcome: &std::result::Result<Result<()>, task::JoinError>) {
+    match outcome {
+        Ok(Ok(())) => error!("Ingest subsystem returned before the daemon was asked to stop"),
+        Ok(Err(_)) => {}
+        Err(e) => error!("Ingest task did not join: {e}"),
     }
 }
 
@@ -878,55 +961,9 @@ async fn drain_top_level_tracker(
 /// after the drain — the retained-handle observation and `database.shutdown()`.
 /// So it is reported where it happens and shutdown carries on.
 async fn drain_top_level_tracker_or_log(tracker: &TaskTracker) {
-    if let Err(e) = drain_top_level_tracker(tracker, DRAIN_REPORT_INTERVAL).await {
+    if let Err(e) = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, TOP_LEVEL_DRAIN_LABEL).await {
         error!("shutdown drain could not read the top-level tracker: {e}");
     }
-}
-
-/// Reports one drain round that timed out with tasks still pending.
-///
-/// Every round emits a single progress line, so a shutdown that is waiting is
-/// always visible. The detailed snapshot is one line per task, and the wait is
-/// unbounded, so repeating it every round would bury the log while the same
-/// tasks hang; it is emitted only when the set of pending tasks differs from
-/// the one last reported through `reported_snapshot`. Ages are left out of that
-/// comparison because they advance every round and would make every snapshot
-/// look changed.
-fn report_pending_round(
-    round: u64,
-    pending: &[PendingTaskSnapshot],
-    reported_snapshot: &mut Option<Vec<(u64, String)>>,
-) {
-    warn!(
-        "shutdown drain round {round}: {} task(s) still pending",
-        pending.len()
-    );
-
-    // The registry is a hash map, so order by id to keep both the comparison
-    // and the report stable across rounds.
-    let mut pending: Vec<&PendingTaskSnapshot> = pending.iter().collect();
-    pending.sort_unstable_by_key(|task| task.id);
-    let snapshot: Vec<(u64, String)> = pending
-        .iter()
-        .map(|task| (task.id, task.name.clone()))
-        .collect();
-
-    if reported_snapshot
-        .as_ref()
-        .is_some_and(|last| *last == snapshot)
-    {
-        return;
-    }
-
-    for task in pending {
-        warn!(
-            "  pending task id={id} name={:?} age={:?}",
-            task.name,
-            task.age,
-            id = task.id,
-        );
-    }
-    *reported_snapshot = Some(snapshot);
 }
 
 #[cfg(test)]
@@ -947,9 +984,6 @@ mod tests {
 
     use super::*;
 
-    /// Reporting cadence used by the drain-loop tests. The tests run on a
-    /// paused clock, so this is virtual time only — no test waits on it.
-    const REPORT_INTERVAL: Duration = Duration::from_secs(5);
     /// Upper bound on how long a drain loop may take to finish once its tasks
     /// have been released. Also virtual time: a loop that fails to make
     /// progress cannot hang the test, it fails it.
@@ -1054,17 +1088,8 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_task_shutdown_joins_all_handles() {
-        let ingest_done = Arc::new(AtomicBool::new(false));
         let publish_done = Arc::new(AtomicBool::new(false));
         let peer_done = Arc::new(AtomicBool::new(false));
-
-        let ingest_task_handle = tokio::spawn({
-            let ingest_done = ingest_done.clone();
-            async move {
-                sleep(Duration::from_millis(25)).await;
-                ingest_done.store(true, Ordering::SeqCst);
-            }
-        });
 
         let publish_task_handle = tokio::spawn({
             let publish_done = publish_done.clone();
@@ -1083,9 +1108,8 @@ mod tests {
             }
         }));
 
-        wait_for_task_shutdown(ingest_task_handle, publish_task_handle, peer_task_handle).await;
+        wait_for_task_shutdown(&Notify::new(), publish_task_handle, peer_task_handle).await;
 
-        assert!(ingest_done.load(Ordering::SeqCst));
         assert!(publish_done.load(Ordering::SeqCst));
         assert!(peer_done.load(Ordering::SeqCst));
     }
@@ -1150,6 +1174,37 @@ mod tests {
             output.contains("Retention did not run to completion"),
             "an abort nobody asked for should be reported, got: {output}"
         );
+    }
+
+    /// A subsystem that was not waiting when the signal was first sent still
+    /// sees it.
+    ///
+    /// `Notify::notify_waiters` leaves no permit behind, so the first signal —
+    /// the one the caller sends before this wait starts — is lost on a task
+    /// that has not reached its `notified()` yet. Repeating it is what makes
+    /// the handle join at all; without the repeat this test hangs.
+    #[tokio::test]
+    async fn wait_for_task_shutdown_repeats_a_signal_a_subsystem_missed() {
+        let notify_shutdown = Arc::new(Notify::new());
+        let late = tokio::spawn({
+            let notify_shutdown = Arc::clone(&notify_shutdown);
+            async move {
+                // Longer than the retry cadence, so the signal the caller
+                // sends below cannot be the one this waiter catches.
+                sleep(SHUTDOWN_NOTIFY_RETRY * 3).await;
+                notify_shutdown.notified().await;
+            }
+        });
+
+        // What the shutdown sequence does before it starts waiting, and what
+        // the task above is guaranteed to miss.
+        notify_shutdown.notify_waiters();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_task_shutdown(&notify_shutdown, late, None),
+        )
+        .await
+        .expect("a subsystem that missed the first signal should still be joined");
     }
 
     mod reload_https_server_tests {
@@ -1619,319 +1674,6 @@ mod tests {
         String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 log output")
     }
 
-    fn count_lines_containing(output: &str, needle: &str) -> usize {
-        output.lines().filter(|line| line.contains(needle)).count()
-    }
-
-    /// Spawns a task on `tracker` that stays pending until `release` fires,
-    /// deliberately ignoring cancellation so the drain loop has to report
-    /// progress across several rounds. The returned flag is set only if the
-    /// task runs to the end, so an aborted task leaves it `false`.
-    fn spawn_pending_task(
-        tracker: &TaskTracker,
-        name: &'static str,
-        release: oneshot::Receiver<()>,
-    ) -> (JoinHandle<()>, Arc<AtomicBool>) {
-        let completed = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&completed);
-        let handle = tracker
-            .spawn(name, move |_token| async move {
-                let _ = release.await;
-                flag.store(true, Ordering::SeqCst);
-            })
-            .expect("spawn should succeed");
-        (handle, completed)
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn drain_top_level_tracker_reports_each_round_until_drained() {
-        let (logs, _guard) = capture_logs();
-
-        let tracker = TaskTracker::new();
-        let (release_tx, release_rx) = oneshot::channel();
-        let (task_handle, completed) = spawn_pending_task(&tracker, "synthetic-top", release_rx);
-
-        let drain = tokio::spawn({
-            let tracker = tracker.clone();
-            async move { drain_top_level_tracker(&tracker, REPORT_INTERVAL).await }
-        });
-
-        // Virtual time: the clock only advances while every task is idle, so
-        // this lets exactly two drain rounds expire without any wall-clock
-        // wait, and releases the task while the third round is in flight.
-        sleep(REPORT_INTERVAL * 2 + REPORT_INTERVAL / 2).await;
-        assert!(!completed.load(Ordering::SeqCst));
-        release_tx
-            .send(())
-            .expect("drain loop should still be waiting");
-
-        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
-            .await
-            .expect("drain loop should finish once the task returns")
-            .expect("drain loop task should not panic")
-            .expect("drain loop should not report a poisoned lock");
-
-        // The task returned on its own; it was neither aborted nor dropped.
-        task_handle
-            .await
-            .expect("task should not have been aborted");
-        assert!(completed.load(Ordering::SeqCst));
-        assert!(tracker.is_closed());
-        assert_eq!(tracker.pending_count(), 0);
-
-        let output = captured(&logs);
-        assert!(
-            !output.contains("tracked task did not run to completion"),
-            "no task should have been aborted, got: {output}"
-        );
-
-        // Every round reports progress ...
-        assert!(
-            output.contains("shutdown drain round 1: 1 task(s) still pending"),
-            "round 1 should be reported, got: {output}"
-        );
-        assert!(
-            output.contains("shutdown drain round 2: 1 task(s) still pending"),
-            "round 2 should be reported, got: {output}"
-        );
-        assert_eq!(
-            count_lines_containing(&output, "shutdown drain round"),
-            2,
-            "exactly the pending rounds should be reported, got: {output}"
-        );
-        // ... while the unchanged detailed snapshot is logged only once.
-        assert_eq!(
-            count_lines_containing(&output, "pending task id="),
-            1,
-            "the unchanged snapshot should not be repeated, got: {output}"
-        );
-        assert!(
-            output.contains("shutdown drain complete after 2 pending round(s)"),
-            "completion should be reported, got: {output}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn drain_top_level_tracker_relogs_snapshot_when_pending_set_changes() {
-        let (logs, _guard) = capture_logs();
-
-        let tracker = TaskTracker::new();
-        let (first_tx, first_rx) = oneshot::channel();
-        let (second_tx, second_rx) = oneshot::channel();
-        let (first_handle, first_done) = spawn_pending_task(&tracker, "synthetic-a", first_rx);
-        let (second_handle, second_done) = spawn_pending_task(&tracker, "synthetic-b", second_rx);
-
-        let drain = tokio::spawn({
-            let tracker = tracker.clone();
-            async move { drain_top_level_tracker(&tracker, REPORT_INTERVAL).await }
-        });
-
-        // Two rounds see both tasks, then one task returns and the next round
-        // sees a changed set.
-        sleep(REPORT_INTERVAL * 2 + REPORT_INTERVAL / 2).await;
-        first_tx
-            .send(())
-            .expect("drain loop should still be waiting");
-        first_handle
-            .await
-            .expect("task should not have been aborted");
-        sleep(REPORT_INTERVAL * 2).await;
-        second_tx
-            .send(())
-            .expect("drain loop should still be waiting");
-
-        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
-            .await
-            .expect("drain loop should finish once the tasks return")
-            .expect("drain loop task should not panic")
-            .expect("drain loop should not report a poisoned lock");
-
-        second_handle
-            .await
-            .expect("task should not have been aborted");
-        assert!(first_done.load(Ordering::SeqCst));
-        assert!(second_done.load(Ordering::SeqCst));
-
-        let output = captured(&logs);
-        assert!(
-            !output.contains("tracked task did not run to completion"),
-            "no task should have been aborted, got: {output}"
-        );
-        assert_eq!(
-            count_lines_containing(&output, "shutdown drain round"),
-            4,
-            "each pending round should be reported, got: {output}"
-        );
-        // Round 1 lists both tasks, round 2 repeats nothing, and the round
-        // after the set shrinks lists the one that is left.
-        assert_eq!(
-            count_lines_containing(&output, "pending task id="),
-            3,
-            "the snapshot should be relogged only when the set changes, got: {output}"
-        );
-        assert_eq!(
-            count_lines_containing(&output, "synthetic-a"),
-            1,
-            "the task that returned should be listed once, got: {output}"
-        );
-        assert_eq!(
-            count_lines_containing(&output, "synthetic-b"),
-            2,
-            "the remaining task should be listed in both snapshots, got: {output}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn drain_top_level_tracker_is_re_callable() {
-        let tracker = TaskTracker::new();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&cancelled);
-        let handle = tracker
-            .spawn("cooperative", move |token| async move {
-                token.cancelled().await;
-                flag.store(true, Ordering::SeqCst);
-            })
-            .expect("spawn should succeed");
-
-        tokio::time::timeout(
-            DRAIN_LOOP_TIMEOUT,
-            drain_top_level_tracker(&tracker, REPORT_INTERVAL),
-        )
-        .await
-        .expect("a cooperative task should drain on the first round")
-        .expect("drain loop should not report a poisoned lock");
-        handle.await.expect("task should not have been aborted");
-        assert!(cancelled.load(Ordering::SeqCst));
-
-        // `close` is idempotent and the wait can repeat, so the drained
-        // tracker can be handed to the loop again.
-        tokio::time::timeout(
-            DRAIN_LOOP_TIMEOUT,
-            drain_top_level_tracker(&tracker, REPORT_INTERVAL),
-        )
-        .await
-        .expect("a second call should return immediately")
-        .expect("drain loop should not report a poisoned lock");
-    }
-
-    /// A poisoned tracker lock ends the loop instead of being retried. Unlike
-    /// a pending task, a poison never clears, so every later round would fail
-    /// the same way and the loop would spin.
-    ///
-    /// The lock is poisoned the way `cancellation`'s own poison test does it:
-    /// outside a runtime the inner `tasks.spawn` panics while the admission
-    /// lock is held. That has to happen before any runtime is entered, so this
-    /// test builds the runtime itself rather than using `#[tokio::test]`.
-    #[test]
-    fn drain_top_level_tracker_surfaces_a_poisoned_lock() {
-        let tracker = TaskTracker::new();
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = tracker.spawn("no-runtime", |_token| async {});
-        }));
-        assert!(outcome.is_err(), "spawn outside a runtime should panic");
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .start_paused(true)
-            .build()
-            .expect("current-thread runtime should build");
-        let result = runtime.block_on(async {
-            tokio::time::timeout(
-                DRAIN_LOOP_TIMEOUT,
-                drain_top_level_tracker(&tracker, REPORT_INTERVAL),
-            )
-            .await
-            .expect("a poisoned lock should end the loop, not be retried")
-        });
-
-        assert_eq!(result, Err(LockPoisonedError));
-    }
-
-    #[test]
-    fn report_pending_round_skips_unchanged_snapshot_and_relogs_changes() {
-        let (logs, _guard) = capture_logs();
-
-        let first = vec![
-            PendingTaskSnapshot {
-                id: 1,
-                name: "task-one".to_string(),
-                age: Duration::from_secs(1),
-            },
-            PendingTaskSnapshot {
-                id: 0,
-                name: "task-zero".to_string(),
-                age: Duration::from_secs(2),
-            },
-        ];
-        // Same tasks, different ages and iteration order: still unchanged.
-        let unchanged = vec![
-            PendingTaskSnapshot {
-                id: 0,
-                name: "task-zero".to_string(),
-                age: Duration::from_secs(7),
-            },
-            PendingTaskSnapshot {
-                id: 1,
-                name: "task-one".to_string(),
-                age: Duration::from_secs(7),
-            },
-        ];
-        let changed = vec![PendingTaskSnapshot {
-            id: 1,
-            name: "task-one".to_string(),
-            age: Duration::from_secs(9),
-        }];
-
-        let mut reported = None;
-        report_pending_round(1, &first, &mut reported);
-        report_pending_round(2, &unchanged, &mut reported);
-        report_pending_round(3, &changed, &mut reported);
-
-        let output = captured(&logs);
-        assert_eq!(count_lines_containing(&output, "shutdown drain round"), 3);
-        assert_eq!(count_lines_containing(&output, "pending task id="), 3);
-
-        // The first snapshot is ordered by id regardless of the order the
-        // registry handed the tasks over in.
-        let detail: Vec<&str> = output
-            .lines()
-            .filter(|line| line.contains("pending task id="))
-            .collect();
-        assert!(detail[0].contains("id=0"), "got: {output}");
-        assert!(detail[1].contains("id=1"), "got: {output}");
-        assert!(detail[2].contains("id=1"), "got: {output}");
-    }
-
-    /// A pending round can carry an empty snapshot: the registry may be
-    /// emptied between the drain timing out and the snapshot being read. The
-    /// round is still reported, and the empty snapshot does not suppress the
-    /// next one that has tasks in it.
-    #[test]
-    fn report_pending_round_handles_an_empty_pending_snapshot() {
-        let (logs, _guard) = capture_logs();
-
-        let pending = vec![PendingTaskSnapshot {
-            id: 0,
-            name: "task-zero".to_string(),
-            age: Duration::from_secs(1),
-        }];
-
-        let mut reported = None;
-        report_pending_round(1, &[], &mut reported);
-        report_pending_round(2, &pending, &mut reported);
-
-        let output = captured(&logs);
-        assert!(
-            output.contains("shutdown drain round 1: 0 task(s) still pending"),
-            "an empty round should still be reported, got: {output}"
-        );
-        assert_eq!(
-            count_lines_containing(&output, "pending task id="),
-            1,
-            "the empty snapshot should not suppress the next one, got: {output}"
-        );
-    }
-
     #[tokio::test(start_paused = true)]
     async fn drain_top_level_tracker_or_log_is_silent_for_an_empty_tracker() {
         let (logs, _guard) = capture_logs();
@@ -2183,6 +1925,13 @@ mod tests {
             settings: Settings,
             process: ProcessContext,
             intents: GenerationIntents,
+            /// Stands in for the ingest entry task the wait watches.
+            ///
+            /// The wait needs a handle to borrow, and the tests that drive the
+            /// other arms need that handle to stay pending, so the default is
+            /// a task that never returns. A test that wants the ingest arm
+            /// replaces it.
+            ingest_task: JoinHandle<Result<()>>,
             reload_tx: mpsc::Sender<ConfigVisible>,
             notify_terminate: Arc<Notify>,
             notify_reboot: Arc<Notify>,
@@ -2206,6 +1955,7 @@ mod tests {
                     notify_reboot: Arc::clone(&notify_reboot),
                     notify_power_off: Arc::clone(&notify_power_off),
                 },
+                ingest_task: task::spawn(std::future::pending::<Result<()>>()),
                 reload_tx,
                 notify_terminate,
                 notify_reboot,
@@ -2225,6 +1975,7 @@ mod tests {
                 &mut fixture.settings,
                 &fixture.process,
                 &mut fixture.intents,
+                &mut fixture.ingest_task,
                 &mut web_controller,
                 &schema,
                 ephemeral_addr(),
@@ -2267,6 +2018,55 @@ mod tests {
             assert_eq!(
                 wait_without_web(&mut fixture).await,
                 GenerationEnd::PowerOff
+            );
+        }
+
+        /// The ingest entry task ending is not an intent, but it ends the
+        /// wait all the same.
+        ///
+        /// Nothing is notified here: the only thing that happens is that the
+        /// task the wait borrows returns. A wait that ignored it would leave
+        /// the generation serving with nothing behind its ingest port.
+        #[tokio::test]
+        async fn an_ingest_entry_task_that_ends_ends_the_wait() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            fixture.ingest_task = task::spawn(async { Err(anyhow!("the listener is gone")) });
+
+            let (logs, _guard) = capture_logs();
+            assert_eq!(
+                wait_without_web(&mut fixture).await,
+                GenerationEnd::IngestExited
+            );
+
+            // The task reports its own `Err`; a stand-in cannot, so what this
+            // asserts is the silence that keeps the real one from being
+            // reported twice.
+            let output = captured(&logs);
+            assert!(
+                !output.contains("Ingest subsystem returned before"),
+                "an entry task that returned an error is not one that returned cleanly, got: {output}"
+            );
+        }
+
+        /// A panicking entry task ends the wait too, and says what the task
+        /// itself could not.
+        #[tokio::test]
+        async fn a_panicking_ingest_entry_task_ends_the_wait() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            fixture.ingest_task = task::spawn(async { panic!("the ingest entry task panicked") });
+
+            let (logs, _guard) = capture_logs();
+            assert_eq!(
+                wait_without_web(&mut fixture).await,
+                GenerationEnd::IngestExited
+            );
+
+            let output = captured(&logs);
+            assert!(
+                output.contains("Ingest task did not join"),
+                "a panic is the outcome only the handle carries, got: {output}"
             );
         }
 
@@ -2345,6 +2145,7 @@ mod tests {
                     &mut fixture.settings,
                     &fixture.process,
                     &mut fixture.intents,
+                    &mut fixture.ingest_task,
                     &mut web_controller,
                     &schema,
                     web_addr,
@@ -2457,6 +2258,7 @@ mod tests {
                     shutdown_generation(
                         &tracker,
                         retain_task_handle,
+                        None,
                         GenerationEnd::Reboot,
                         &database,
                     )
@@ -2622,9 +2424,9 @@ mod tests {
                 output.contains("Termination signal: daemon exit"),
                 "the terminate arm should have run, got: {output}"
             );
-            // Retention is the one task in the top-level tracker, and it stops
-            // on the cancellation the drain delivers, so the drain returns on
-            // its first round with nothing to report.
+            // Ingest and retention are the tasks in the top-level tracker,
+            // and both stop on the cancellation the drain delivers, so the
+            // drain returns on its first round with nothing to report.
             assert!(
                 output.contains("Retention stopped"),
                 "the retention task should have stopped cleanly, got: {output}"
@@ -2639,7 +2441,7 @@ mod tests {
             );
             assert!(
                 !output.contains("tracked task did not run to completion"),
-                "the retention task should have returned, not vanished, got: {output}"
+                "the tracked tasks should have returned, not vanished, got: {output}"
             );
         }
 
@@ -2740,6 +2542,183 @@ mod tests {
                 .expect("a failed peer subsystem should not fail the generation");
 
             assert_eq!(end, GenerationEnd::Terminate);
+        }
+
+        /// An ingest entry task that ends on its own takes the generation
+        /// down with it.
+        ///
+        /// The address it is told to bind is already held by a UDP socket this
+        /// test keeps open, so `Endpoint::server` fails and the entry task
+        /// returns before the generation has even reached its steady state.
+        /// Nothing is notified here — no terminate intent is ever sent — so
+        /// the only thing that can end this generation is the entry task
+        /// itself. A node left serving GraphQL and publish while ingesting
+        /// nothing would instead sit here until `GENERATION_TIMEOUT`.
+        #[tokio::test]
+        async fn an_ingest_listener_that_cannot_bind_ends_the_generation() {
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+
+            // QUIC is UDP, so the port has to be held by a UDP socket for the
+            // ingest listener to lose it.
+            let occupied = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .expect("occupy the ingest port");
+            settings.config.visible.ingest_srv_addr = occupied.local_addr().expect("occupied addr");
+
+            let (logs, _guard) = capture_logs();
+            let end =
+                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process))
+                    .await
+                    .expect("a failed ingest listener should end the generation on its own")
+                    .expect("the generation reports the early exit through its end, not an error");
+
+            assert_eq!(end, GenerationEnd::IngestExited);
+
+            let output = captured(&logs);
+            assert!(
+                output.contains("failed to bind the ingest listener"),
+                "the bind failure itself should be reported, got: {output}"
+            );
+            assert!(
+                output.contains("Ingest subsystem terminated unexpectedly"),
+                "the entry task should report its own error, got: {output}"
+            );
+            assert!(
+                !output.contains("Ingest task did not join"),
+                "the entry task returned, it did not panic, got: {output}"
+            );
+            // The generation still went down the common shutdown sequence:
+            // the subsystems it did start were notified and the drain ran.
+            assert!(
+                output.contains("Shutting down publish"),
+                "the early exit should run the same shutdown sequence as an intent, got: {output}"
+            );
+        }
+
+        /// A sensor ingests through a whole generation, and the generation
+        /// releases it.
+        ///
+        /// Everything above drives ingest either as a bare entry task or from
+        /// the outside; this is the seam between the two. The sensor connects
+        /// to the listener the generation bound, its event is acknowledged by
+        /// the generation's own store, and its connection is still open when
+        /// the terminate intent arrives. So the generation has to cancel it:
+        /// the top-level drain waits for the ingest entry task, which waits in
+        /// turn for this connection's handler, and a connection nothing
+        /// released would hold the generation until `GENERATION_TIMEOUT`
+        /// rather than ending on the intent. That the event is readable from
+        /// a reopened data directory afterwards is the other half — the
+        /// generation let go of the database only once ingest was done with
+        /// it.
+        #[tokio::test]
+        async fn a_generation_ingests_from_a_sensor_and_releases_it_on_terminate() {
+            use giganto_client::{
+                RawEventKind,
+                connection::client_handshake,
+                frame::send_raw,
+                ingest::{log::Log, receive_ack_timestamp, send_record_header},
+            };
+
+            use crate::server::config_client;
+
+            const TIMESTAMP: i64 = 1_700_000_000_000_000_000;
+
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+            // The sensor has to name the listener before the generation binds
+            // it, and an ephemeral port is only known afterwards.
+            let ingest_addr = free_addr();
+            settings.config.visible.ingest_srv_addr = ingest_addr;
+            // One event per acknowledgement, so a single batch is enough to
+            // get a reply back and the test needs no second sync point.
+            settings.config.visible.ack_transmission = 1;
+            let data_dir = settings.config.visible.data_dir.clone();
+
+            let log = Log {
+                kind: String::from("generation ingest test"),
+                log: vec![7; 8],
+            };
+            let expected = bincode::serialize(&log).expect("serialize the log body");
+
+            let (logs, _guard) = capture_logs();
+            let (end, conn) = tokio::join!(
+                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &["Ingest listening on", "Database cleanup completed."],
+                    )
+                    .await;
+
+                    // Bound on IPv4 because the listener is: quinn will not
+                    // send from a v6 socket to a v4 peer.
+                    let mut endpoint =
+                        quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
+                            .expect("create the sensor endpoint");
+                    let certs =
+                        Arc::clone(&tls_reload::get_current_tls_material(&process.tls_watch).certs);
+                    endpoint.set_default_client_config(
+                        config_client(&certs).expect("build the sensor client config"),
+                    );
+                    let conn = endpoint
+                        .connect(ingest_addr, "001.giganto.node1.example.test")
+                        .expect("the sensor client config should build")
+                        .await
+                        .expect("the sensor should reach the ingest listener");
+                    client_handshake(&conn, env!("CARGO_PKG_VERSION"))
+                        .await
+                        .expect("the version handshake should succeed");
+
+                    let (mut send, mut recv) =
+                        conn.open_bi().await.expect("open the sensor stream");
+                    send_record_header(&mut send, RawEventKind::Log)
+                        .await
+                        .expect("send the record header");
+                    let batch = bincode::serialize(&vec![(TIMESTAMP, expected.clone())])
+                        .expect("serialize the log batch");
+                    send_raw(&mut send, &batch).await.expect("send the log");
+                    let acked =
+                        tokio::time::timeout(READY_TIMEOUT, receive_ack_timestamp(&mut recv))
+                            .await
+                            .expect("the generation should acknowledge the event")
+                            .expect("the acknowledgement should decode");
+                    assert_eq!(acked, TIMESTAMP);
+
+                    // The connection is deliberately left open across the
+                    // intent, and `conn` is returned so it stays open: this is
+                    // what the generation's drain has to cancel.
+                    notify_terminate.notify_one();
+                    conn
+                }
+            );
+            let end = end
+                .expect("a live sensor connection should not hold the generation open")
+                .expect("the generation should not fail");
+            assert_eq!(end, GenerationEnd::Terminate);
+            drop(conn);
+
+            let output = captured(&logs);
+            assert!(
+                output.contains("Shutting down ingest"),
+                "the ingest listener should have observed cancellation, got: {output}"
+            );
+
+            let reopened = test_database(Path::new(&data_dir));
+            let stored: Vec<Vec<u8>> = reopened
+                .log_store()
+                .expect("open the log store")
+                .iter_forward()
+                .filter_map(|entry| entry.ok().map(|(_, value)| value.to_vec()))
+                .collect();
+            assert_eq!(
+                stored,
+                vec![expected],
+                "the event the generation acknowledged did not survive its shutdown"
+            );
         }
     }
 }

@@ -51,12 +51,31 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cleanup already running, and closes the database once retention has stopped.
   A retention failure is reported at `ERROR` when it
   happens and restated as the node shuts down.
+- Fixed a shutdown that could hang indefinitely when the signal arrived in the
+  first moments after startup. A subsystem that had not yet begun listening
+  missed the one-shot notification and then waited out its own interval before
+  noticing, so the node never exited. The signal is now repeated until every
+  subsystem has stopped.
 
 ### Changed
 
 - Unified storage introspection GraphQL APIs (`propertiesCf` and
   `countByProtocol`) under the opt-in `storage_diagnostics` feature flag.
   Enable diagnostics with `--features storage_diagnostics`.
+- Ingest now shuts down cooperatively. On termination or configuration reload
+  it stops accepting connections and streams, drains the connection and
+  request handlers it already admitted, flushes everything those handlers
+  appended, and applies the sensor connect/disconnect updates still in flight
+  before it returns. The fixed delays the old path waited out are gone, so a
+  shutdown takes as long as the work in flight takes instead of ending while
+  handlers are still running. Acknowledgement behavior is unchanged: the same
+  batching, interval, and channel-close rules apply, and shutdown sends no
+  acknowledgement of its own.
+- A node no longer keeps running without ingest. The ingest listener is
+  watched while the node serves, so a listener that cannot start — an address
+  already in use, for instance — or one that ends unexpectedly now shuts the
+  node down through the normal sequence and exits with a failure status
+  instead of leaving it serving everything but ingest.
 - Simplified the `cancellation` module down to `TaskTracker`. Its
   `CancellationToken` wrapper, along with `check_cancelled` and
   `CancelledError`, is gone in favor of `tokio_util::sync::CancellationToken`,
