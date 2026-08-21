@@ -3,10 +3,11 @@
 #[cfg(not(feature = "bootroot"))]
 use std::fs;
 use std::{
+    cell::RefCell,
     future::IntoFuture,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicI64, Ordering},
     },
 };
@@ -51,10 +52,11 @@ fn init_crypto() {
 }
 
 use tokio::{
-    sync::{Notify, mpsc, oneshot},
+    sync::{Notify, watch},
     task::JoinHandle,
     time::{Instant, sleep, timeout},
 };
+use tokio_util::sync::CancellationToken;
 
 use super::Server;
 #[cfg(not(feature = "bootroot"))]
@@ -66,15 +68,20 @@ use crate::test_bootroot::{
 };
 use crate::{
     comm::{
-        IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels, new_ingest_sensors,
-        new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
+        IngestSensors, PcapSensors, RunTimeIngestSensors, new_ingest_sensors, new_pcap_sensors,
+        new_runtime_ingest_sensors, new_stream_direct_channels,
     },
     server::{Certs, config_client, host_fqdn_from_cert, service_fqdn_from_cert},
     storage::{Database, DbOptions, RawEventStore, StorageKey},
+    tls_reload::{TlsMaterial, TlsWatch},
 };
 
 const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 const FIXED_CONN_DURATION_NANOS: i64 = 12_345;
+/// How long a test waits for a cancelled ingest entry task to drain and
+/// return. Generous enough that a slow machine does not fail the test, short
+/// enough that a task which never observes cancellation does.
+const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const STOREABLE_RAW_EVENT_KINDS: &[RawEventKind] = &[
     RawEventKind::Conn,
     RawEventKind::Dns,
@@ -196,98 +203,88 @@ fn server(addr: SocketAddr) -> Server {
     Server::new(addr, &certs)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_server_with_ready(
-    server: Server,
-    db: Database,
-    pcap_sensors: PcapSensors,
-    ingest_sensors: IngestSensors,
-    runtime_ingest_sensors: RunTimeIngestSensors,
-    stream_direct_channels: StreamDirectChannels,
-    notify_shutdown: Arc<Notify>,
-    notify_sensor: Option<Arc<Notify>>,
-    ack_transmission_cnt: u16,
-    ready: oneshot::Sender<SocketAddr>,
-) {
-    let endpoint =
-        Endpoint::server(server.server_config, server.server_address).expect("ingest endpoint");
-    let local_addr = endpoint.local_addr().expect("ingest local addr");
-    let _ = ready.send(local_addr);
-
-    let (tx, rx) = mpsc::channel(100);
-    let sensor_db = db.clone();
-    tokio::spawn(super::check_sensors_conn(
-        sensor_db,
-        pcap_sensors.clone(),
-        ingest_sensors.clone(),
-        runtime_ingest_sensors.clone(),
-        rx,
-        notify_sensor,
-        notify_shutdown.clone(),
-    ));
-
-    let shutdown_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-    loop {
-        tokio::select! {
-            Some(conn) = endpoint.accept() => {
-                let sender = tx.clone();
-                let db = db.clone();
-                let pcap_sensors = pcap_sensors.clone();
-                let stream_direct_channels = stream_direct_channels.clone();
-                let notify_shutdown = notify_shutdown.clone();
-                let shutdown_signal = shutdown_signal.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = super::handle_connection(
-                        conn,
-                        db,
-                        pcap_sensors,
-                        sender,
-                        stream_direct_channels,
-                        notify_shutdown,
-                        shutdown_signal,
-                        ack_transmission_cnt,
-                    )
-                    .await
-                    {
-                        tracing::error!("Connection error: {e}");
-                    }
-                });
-            }
-            () = notify_shutdown.notified() => {
-                endpoint.close(0_u32.into(), &[]);
-                break;
-            }
-        }
-    }
+/// Publishes the test TLS material the ingest listener reloads from.
+///
+/// The sender is handed back so the caller can keep it alive: a `TlsWatch`
+/// whose sender has been dropped reports the closure to the listener, which
+/// then stops watching for reloads.
+fn test_tls_watch(certs: Arc<Certs>) -> (watch::Sender<Arc<TlsMaterial>>, TlsWatch) {
+    watch::channel(Arc::new(TlsMaterial {
+        certs,
+        cert_pem: Vec::new(),
+        key_pem: Vec::new(),
+        ca_pem: Vec::new(),
+        generation: 0,
+    }))
 }
 
-async fn spawn_server(db: Database) -> (SocketAddr, Arc<Notify>, JoinHandle<()>) {
+/// Starts the real ingest entry task and reports the address it bound.
+///
+/// The tests drive the production `BoundServer::run` rather than a copy of its
+/// accept loop, so what they assert about admission, draining, and ACK
+/// behavior is what the running node does.
+fn spawn_server_with(
+    db: Database,
+    ack_transmission_cnt: u16,
+    notify_sensor: Option<Arc<Notify>>,
+) -> TestServer {
+    init_crypto();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let stream_direct_channels = new_stream_direct_channels();
-    let notify_shutdown = Arc::new(Notify::new());
-    let (ready_tx, ready_rx) = oneshot::channel();
     let server_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
-    let server = server(server_addr);
-    let handle = tokio::spawn(run_server_with_ready(
-        server,
+    let bound = server(server_addr).bind().expect("bind ingest test server");
+    let local_addr = bound.local_addr();
+    let (tls_sender, tls_watch) = test_tls_watch(load_test_server_certs());
+    let token = CancellationToken::new();
+    let handle = tokio::spawn(bound.run(
         db,
+        pcap_sensors.clone(),
+        ingest_sensors.clone(),
+        runtime_ingest_sensors.clone(),
+        stream_direct_channels,
+        notify_sensor,
+        ack_transmission_cnt,
+        tls_watch,
+        token.clone(),
+    ));
+    TestServer {
+        local_addr,
+        token,
+        handle: Some(handle),
         pcap_sensors,
         ingest_sensors,
         runtime_ingest_sensors,
-        stream_direct_channels,
-        notify_shutdown.clone(),
-        Some(Arc::new(Notify::new())),
-        1024_u16,
-        ready_tx,
-    ));
-    let local_addr = tokio::time::timeout(std::time::Duration::from_secs(2), ready_rx)
-        .await
-        .expect("ingest server ready timeout")
-        .expect("ingest server did not report addr");
-    (local_addr, notify_shutdown, handle)
+        _tls_sender: tls_sender,
+    }
+}
+
+/// A running ingest entry task, plus the shared state it maintains.
+struct TestServer {
+    local_addr: SocketAddr,
+    token: CancellationToken,
+    handle: Option<JoinHandle<anyhow::Result<()>>>,
+    pcap_sensors: PcapSensors,
+    ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    _tls_sender: watch::Sender<Arc<TlsMaterial>>,
+}
+
+impl TestServer {
+    /// Cancels the entry task and waits for it to drain and return.
+    async fn shutdown(&mut self) {
+        self.token.cancel();
+        let handle = self.handle.take().expect("ingest server already shut down");
+        with_timeout("ingest server drain", SHUTDOWN_TIMEOUT, handle)
+            .await
+            .expect("ingest server task should not panic")
+            .expect("ingest server should shut down cleanly");
+    }
+}
+
+fn spawn_server(db: Database) -> TestServer {
+    spawn_server_with(db, 1024_u16, Some(Arc::new(Notify::new())))
 }
 
 async fn send_events<T: Serialize>(
@@ -329,20 +326,27 @@ struct TestHarness {
     _db_dir: TempDir,
     db: Database,
     client: TestClient,
-    notify_shutdown: Arc<Notify>,
-    server_handle: Option<JoinHandle<()>>,
+    server: TestServer,
 }
 
 impl TestHarness {
     async fn new() -> Self {
+        Self::with_ack_transmission(1024_u16).await
+    }
+
+    async fn with_ack_transmission(ack_transmission_cnt: u16) -> Self {
         init_crypto();
         let db_dir = tempfile::tempdir().expect("create ingest temp dir");
         let db = Database::open(db_dir.path(), &DbOptions::default())
             .expect("open ingest test database");
-        let (server_addr, notify_shutdown, server_handle) = spawn_server(db.clone()).await;
+        let server = spawn_server_with(
+            db.clone(),
+            ack_transmission_cnt,
+            Some(Arc::new(Notify::new())),
+        );
         let client = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            TestClient::new(server_addr),
+            TestClient::new(server.local_addr),
         )
         .await
         .expect("ingest client connect timeout");
@@ -350,8 +354,7 @@ impl TestHarness {
             _db_dir: db_dir,
             db,
             client,
-            notify_shutdown,
-            server_handle: Some(server_handle),
+            server,
         }
     }
 
@@ -366,13 +369,13 @@ impl TestHarness {
     async fn shutdown(mut self, reason: &[u8]) {
         self.client.conn.close(0u32.into(), reason);
         self.client.endpoint.wait_idle().await;
-        self.notify_shutdown.notify_waiters();
-        if let Some(handle) = self.server_handle.take() {
-            tokio::time::timeout(std::time::Duration::from_secs(2), handle)
-                .await
-                .expect("ingest server shutdown timeout")
-                .expect("ingest server task failed");
-        }
+        self.server.shutdown().await;
+    }
+
+    /// Cancels the ingest entry task while the client is still connected, and
+    /// waits for the drain to finish.
+    async fn cancel_and_drain(&mut self) {
+        self.server.shutdown().await;
     }
 }
 
@@ -1687,8 +1690,11 @@ async fn op_log_sensor_uses_host_fqdn() {
     harness.shutdown(b"done").await;
 }
 
+/// The count-triggered ACK: exactly `ack_transmission_cnt` events arrive, so
+/// the threshold trips without the interval deadline being involved. The
+/// interval path is covered separately, further down.
 #[tokio::test]
-async fn ack_interval_sends_last_timestamp() {
+async fn ack_count_threshold_sends_last_timestamp() {
     const RAW_EVENT_KIND_LOG: RawEventKind = RawEventKind::Log;
 
     let harness = TestHarness::new().await;
@@ -1902,15 +1908,15 @@ async fn check_sensors_conn_updates_runtime_state() {
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let (tx, rx) = mpsc::channel(10);
-    let notify_shutdown = Arc::new(Notify::new());
+    let sensor_token = CancellationToken::new();
 
     let db_clone = db.clone();
     let pcap_sensors_clone = pcap_sensors.clone();
     let ingest_sensors_clone = ingest_sensors.clone();
     let runtime_ingest_sensors_clone = runtime_ingest_sensors.clone();
-    let notify_shutdown_clone = notify_shutdown.clone();
+    let sensor_token_clone = sensor_token.clone();
 
-    tokio::spawn(async move {
+    let sensor_state = tokio::spawn(async move {
         super::check_sensors_conn(
             db_clone,
             pcap_sensors_clone,
@@ -1918,7 +1924,7 @@ async fn check_sensors_conn_updates_runtime_state() {
             runtime_ingest_sensors_clone,
             rx,
             None,
-            notify_shutdown_clone,
+            sensor_token_clone,
         )
         .await
         .unwrap();
@@ -1963,8 +1969,11 @@ async fn check_sensors_conn_updates_runtime_state() {
     )
     .await;
 
-    notify_shutdown.notify_one();
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    sensor_token.cancel();
+    drop(tx);
+    with_timeout("sensor-state drain", SHUTDOWN_TIMEOUT, sensor_state)
+        .await
+        .expect("sensor-state task should not panic");
 }
 
 #[tokio::test]
@@ -1980,17 +1989,17 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let (tx, rx) = mpsc::channel(10);
-    let notify_shutdown = Arc::new(Notify::new());
+    let sensor_token = CancellationToken::new();
     let notify_sensor = Arc::new(Notify::new());
 
     let db_clone = db.clone();
     let pcap_sensors_clone = pcap_sensors.clone();
     let ingest_sensors_clone = ingest_sensors.clone();
     let runtime_ingest_sensors_clone = runtime_ingest_sensors.clone();
-    let notify_shutdown_clone = notify_shutdown.clone();
+    let sensor_token_clone = sensor_token.clone();
     let notify_sensor_clone = notify_sensor.clone();
 
-    tokio::spawn(async move {
+    let sensor_state = tokio::spawn(async move {
         super::check_sensors_conn(
             db_clone,
             pcap_sensors_clone,
@@ -1998,7 +2007,7 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
             runtime_ingest_sensors_clone,
             rx,
             Some(notify_sensor_clone),
-            notify_shutdown_clone,
+            sensor_token_clone,
         )
         .await
         .unwrap();
@@ -2107,8 +2116,11 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
     )
     .await;
 
-    notify_shutdown.notify_one();
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    sensor_token.cancel();
+    drop(tx);
+    with_timeout("sensor-state drain", SHUTDOWN_TIMEOUT, sensor_state)
+        .await
+        .expect("sensor-state task should not panic");
 }
 
 #[tokio::test]
@@ -2123,17 +2135,17 @@ async fn notify_sensor_and_pcap_disconnect_behaviors() {
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let (tx, rx) = mpsc::channel(10);
-    let notify_shutdown = Arc::new(Notify::new());
+    let sensor_token = CancellationToken::new();
     let notify_sensor = Arc::new(Notify::new());
 
     let db_clone = db.clone();
     let pcap_sensors_clone = pcap_sensors.clone();
     let ingest_sensors_clone = ingest_sensors.clone();
     let runtime_ingest_sensors_clone = runtime_ingest_sensors.clone();
-    let notify_shutdown_clone = notify_shutdown.clone();
+    let sensor_token_clone = sensor_token.clone();
     let notify_sensor_clone = notify_sensor.clone();
 
-    tokio::spawn(async move {
+    let sensor_state = tokio::spawn(async move {
         super::check_sensors_conn(
             db_clone,
             pcap_sensors_clone,
@@ -2141,7 +2153,7 @@ async fn notify_sensor_and_pcap_disconnect_behaviors() {
             runtime_ingest_sensors_clone,
             rx,
             Some(notify_sensor_clone),
-            notify_shutdown_clone,
+            sensor_token_clone,
         )
         .await
         .unwrap();
@@ -2209,8 +2221,11 @@ async fn notify_sensor_and_pcap_disconnect_behaviors() {
         .unwrap_or_default();
     assert_eq!(pcap_len, 0, "pcap_sensors not updated on pcap disconnect");
 
-    notify_shutdown.notify_one();
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    sensor_token.cancel();
+    drop(tx);
+    with_timeout("sensor-state drain", SHUTDOWN_TIMEOUT, sensor_state)
+        .await
+        .expect("sensor-state task should not panic");
     harness.shutdown(b"done").await;
 }
 
@@ -2227,15 +2242,15 @@ async fn check_sensors_conn_pcap_removes_runtime_on_disconnect() {
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let (tx, rx) = mpsc::channel::<super::SensorInfo>(10);
-    let notify_shutdown = Arc::new(Notify::new());
+    let sensor_token = CancellationToken::new();
 
     let db_clone = db.clone();
     let pcap_sensors_clone = pcap_sensors.clone();
     let ingest_sensors_clone = ingest_sensors.clone();
     let runtime_ingest_sensors_clone = runtime_ingest_sensors.clone();
-    let notify_shutdown_clone = notify_shutdown.clone();
+    let sensor_token_clone = sensor_token.clone();
 
-    tokio::spawn(async move {
+    let sensor_state = tokio::spawn(async move {
         super::check_sensors_conn(
             db_clone,
             pcap_sensors_clone,
@@ -2243,7 +2258,7 @@ async fn check_sensors_conn_pcap_removes_runtime_on_disconnect() {
             runtime_ingest_sensors_clone,
             rx,
             None,
-            notify_shutdown_clone,
+            sensor_token_clone,
         )
         .await
         .unwrap();
@@ -2289,8 +2304,11 @@ async fn check_sensors_conn_pcap_removes_runtime_on_disconnect() {
             .contains_key(&sensor_name)
     );
 
-    notify_shutdown.notify_one();
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    sensor_token.cancel();
+    drop(tx);
+    with_timeout("sensor-state drain", SHUTDOWN_TIMEOUT, sensor_state)
+        .await
+        .expect("sensor-state task should not panic");
 }
 
 #[tokio::test]
@@ -2299,7 +2317,8 @@ async fn handle_connection_closes_on_handshake_failure() {
     let db_dir = tempfile::tempdir().expect("create ingest temp dir");
     let db =
         Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test database");
-    let (server_addr, notify_shutdown, _server_handle) = spawn_server(db).await;
+    let mut server = spawn_server(db);
+    let server_addr = server.local_addr;
 
     let endpoint = init_client();
     let conn = endpoint
@@ -2322,7 +2341,7 @@ async fn handle_connection_closes_on_handshake_failure() {
     .await; // Waits for connection close
     assert!(matches!(err, quinn::ConnectionError::ApplicationClosed(_)));
     endpoint.wait_idle().await;
-    notify_shutdown.notify_waiters();
+    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -2339,6 +2358,768 @@ async fn send_ack_timestamp_after_finish_fails() {
     // Quic SendStream: "Writing to a stream that has been finished or reset will return an error."
     let res = super::send_ack_timestamp(&mut send, 200).await;
     assert!(matches!(res.unwrap_err(), SendError::WriteError(_)));
+
+    harness.shutdown(b"done").await;
+}
+
+thread_local! {
+    /// Where this thread's log events are collected while a capture is active.
+    static LOG_SINK: RefCell<Option<Arc<StdMutex<Vec<u8>>>>> = const { RefCell::new(None) };
+}
+
+/// Writer the process-wide test subscriber sends every event through. Events
+/// from a thread with no active capture are dropped.
+struct ThreadLocalLogWriter;
+
+impl std::io::Write for ThreadLocalLogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        LOG_SINK.with(|sink| {
+            if let Some(sink) = sink.borrow().as_ref() {
+                sink.lock().expect("log sink lock").extend_from_slice(buf);
+            }
+        });
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Detaches this thread's sink when the capture goes out of scope.
+struct LogCaptureGuard;
+
+impl Drop for LogCaptureGuard {
+    fn drop(&mut self) {
+        LOG_SINK.with(|sink| sink.borrow_mut().take());
+    }
+}
+
+/// Starts collecting this thread's log events.
+///
+/// The subscriber is installed once for the whole test binary rather than per
+/// thread, because callsite interest is cached process-wide the first time an
+/// event is emitted: a parallel test reaching one of these callsites while no
+/// subscriber was installed anywhere would cache it as "never" and leave every
+/// later capture empty. A global subscriber that routes to a thread-local sink
+/// keeps the callsites live while still giving each test its own buffer, and
+/// events from threads that are not capturing are dropped.
+fn capture_logs() -> (Arc<StdMutex<Vec<u8>>>, LogCaptureGuard) {
+    static INSTALL: OnceLock<()> = OnceLock::new();
+    INSTALL.get_or_init(|| {
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(|| ThreadLocalLogWriter)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
+
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    LOG_SINK.with(|sink| *sink.borrow_mut() = Some(Arc::clone(&buf)));
+    (buf, LogCaptureGuard)
+}
+
+fn captured(buf: &Arc<StdMutex<Vec<u8>>>) -> String {
+    String::from_utf8(buf.lock().expect("log sink lock").clone()).expect("utf8 log output")
+}
+
+fn test_log_body() -> Log {
+    Log {
+        kind: String::from("shutdown test log"),
+        log: vec![0; 10],
+    }
+}
+
+/// A cancelled ingest listener stops accepting: a sensor that arrives after
+/// the drain gets no connection at all.
+#[tokio::test]
+async fn cancellation_rejects_new_connections() {
+    init_crypto();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    let mut server = spawn_server(db);
+    let server_addr = server.local_addr;
+
+    server.shutdown().await;
+
+    let endpoint = init_client();
+    let connecting = endpoint
+        .connect(server_addr, test_server_name())
+        .expect("client config should build");
+    match timeout(std::time::Duration::from_secs(2), connecting).await {
+        // Either no answer at all or an outright refusal is fine; what must
+        // not happen is a connection.
+        Err(_) | Ok(Err(_)) => {}
+        Ok(Ok(_conn)) => panic!("ingest accepted a connection after shutdown"),
+    }
+}
+
+/// Cancellation releases a connection parked on `accept_bi`. The client does
+/// nothing to help it along, and no fixed delay is waited out.
+#[tokio::test]
+async fn cancellation_releases_an_idle_connection() {
+    let mut harness = TestHarness::new().await;
+
+    harness.cancel_and_drain().await;
+
+    let reason = with_timeout(
+        "client observes close",
+        SHUTDOWN_TIMEOUT,
+        harness.client.conn.closed(),
+    )
+    .await;
+    assert!(
+        matches!(reason, quinn::ConnectionError::ApplicationClosed(_)),
+        "ingest should close the connection itself, got: {reason:?}"
+    );
+}
+
+/// A sensor that finished the QUIC handshake and then went quiet is parked in
+/// `server_handshake` on the ingest side. It must not hold the drain open.
+#[tokio::test]
+async fn cancellation_releases_a_connection_stalled_before_the_version_handshake() {
+    init_crypto();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    let mut server = spawn_server(db);
+
+    let endpoint = init_client();
+    let conn = with_timeout(
+        "stalled client connect",
+        std::time::Duration::from_secs(2),
+        endpoint
+            .connect(server.local_addr, test_server_name())
+            .expect("client config should build"),
+    )
+    .await
+    .expect("the QUIC handshake should complete");
+    // `client_handshake` is deliberately skipped, so the ingest side stays
+    // parked waiting for a version message that never comes.
+
+    server.shutdown().await;
+    drop(conn);
+}
+
+/// Once ingest has drained, the connection is gone, so the sensor cannot open
+/// another stream on it and nothing it tries to send is stored.
+#[tokio::test]
+async fn cancellation_rejects_new_streams_on_an_existing_connection() {
+    let mut harness = TestHarness::new().await;
+
+    harness.cancel_and_drain().await;
+
+    assert!(
+        harness.client.conn.open_bi().await.is_err(),
+        "ingest admitted a stream after shutdown"
+    );
+    assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS).await;
+}
+
+/// What a handler appended before cancellation survives the shutdown, and by
+/// the time the ingest entry task has returned no ingest task is still holding
+/// the database — the next generation can reopen the same directory, which
+/// RocksDB's file lock would refuse otherwise.
+#[tokio::test]
+async fn appended_events_survive_the_drain_and_the_database_is_released() {
+    init_crypto();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    // A threshold this high keeps the count-triggered ACK and its flush out of
+    // the way, so the only flush left is the one the handler owes on its way
+    // out.
+    let mut server = spawn_server_with(db.clone(), 1024_u16, Some(Arc::new(Notify::new())));
+    let client = TestClient::new(server.local_addr).await;
+    let (mut send, _recv) = client.conn.open_bi().await.expect("failed to open stream");
+
+    send_record(
+        &mut send,
+        RawEventKind::Log,
+        next_timestamp(),
+        test_log_body(),
+    )
+    .await
+    .expect("failed to send log");
+    let stored = wait_for_raw_event(&db, RawEventKind::Log).await;
+
+    // The handler is now parked in `recv_raw` with an un-ACKed event behind
+    // it: cancellation has to flush that event, not drop it.
+    server.shutdown().await;
+
+    client.conn.close(0u32.into(), b"done");
+    client.endpoint.wait_idle().await;
+    drop(db);
+
+    let reopened = Database::open(db_dir.path(), &DbOptions::default())
+        .expect("the next generation should be able to reopen the data directory");
+    assert_eq!(
+        read_raw_event_from_db(&reopened, RawEventKind::Log).as_deref(),
+        Some(stored.as_slice()),
+        "an event appended before cancellation was lost"
+    );
+}
+
+/// Cancellation lands on a handler parked inside `recv_raw` with a frame only
+/// half on the wire. That half frame is what the loss tolerance allows to go:
+/// it was never fully received, so nothing in it is stored and nothing about
+/// it is acknowledged. The batch that completed before it is what the
+/// tolerance keeps, and it is still there once ingest has drained.
+#[tokio::test]
+async fn cancellation_drops_a_half_received_frame_and_keeps_the_completed_batch() {
+    let mut harness = TestHarness::with_ack_transmission(1024_u16).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+
+    send_record_header(&mut send, RawEventKind::Log)
+        .await
+        .expect("failed to send record header");
+    send_events(&mut send, next_timestamp(), test_log_body())
+        .await
+        .expect("failed to send log");
+    // Waiting for the append is what puts the handler back in `recv_raw`: it
+    // could not have stored this batch without having read all of it.
+    let stored = wait_for_raw_event(&harness.db, RawEventKind::Log).await;
+
+    // Announce a frame and then send only part of it. `recv_raw` reads a
+    // length header and then the body it announces, so the handler cannot get
+    // past this until the rest arrives, and the rest never does.
+    let batch = bincode::serialize(&vec![(
+        next_timestamp(),
+        bincode::serialize(&test_log_body()).expect("failed to serialize the log body"),
+    )])
+    .expect("failed to serialize the log batch");
+    let len = u32::try_from(batch.len()).expect("the batch length should fit in a u32");
+    send_bytes(&mut send, &len.to_le_bytes())
+        .await
+        .expect("failed to send the frame length");
+    send_bytes(&mut send, &batch[..batch.len() / 2])
+        .await
+        .expect("failed to send the partial frame");
+
+    // The drain returning at all is the first assertion: a handler stuck
+    // mid-frame has to be released by cancellation, not waited out.
+    harness.cancel_and_drain().await;
+
+    let ack = timeout(SHUTDOWN_TIMEOUT, receive_ack_timestamp(&mut recv)).await;
+    assert!(
+        !matches!(ack, Ok(Ok(_))),
+        "a half-received frame was acknowledged: {ack:?}"
+    );
+    // `read_raw_event_from_db` asserts that the store holds a single event, so
+    // this also pins that nothing was salvaged out of the half frame.
+    assert_eq!(
+        read_raw_event_from_db(&harness.db, RawEventKind::Log).as_deref(),
+        Some(stored.as_slice()),
+        "the batch appended before cancellation was lost"
+    );
+}
+
+/// Builds a client that grants each stream only `window` bytes of receive
+/// window, so a server that writes more than that on one stream blocks until
+/// the client reads — which these tests never do.
+fn init_client_with_stream_window(window: u32) -> Endpoint {
+    let certs = load_test_client_certs();
+    let mut config = config_client(&certs).expect("ingest test client config");
+    let mut transport = quinn::TransportConfig::default();
+    // The connection window is left alone: shrinking it would stall the
+    // version handshake as well, and the point here is one stalled stream.
+    transport.stream_receive_window(quinn::VarInt::from_u32(window));
+    transport.keep_alive_interval(Some(std::time::Duration::from_secs(5)));
+    config.transport_config(Arc::new(transport));
+    let mut endpoint =
+        quinn::Endpoint::client("[::]:0".parse().expect("failed to parse endpoint addr"))
+            .expect("failed to create endpoint");
+    endpoint.set_default_client_config(config);
+    endpoint
+}
+
+fn stored_log_count(db: &Database) -> usize {
+    db.log_store()
+        .expect("open the log store")
+        .iter_forward()
+        .count()
+}
+
+/// Waits until the handler stops appending, and reports where it stopped.
+///
+/// The handler appends a batch and then acknowledges it, so a count that has
+/// climbed above zero and then held still for several polls is a handler
+/// parked in the acknowledgement write rather than one still working through
+/// the events behind it.
+async fn wait_for_append_to_stall(db: &Database) -> usize {
+    const STILL_ROUNDS: usize = 5;
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    let mut last = 0;
+    let mut still = 0;
+    loop {
+        let count = stored_log_count(db);
+        if count > 0 && count == last {
+            still += 1;
+            if still >= STILL_ROUNDS {
+                return count;
+            }
+        } else {
+            still = 0;
+            last = count;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the append count never settled, last seen {count}"
+        );
+        sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// A sensor that stops reading its acknowledgements parks the request handler
+/// in the middle of a write, and the handler's own cancellation arm cannot
+/// reach it there: `select!` is not polling anything while that write is
+/// awaited. What releases it is the connection handler closing the connection
+/// on its way out, so this pins the drain finishing anyway — and everything
+/// appended behind the blocked write still being flushed.
+#[tokio::test]
+async fn cancellation_releases_a_handler_blocked_writing_an_ack() {
+    // Eight bytes per acknowledgement, so this window is out after 32 of
+    // them, and the events below produce four times that many.
+    const STREAM_WINDOW: u32 = 256;
+    const EVENTS: usize = 128;
+
+    init_crypto();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    // One acknowledgement per event, so the window runs out on the events
+    // this test can send without waiting.
+    let mut server = spawn_server_with(db.clone(), 1_u16, Some(Arc::new(Notify::new())));
+
+    let endpoint = init_client_with_stream_window(STREAM_WINDOW);
+    let conn = with_timeout(
+        "stalled-reader connect",
+        std::time::Duration::from_secs(2),
+        endpoint
+            .connect(server.local_addr, test_server_name())
+            .expect("client config should build"),
+    )
+    .await
+    .expect("the QUIC handshake should complete");
+    client_handshake(&conn, PROTOCOL_VERSION)
+        .await
+        .expect("the version handshake should complete");
+
+    // `recv` is held and never read, which is what keeps the window shut.
+    let (mut send, _recv) = conn.open_bi().await.expect("failed to open stream");
+    send_record_header(&mut send, RawEventKind::Log)
+        .await
+        .expect("failed to send record header");
+    // Distinct timestamps, so every event lands under a key of its own and
+    // the row count below is the number appended.
+    for _ in 0..EVENTS {
+        send_events(&mut send, next_timestamp(), test_log_body())
+            .await
+            .expect("failed to send log");
+    }
+
+    let appended = wait_for_append_to_stall(&db).await;
+    assert!(
+        appended < EVENTS,
+        "the acknowledgement window should have run out before the last event, \
+         but all {EVENTS} were appended"
+    );
+
+    // The assertion is `shutdown` returning at all: a handler nothing releases
+    // would hold the drain past `SHUTDOWN_TIMEOUT`.
+    server.shutdown().await;
+
+    conn.close(0u32.into(), b"done");
+    endpoint.wait_idle().await;
+    drop(db);
+
+    let reopened = Database::open(db_dir.path(), &DbOptions::default())
+        .expect("the next generation should be able to reopen the data directory");
+    assert_eq!(
+        stored_log_count(&reopened),
+        appended,
+        "events appended behind the blocked acknowledgement were not flushed"
+    );
+}
+
+/// One request handler driven directly, with the connection under the test's
+/// control rather than a connection handler's.
+///
+/// The entry-task tests above cancel the whole subsystem, and there the
+/// connection handler closes the connection on its way out, so a stream on it
+/// fails its read whether or not the request handler ever looks at its own
+/// token. That hides the handler's cancellation arm behind an I/O error. Here
+/// nothing closes the connection, so the token is the only thing that can
+/// release the handler.
+struct DirectRequestHandler {
+    _server_endpoint: Endpoint,
+    _server_conn: Connection,
+    _client_endpoint: Endpoint,
+    client_conn: Connection,
+    send: quinn::SendStream,
+    recv: quinn::RecvStream,
+    token: CancellationToken,
+    handle: JoinHandle<anyhow::Result<()>>,
+}
+
+/// Connects a client to a bare ingest listener and hands the server side of
+/// one `Log` stream to [`super::handle_request`].
+async fn spawn_direct_request_handler(
+    db: Database,
+    ack_transmission_cnt: u16,
+) -> DirectRequestHandler {
+    init_crypto();
+    let bound = server(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
+        .bind()
+        .expect("bind ingest test server");
+    let server_addr = bound.local_addr();
+    let server_endpoint = bound.endpoint;
+
+    // Neither side of a QUIC handshake finishes without the other being
+    // polled, and there is no accept loop here to do it, so both run together.
+    let client_endpoint = init_client();
+    let connecting = client_endpoint
+        .connect(server_addr, test_server_name())
+        .expect("client config should build");
+    let accepting = async {
+        let incoming = server_endpoint
+            .accept()
+            .await
+            .expect("the listener should offer a connection");
+        incoming.into_future().await
+    };
+    let (client_conn, server_conn) = with_timeout(
+        "direct handshake",
+        std::time::Duration::from_secs(2),
+        async { tokio::join!(connecting, accepting) },
+    )
+    .await;
+    let client_conn = client_conn.expect("the client side should finish the handshake");
+    let server_conn = server_conn.expect("the server side should finish the handshake");
+
+    // The record header is both what `handle_request` reads first and what
+    // makes the freshly opened stream visible to `accept_bi`.
+    let (mut send, recv) = client_conn.open_bi().await.expect("failed to open stream");
+    send_record_header(&mut send, RawEventKind::Log)
+        .await
+        .expect("failed to send record header");
+    let server_stream = with_timeout(
+        "direct server accept_bi",
+        std::time::Duration::from_secs(2),
+        server_conn.accept_bi(),
+    )
+    .await
+    .expect("the server side should see the stream");
+
+    let token = CancellationToken::new();
+    let handle = tokio::spawn(super::handle_request(
+        test_sensor_name(),
+        test_host_fqdn(),
+        server_stream,
+        db,
+        new_stream_direct_channels(),
+        token.clone(),
+        ack_transmission_cnt,
+    ));
+
+    DirectRequestHandler {
+        _server_endpoint: server_endpoint,
+        _server_conn: server_conn,
+        _client_endpoint: client_endpoint,
+        client_conn,
+        send,
+        recv,
+        token,
+        handle,
+    }
+}
+
+/// Cancelling a request handler that is parked inside `recv_raw` releases it
+/// on its own, with the connection still up and the stream still readable. It
+/// returns cleanly, it acknowledges nothing about the frame it abandoned, and
+/// what it appended before is still there.
+#[tokio::test]
+async fn cancelling_a_request_handler_releases_it_mid_frame() {
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    // A threshold out of reach keeps the count-triggered ACK away, so any
+    // acknowledgement the client sees is one cancellation invented.
+    let mut handler = spawn_direct_request_handler(db.clone(), 1024_u16).await;
+
+    send_events(&mut handler.send, next_timestamp(), test_log_body())
+        .await
+        .expect("failed to send log");
+    let stored = wait_for_raw_event(&db, RawEventKind::Log).await;
+
+    // Announce a frame and send only part of it, so the handler is inside
+    // `recv_raw` waiting for a body that never finishes arriving.
+    let batch = bincode::serialize(&vec![(
+        next_timestamp(),
+        bincode::serialize(&test_log_body()).expect("failed to serialize the log body"),
+    )])
+    .expect("failed to serialize the log batch");
+    let len = u32::try_from(batch.len()).expect("the batch length should fit in a u32");
+    send_bytes(&mut handler.send, &len.to_le_bytes())
+        .await
+        .expect("failed to send the frame length");
+    send_bytes(&mut handler.send, &batch[..batch.len() / 2])
+        .await
+        .expect("failed to send the partial frame");
+
+    handler.token.cancel();
+
+    let outcome = with_timeout("request handler returns", SHUTDOWN_TIMEOUT, handler.handle)
+        .await
+        .expect("the request handler should not panic");
+    assert!(
+        outcome.is_ok(),
+        "a cancelled request handler should return cleanly, got: {outcome:?}"
+    );
+    assert!(
+        handler.client_conn.close_reason().is_none(),
+        "the token alone should have released the handler, but the connection went away"
+    );
+
+    let ack = timeout(
+        std::time::Duration::from_millis(200),
+        receive_ack_timestamp(&mut handler.recv),
+    )
+    .await;
+    assert!(
+        !matches!(ack, Ok(Ok(_))),
+        "a cancelled handler acknowledged a frame it never finished reading: {ack:?}"
+    );
+    assert_eq!(
+        read_raw_event_from_db(&db, RawEventKind::Log).as_deref(),
+        Some(stored.as_slice()),
+        "the batch appended before cancellation was lost"
+    );
+}
+
+/// The periodic ACK used to be its own task, ticking regardless of what the
+/// receive loop was doing. It is now an arm of that loop's `select!`, so this
+/// pins the behaviour the rework had to preserve: a batch too small to trip
+/// the count threshold is still acknowledged once the interval deadline
+/// passes, and the acknowledgement carries the last timestamp appended.
+///
+/// Time is paused rather than waited out, so the deadline arrives without the
+/// test taking `ACK_INTERVAL_TIME` to run. The client's keep-alive is shorter
+/// than the idle timeout, so advancing in steps below it keeps the connection
+/// up across the jump instead of letting one side time the other out.
+#[tokio::test]
+async fn ack_interval_acknowledges_a_batch_below_the_count_threshold() {
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    // Out of reach for the single event below, so the interval is the only
+    // thing that can produce an acknowledgement here.
+    let mut handler = spawn_direct_request_handler(db.clone(), 1024_u16).await;
+
+    let timestamp = next_timestamp();
+    send_events(&mut handler.send, timestamp, test_log_body())
+        .await
+        .expect("failed to send log");
+    // Waiting for the append puts the handler back on `recv_frame` with no
+    // frame waiting, which is the only state the interval arm can win from.
+    wait_for_raw_event(&db, RawEventKind::Log).await;
+
+    tokio::time::pause();
+    // One tick was consumed by the `reset` at the top of `handle_data`, so the
+    // deadline is a full interval out from when the handler started.
+    for _ in 0..=super::ACK_INTERVAL_TIME {
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+    }
+
+    let acked = with_timeout(
+        "periodic ack",
+        std::time::Duration::from_secs(2),
+        receive_ack_timestamp(&mut handler.recv),
+    )
+    .await
+    .expect("the interval should have acknowledged the batch");
+    assert_eq!(
+        acked, timestamp,
+        "the periodic ack should carry the last timestamp appended"
+    );
+
+    // The arm belongs to the handler, so releasing the handler stops it. A
+    // ticker outliving the loop would keep acknowledging past this point.
+    handler.token.cancel();
+    let outcome = with_timeout("request handler returns", SHUTDOWN_TIMEOUT, handler.handle)
+        .await
+        .expect("the request handler should not panic");
+    assert!(
+        outcome.is_ok(),
+        "a cancelled request handler should return cleanly, got: {outcome:?}"
+    );
+    for _ in 0..=super::ACK_INTERVAL_TIME {
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+    }
+    let ack = timeout(
+        std::time::Duration::from_millis(200),
+        receive_ack_timestamp(&mut handler.recv),
+    )
+    .await;
+    assert!(
+        !matches!(ack, Ok(Ok(_))),
+        "the periodic ack outlived the handler it belongs to: {ack:?}"
+    );
+}
+
+/// The disconnect a connection handler reports while it is cleaning up is
+/// admitted after cancellation, and the sensor-state task still has to apply
+/// it before it returns. So once ingest has drained, the runtime sensor map no
+/// longer carries the sensor that just went away.
+#[tokio::test]
+async fn sensor_state_updates_admitted_during_shutdown_are_drained() {
+    init_crypto();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    let mut server = spawn_server_with(db.clone(), 1024_u16, Some(Arc::new(Notify::new())));
+    let client = TestClient::new(server.local_addr).await;
+    let sensor = test_sensor_name();
+
+    wait_until(
+        "sensor connect recorded",
+        std::time::Duration::from_secs(2),
+        || async {
+            server
+                .runtime_ingest_sensors
+                .read()
+                .await
+                .contains_key(&sensor)
+        },
+    )
+    .await;
+
+    server.shutdown().await;
+
+    assert!(
+        !server
+            .runtime_ingest_sensors
+            .read()
+            .await
+            .contains_key(&sensor),
+        "the disconnect admitted during shutdown was not drained"
+    );
+    assert!(
+        server.ingest_sensors.read().await.contains(&sensor),
+        "the sensor should stay in the known-sensor set across a disconnect"
+    );
+    assert!(
+        server.pcap_sensors.read().await.is_empty(),
+        "a non-pcap sensor should leave no connection behind"
+    );
+    drop(client);
+}
+
+/// Shutdown puts nothing on the wire that the batching rules would not have
+/// sent. With the count threshold out of reach and the 60-second interval
+/// never coming due, any timestamp the client sees would have to be an ACK
+/// shutdown invented.
+#[tokio::test]
+async fn shutdown_sends_no_extra_ack() {
+    let mut harness = TestHarness::with_ack_transmission(1024_u16).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+
+    send_record(
+        &mut send,
+        RawEventKind::Log,
+        next_timestamp(),
+        test_log_body(),
+    )
+    .await
+    .expect("failed to send log");
+    wait_for_raw_event(&harness.db, RawEventKind::Log).await;
+
+    assert!(
+        timeout(
+            std::time::Duration::from_millis(200),
+            receive_ack_timestamp(&mut recv),
+        )
+        .await
+        .is_err(),
+        "an ACK arrived before the batching rules called for one"
+    );
+
+    harness.cancel_and_drain().await;
+
+    // The connection is closed by now, so the read fails or times out; either
+    // way no acknowledgement was produced.
+    let ack = timeout(SHUTDOWN_TIMEOUT, receive_ack_timestamp(&mut recv)).await;
+    assert!(
+        !matches!(ack, Ok(Ok(_))),
+        "shutdown sent an extra ack: {ack:?}"
+    );
+}
+
+/// ACK batching is unchanged by the move into the request handler's own loop:
+/// an ACK still lands on every `ack_transmission` events, carrying the last
+/// timestamp of that batch, and the counter still restarts afterwards.
+#[tokio::test]
+async fn ack_batching_acks_once_per_threshold_batch() {
+    let harness = TestHarness::with_ack_transmission(2_u16).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+
+    send_record_header(&mut send, RawEventKind::Log)
+        .await
+        .expect("failed to send record header");
+    let base = next_timestamp();
+    for offset in 0..4 {
+        send_events(&mut send, base + offset, test_log_body())
+            .await
+            .expect("failed to send log");
+    }
+
+    let first = with_timeout(
+        "first ack",
+        std::time::Duration::from_secs(2),
+        receive_ack_timestamp(&mut recv),
+    )
+    .await
+    .expect("failed to receive the first ack");
+    let second = with_timeout(
+        "second ack",
+        std::time::Duration::from_secs(2),
+        receive_ack_timestamp(&mut recv),
+    )
+    .await
+    .expect("failed to receive the second ack");
+
+    assert_eq!(first, base + 1);
+    assert_eq!(second, base + 3);
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+/// A stream that fails names itself: the log line carries the sensor and the
+/// QUIC stream id, so a failure can be tied back to the stream it came from.
+#[tokio::test]
+async fn stream_error_log_names_the_failing_stream() {
+    let (logs, _guard) = capture_logs();
+    let harness = TestHarness::new().await;
+    let (mut send, _recv) = harness.open_bi().await;
+
+    send_record_header(&mut send, RawEventKind::Log)
+        .await
+        .expect("failed to send record header");
+    send_raw(&mut send, b"not a bincode batch")
+        .await
+        .expect("failed to send body");
+    send.finish().expect("failed to shutdown stream");
+
+    let expected = format!("ingest-stream-{}-", test_sensor_name());
+    wait_until("stream error logged", SHUTDOWN_TIMEOUT, || async {
+        captured(&logs).contains(&expected)
+    })
+    .await;
+
+    let output = captured(&logs);
+    assert!(
+        output.contains("Failed to deserialize received message"),
+        "the domain error should be logged, got: {output}"
+    );
 
     harness.shutdown(b"done").await;
 }

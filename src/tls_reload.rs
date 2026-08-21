@@ -876,7 +876,7 @@ mod listener_reload_contract_tests {
             generation: 0,
         }));
 
-        let notify_shutdown = Arc::new(Notify::new());
+        let ingest_token = tokio_util::sync::CancellationToken::new();
         let pcap_sensors = new_pcap_sensors();
         let ingest_sensors = new_ingest_sensors(&db);
         let runtime_ingest_sensors = new_runtime_ingest_sensors();
@@ -884,7 +884,7 @@ mod listener_reload_contract_tests {
 
         let server_task = {
             let db = db.clone();
-            let shutdown = notify_shutdown.clone();
+            let token = ingest_token.clone();
             tokio::spawn(async move {
                 server
                     .run(
@@ -893,12 +893,13 @@ mod listener_reload_contract_tests {
                         ingest_sensors,
                         runtime_ingest_sensors,
                         stream_direct_channels,
-                        shutdown,
                         Some(Arc::new(Notify::new())),
                         1024,
                         tls_watch,
+                        token,
                     )
-                    .await;
+                    .await
+                    .expect("ingest server should shut down cleanly");
             })
         };
 
@@ -966,8 +967,11 @@ mod listener_reload_contract_tests {
 
         pre_reload_conn.close(0u32.into(), b"done");
         post_reload_conn.close(0u32.into(), b"done");
-        notify_shutdown.notify_waiters();
-        let _ = timeout(Duration::from_secs(3), server_task).await;
+        ingest_token.cancel();
+        timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("ingest server should drain")
+            .expect("ingest server task should not panic");
     }
 
     /// End-to-end counterpart of the ingest test for the publish listener.
@@ -1163,7 +1167,7 @@ mod listener_reload_contract_tests {
         let server_addr = server.local_addr();
         assert_ne!(server_addr.port(), 0);
 
-        let notify_shutdown = Arc::new(Notify::new());
+        let ingest_token = tokio_util::sync::CancellationToken::new();
         let pcap_sensors = new_pcap_sensors();
         let ingest_sensors = new_ingest_sensors(&db);
         let runtime_ingest_sensors = new_runtime_ingest_sensors();
@@ -1171,7 +1175,7 @@ mod listener_reload_contract_tests {
 
         let server_task = {
             let db = db.clone();
-            let shutdown = notify_shutdown.clone();
+            let token = ingest_token.clone();
             tokio::spawn(async move {
                 server
                     .run(
@@ -1180,12 +1184,13 @@ mod listener_reload_contract_tests {
                         ingest_sensors,
                         runtime_ingest_sensors,
                         stream_direct_channels,
-                        shutdown,
                         Some(Arc::new(Notify::new())),
                         1024,
                         tls_watch,
+                        token,
                     )
-                    .await;
+                    .await
+                    .expect("ingest server should shut down cleanly");
             })
         };
 
@@ -1258,8 +1263,11 @@ mod listener_reload_contract_tests {
         );
 
         pre_reload_conn.close(0u32.into(), b"done");
-        notify_shutdown.notify_waiters();
-        let _ = timeout(Duration::from_secs(3), server_task).await;
+        ingest_token.cancel();
+        timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("ingest server should drain")
+            .expect("ingest server task should not panic");
     }
 
     /// Publish counterpart of
