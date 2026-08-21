@@ -309,12 +309,16 @@ async fn run_generation(
     let notify_shutdown = Arc::new(Notify::new());
     let notify_reboot = Arc::new(Notify::new());
     let notify_power_off = Arc::new(Notify::new());
-    let mut notify_sensor_change = None;
 
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&database);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let stream_direct_channels = new_stream_direct_channels();
+    let notify_sensor_change = settings
+        .config
+        .peer_srv_addr
+        .is_some()
+        .then(|| Arc::new(Notify::new()));
     let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
     let ack_transmission_cnt = settings.config.visible.ack_transmission;
 
@@ -334,6 +338,12 @@ async fn run_generation(
         database.clone(),
         pcap_sensors.clone(),
         ingest_sensors.clone(),
+        #[cfg(feature = "bootroot")]
+        runtime_ingest_sensors.clone(),
+        #[cfg(feature = "bootroot")]
+        stream_direct_channels.clone(),
+        #[cfg(feature = "bootroot")]
+        notify_sensor_change.clone(),
         peers.clone(),
         process.request_client_pool.clone(),
         settings.config.visible.export_dir.clone(),
@@ -377,7 +387,9 @@ async fn run_generation(
     let peer_task_handle: Option<JoinHandle<Result<()>>>;
     if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
         let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
-        let notify_sensor = Arc::new(Notify::new());
+        let notify_sensor = notify_sensor_change
+            .clone()
+            .expect("peer notify exists when peer server is configured");
         peer_task_handle = Some(task::spawn({
             let ingest_sensors = ingest_sensors.clone();
             let peers = peers.clone();
@@ -404,7 +416,6 @@ async fn run_generation(
                 result
             }
         }));
-        notify_sensor_change = Some(notify_sensor);
     } else {
         peer_task_handle = None;
     }

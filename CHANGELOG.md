@@ -14,8 +14,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and sensor metadata, and reports accepted, in-progress, already-completed,
   and no-local-target results. Jobs are persisted in a RocksDB column family
   with `InProgress`, `Succeeded`, and `Failed` states; failed jobs can be
-  retried using their originally stored targets. Cluster-wide aggregation is
-  not yet included.
+  retried using their originally stored targets. After RocksDB deletion
+  succeeds, Giganto removes the target services from its in-memory ingest,
+  runtime-ingest, packet-capture, and direct-stream routing state and, when
+  configured, propagates the updated sensor list to connected peers.
+  Cluster-wide aggregation is not yet included.
 - Customer deletion now runs on Tokio's blocking pool with batched RocksDB
   range deletes. Worker failures, including task panics, are recorded as
   failed jobs, and terminal status writes are retried without repeating data

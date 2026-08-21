@@ -426,20 +426,25 @@ async fn process_pcap_extract_filters(
                         continue;
                     }
                 };
-                if let Ok((mut _peer_send, mut peer_recv)) = request_range_data_to_peer(
-                    peer_addr,
-                    peer_name.as_str(),
-                    &tls_watch,
-                    MessageCode::Pcap,
-                    filter,
-                )
-                .await
+                if let Ok((endpoint, connection, mut peer_send, mut peer_recv)) =
+                    request_range_data_to_peer(
+                        peer_addr,
+                        peer_name.as_str(),
+                        &tls_watch,
+                        MessageCode::Pcap,
+                        filter,
+                    )
+                    .await
                 {
                     if let Err(e) = recv_ack_response(&mut peer_recv).await {
                         error!(
                             "Failed to receive ack response from peer. addr: {peer_addr} name: {peer_name} {e}"
                         );
                     }
+                    peer_send.finish().ok();
+                    drop(peer_recv);
+                    connection.close(0_u32.into(), &[]);
+                    endpoint.wait_idle().await;
                 } else {
                     error!(
                         "Failed to connect to peer's publish module. addr: {peer_addr} name: {peer_name}"
@@ -1830,7 +1835,7 @@ where
     I: DeserializeOwned + Serialize,
 {
     let peer_name = peer_name(peer_idents, &peer_addr).await?;
-    let (_peer_send, mut peer_recv) = request_range_data_to_peer(
+    let (endpoint, connection, mut peer_send, mut peer_recv) = request_range_data_to_peer(
         peer_addr,
         peer_name.as_str(),
         tls_watch,
@@ -1849,6 +1854,10 @@ where
             break;
         }
     }
+    peer_send.finish().ok();
+    drop(peer_recv);
+    connection.close(0_u32.into(), &[]);
+    endpoint.wait_idle().await;
     Ok(())
 }
 
@@ -1858,16 +1867,16 @@ async fn request_range_data_to_peer<T>(
     tls_watch: &TlsWatch,
     message_code: MessageCode,
     request_data: T,
-) -> Result<(SendStream, RecvStream)>
+) -> Result<(Endpoint, Connection, SendStream, RecvStream)>
 where
     T: Serialize,
 {
-    let connection = connect(peer_addr, peer_name, tls_watch).await?;
+    let (endpoint, connection) = connect(peer_addr, peer_name, tls_watch).await?;
 
     let (mut send, recv) = connection.open_bi().await?;
     send_range_data_request(&mut send, message_code, request_data).await?;
 
-    Ok((send, recv))
+    Ok((endpoint, connection, send, recv))
 }
 
 async fn process_raw_events<T, I>(
@@ -1969,7 +1978,7 @@ where
         if let Some(peer_addr) = peer_in_charge_publish_addr(peers.clone(), &sensor).await {
             let peer_name = peer_name(peer_idents.clone(), &peer_addr).await?;
 
-            let connection = connect(peer_addr, peer_name.as_str(), tls_watch).await?;
+            let (endpoint, connection) = connect(peer_addr, peer_name.as_str(), tls_watch).await?;
             let (mut peer_send, mut peer_recv) = connection.open_bi().await?;
 
             send_range_data_request(
@@ -1989,6 +1998,10 @@ where
                     .map_err(PublishError::SerialDeserialFailure)?;
                 send_raw(send, &send_buf).await?;
             }
+            peer_send.finish().ok();
+            drop(peer_recv);
+            connection.close(0_u32.into(), &[]);
+            endpoint.wait_idle().await;
         }
     }
 
@@ -1999,7 +2012,7 @@ async fn connect(
     server_addr: SocketAddr,
     server_name: &str,
     tls_watch: &TlsWatch,
-) -> Result<Connection> {
+) -> Result<(Endpoint, Connection)> {
     let client_addr = if server_addr.is_ipv6() {
         IpAddr::V6(Ipv6Addr::UNSPECIFIED)
     } else {
@@ -2010,7 +2023,7 @@ async fn connect(
     let conn = connect_repeatedly(&endpoint, server_addr, server_name, tls_watch).await?;
 
     client_handshake(&conn, env!("CARGO_PKG_VERSION")).await?;
-    Ok(conn)
+    Ok((endpoint, conn))
 }
 
 async fn connect_repeatedly(

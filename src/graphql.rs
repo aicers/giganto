@@ -33,6 +33,8 @@ use tempfile::NamedTempFile;
 use tokio::sync::{Notify, mpsc::Sender};
 use tracing::error;
 
+#[cfg(feature = "bootroot")]
+use crate::comm::{RunTimeIngestSensors, StreamDirectChannels};
 use crate::datetime::DateTime;
 #[cfg(feature = "cluster")]
 pub(crate) use crate::graphql::client::cluster::{
@@ -196,6 +198,9 @@ pub fn schema(
     database: Database,
     pcap_sensors: PcapSensors,
     ingest_sensors: IngestSensors,
+    #[cfg(feature = "bootroot")] runtime_ingest_sensors: RunTimeIngestSensors,
+    #[cfg(feature = "bootroot")] stream_direct_channels: StreamDirectChannels,
+    #[cfg(feature = "bootroot")] peer_notify: Option<Arc<Notify>>,
     peers: Peers,
     request_client_pool: reqwest::Client,
     export_path: PathBuf,
@@ -218,6 +223,16 @@ pub fn schema(
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
         .data(settings);
+    #[cfg(feature = "bootroot")]
+    let schema = schema
+        .data(runtime_ingest_sensors)
+        .data(stream_direct_channels);
+    #[cfg(feature = "bootroot")]
+    let schema = if let Some(peer_notify) = peer_notify {
+        schema.data(peer_notify)
+    } else {
+        schema
+    };
     #[cfg(feature = "bootroot")]
     let schema = schema.data(Arc::new(
         customer_deletion::CustomerDeletionRequestManager::default(),
@@ -1015,6 +1030,11 @@ mod tests {
         new_pcap_sensors,
         peer::{PeerInfo, Peers},
     };
+    #[cfg(feature = "bootroot")]
+    use crate::comm::{
+        PcapSensors, RunTimeIngestSensors, StreamDirectChannels, new_runtime_ingest_sensors,
+        new_stream_direct_channels,
+    };
     use crate::datetime::DateTime;
     use crate::graphql::{IpRange, Mutation, PortRange, Query};
     use crate::settings::{ConfigVisible, Settings};
@@ -1030,21 +1050,40 @@ mod tests {
         pub export_dir: tempfile::TempDir, // keep export directory alive for tests
         pub db: Database,
         pub schema: Schema,
+        #[cfg(feature = "bootroot")]
+        pub(super) ingest_sensors: IngestSensors,
+        #[cfg(feature = "bootroot")]
+        pub(super) runtime_ingest_sensors: RunTimeIngestSensors,
+        #[cfg(feature = "bootroot")]
+        pub(super) pcap_sensors: PcapSensors,
+        #[cfg(feature = "bootroot")]
+        pub(super) stream_direct_channels: StreamDirectChannels,
     }
 
     impl TestSchema {
         fn setup(ingest_sensors: IngestSensors, peers: Peers) -> Self {
-            Self::setup_with_node_name(ingest_sensors, peers, "giganto1")
+            Self::setup_with_node_name(
+                ingest_sensors,
+                peers,
+                "giganto1",
+                #[cfg(feature = "bootroot")]
+                None,
+            )
         }
 
         fn setup_with_node_name(
             ingest_sensors: IngestSensors,
             peers: Peers,
             node_name: &str,
+            #[cfg(feature = "bootroot")] peer_notify: Option<Arc<Notify>>,
         ) -> Self {
             let db_dir = tempfile::tempdir().unwrap();
             let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
             let pcap_sensors = new_pcap_sensors();
+            #[cfg(feature = "bootroot")]
+            let runtime_ingest_sensors = new_runtime_ingest_sensors();
+            #[cfg(feature = "bootroot")]
+            let stream_direct_channels = new_stream_direct_channels();
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
             let (reload_tx, _) = tokio::sync::mpsc::channel::<ConfigVisible>(1);
@@ -1055,8 +1094,20 @@ mod tests {
             let schema = schema(
                 NodeName(node_name.to_string()),
                 db.clone(),
+                #[cfg(feature = "bootroot")]
+                pcap_sensors.clone(),
+                #[cfg(not(feature = "bootroot"))]
                 pcap_sensors,
+                #[cfg(feature = "bootroot")]
+                ingest_sensors.clone(),
+                #[cfg(not(feature = "bootroot"))]
                 ingest_sensors,
+                #[cfg(feature = "bootroot")]
+                runtime_ingest_sensors.clone(),
+                #[cfg(feature = "bootroot")]
+                stream_direct_channels.clone(),
+                #[cfg(feature = "bootroot")]
+                peer_notify,
                 peers,
                 request_client_pool,
                 export_dir.path().to_path_buf(),
@@ -1072,6 +1123,14 @@ mod tests {
                 export_dir,
                 db,
                 schema,
+                #[cfg(feature = "bootroot")]
+                ingest_sensors,
+                #[cfg(feature = "bootroot")]
+                runtime_ingest_sensors,
+                #[cfg(feature = "bootroot")]
+                pcap_sensors,
+                #[cfg(feature = "bootroot")]
+                stream_direct_channels,
             }
         }
 
@@ -1097,19 +1156,35 @@ mod tests {
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup_with_node_name(ingest_sensors, peers, node_name)
+            Self::setup_with_node_name(ingest_sensors, peers, node_name, None)
         }
 
         #[cfg(feature = "bootroot")]
         pub(super) fn new_with_ingest_sensors(sensors: &[&str]) -> Self {
+            Self::new_with_ingest_sensors_and_peer_notify(sensors, None)
+        }
+
+        #[cfg(feature = "bootroot")]
+        pub(super) fn new_with_ingest_sensors_and_peer_notify(
+            sensors: &[&str],
+            peer_notify: Option<Arc<Notify>>,
+        ) -> Self {
             let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
                 sensors
                     .iter()
                     .map(|sensor| (*sensor).to_string())
                     .collect::<HashSet<String>>(),
             ));
+            Self::new_with_shared_ingest_sensors_and_peer_notify(ingest_sensors, peer_notify)
+        }
+
+        #[cfg(feature = "bootroot")]
+        pub(super) fn new_with_shared_ingest_sensors_and_peer_notify(
+            ingest_sensors: IngestSensors,
+            peer_notify: Option<Arc<Notify>>,
+        ) -> Self {
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-            Self::setup(ingest_sensors, peers)
+            Self::setup_with_node_name(ingest_sensors, peers, "giganto1", peer_notify)
         }
 
         pub fn new_with_graphql_peer(port: u16) -> Self {

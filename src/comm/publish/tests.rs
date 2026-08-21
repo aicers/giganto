@@ -5072,6 +5072,7 @@ async fn request_raw_events_periodic_time_series() {
 }
 
 #[tokio::test]
+#[serial_test::serial(publish_cluster)]
 async fn request_range_data_with_network_kinds_giganto_cluster() {
     const SENSOR: &str = "ingest src 2";
 
@@ -5080,6 +5081,7 @@ async fn request_range_data_with_network_kinds_giganto_cluster() {
 }
 
 #[tokio::test]
+#[serial_test::serial(publish_cluster)]
 async fn request_range_data_with_periodic_time_series_giganto_cluster() {
     const SAMPLING_POLICY_ID_AS_SENSOR: &str = "ingest src 2";
 
@@ -5090,6 +5092,7 @@ async fn request_range_data_with_periodic_time_series_giganto_cluster() {
 }
 
 #[tokio::test]
+#[serial_test::serial(publish_cluster)]
 async fn request_raw_events_giganto_cluster() {
     const SENSOR: &str = "src 2";
 
@@ -6193,9 +6196,10 @@ async fn connect_supports_ipv6() {
     });
 
     let tls_watch = build_test_tls_watch(&certs);
-    let connection = super::connect(server_addr, NODE1.server_name(), &tls_watch)
-        .await
-        .expect("ipv6 connect failed");
+    let (client_endpoint, connection) =
+        super::connect(server_addr, NODE1.server_name(), &tls_watch)
+            .await
+            .expect("ipv6 connect failed");
     let remote_addr = connection.remote_address();
     assert!(remote_addr.ip().is_ipv6(), "remote address is not ipv6");
     assert_eq!(remote_addr.ip(), server_addr.ip(), "remote ip mismatch");
@@ -6209,6 +6213,7 @@ async fn connect_supports_ipv6() {
         .expect("handshake timeout")
         .expect("handshake signal missing");
     connection.close(0u32.into(), b"done");
+    client_endpoint.wait_idle().await;
 
     let _ = server_task.await;
 }
@@ -6390,7 +6395,7 @@ mod tls_reload_connect {
         let initial = Arc::new(loaded);
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
-        let conn1 = connect(server_addr, TEST_SERVER_NAME, &watch)
+        let (endpoint1, conn1) = connect(server_addr, TEST_SERVER_NAME, &watch)
             .await
             .expect("first connect");
         let leaf_chain_1 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
@@ -6398,6 +6403,7 @@ mod tls_reload_connect {
             .expect("first cert timeout")
             .expect("first cert missing");
         conn1.close(0u32.into(), b"done");
+        endpoint1.wait_idle().await;
 
         // Rotate the leaf on disk and trigger a reload.
         let (new_cert_pem, new_key_pem) = sign_leaf(
@@ -6412,7 +6418,7 @@ mod tls_reload_connect {
             .expect("rewrite client key");
         handle.reload();
 
-        let conn2 = connect(server_addr, TEST_SERVER_NAME, &watch)
+        let (endpoint2, conn2) = connect(server_addr, TEST_SERVER_NAME, &watch)
             .await
             .expect("second connect after reload");
         let leaf_chain_2 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
@@ -6420,6 +6426,7 @@ mod tls_reload_connect {
             .expect("second cert timeout")
             .expect("second cert missing");
         conn2.close(0u32.into(), b"done");
+        endpoint2.wait_idle().await;
 
         assert_ne!(
             leaf_chain_1[0], leaf_chain_2[0],
@@ -6441,7 +6448,7 @@ mod tls_reload_connect {
         let initial = Arc::new(loaded);
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
-        let conn = connect(server_addr, TEST_SERVER_NAME, &watch)
+        let (endpoint, conn) = connect(server_addr, TEST_SERVER_NAME, &watch)
             .await
             .expect("initial connect");
 
@@ -6468,6 +6475,7 @@ mod tls_reload_connect {
         );
 
         conn.close(0u32.into(), b"done");
+        endpoint.wait_idle().await;
         server_task.abort();
     }
 
@@ -6496,7 +6504,7 @@ mod tls_reload_connect {
 
         // A subsequent connect (e.g. a retry after the reload failure) must
         // still succeed using the preserved material.
-        let conn = connect(server_addr, TEST_SERVER_NAME, &watch)
+        let (endpoint, conn) = connect(server_addr, TEST_SERVER_NAME, &watch)
             .await
             .expect("connect after failed reload should succeed");
         let leaf_chain = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
@@ -6508,6 +6516,7 @@ mod tls_reload_connect {
             "preserved material should still present a leaf certificate",
         );
         conn.close(0u32.into(), b"done");
+        endpoint.wait_idle().await;
 
         // Repair on-disk material and reload; subsequent connect succeeds with refreshed material.
         let (new_cert_pem, new_key_pem) = sign_leaf(
@@ -6522,7 +6531,7 @@ mod tls_reload_connect {
             .expect("rewrite client key");
         handle.reload();
 
-        let conn2 = connect(server_addr, TEST_SERVER_NAME, &watch)
+        let (endpoint2, conn2) = connect(server_addr, TEST_SERVER_NAME, &watch)
             .await
             .expect("connect after successful recovery");
         let leaf_chain_2 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
@@ -6534,6 +6543,7 @@ mod tls_reload_connect {
             "after recovery reload, new leaf certificate should be presented",
         );
         conn2.close(0u32.into(), b"done");
+        endpoint2.wait_idle().await;
 
         server_task.abort();
     }
@@ -6615,7 +6625,7 @@ mod tls_reload_connect {
         // The in-progress retry loop must observe the reload on its next
         // attempt and succeed. Back-off can reach a few seconds by this
         // point, so allow a generous timeout.
-        let conn = tokio::time::timeout(StdDuration::from_secs(15), connect_task)
+        let (endpoint, conn) = tokio::time::timeout(StdDuration::from_secs(15), connect_task)
             .await
             .expect("connect did not complete after mid-retry reload")
             .expect("connect task panicked")
@@ -6633,6 +6643,7 @@ mod tls_reload_connect {
         );
 
         conn.close(0u32.into(), b"done");
+        endpoint.wait_idle().await;
         server_task.abort();
     }
 }

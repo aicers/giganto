@@ -8,12 +8,15 @@ use async_graphql::{
     registry::{Deprecation, MetaEnumValue, MetaType, MetaTypeId, Registry},
     resolver_utils::{EnumItem, EnumType},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tracing::{error, info};
 
 use super::StringNumberU32;
 use crate::{
-    comm::IngestSensors,
+    comm::{
+        IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
+        stream_channel_key::StreamChannelKey,
+    },
     datetime::DateTime,
     storage::{CustomerDataDeletion, CustomerDataDeletionStatus, Database},
 };
@@ -212,7 +215,11 @@ impl CustomerDeletionMutation {
     ) -> Result<CustomerDataDeletionRequestStatus> {
         let provided_targets = validate_service_fqdn_list(service_fqdn_list)?;
         let db = ctx.data::<Database>()?.clone();
-        let ingest_sensors = ctx.data::<IngestSensors>()?;
+        let ingest_sensors = ctx.data::<IngestSensors>()?.clone();
+        let runtime_ingest_sensors = ctx.data::<RunTimeIngestSensors>()?.clone();
+        let pcap_sensors = ctx.data::<PcapSensors>()?.clone();
+        let stream_direct_channels = ctx.data::<StreamDirectChannels>()?.clone();
+        let peer_notify = ctx.data_opt::<Arc<Notify>>().cloned();
         let manager = ctx.data::<Arc<CustomerDeletionRequestManager>>()?;
         let _request_guard = manager.request_lock.lock().await;
 
@@ -268,7 +275,16 @@ impl CustomerDeletionMutation {
             store.create(customer_id.0, &in_progress)?;
         }
 
-        start_customer_deletion_worker(db, customer_id.0, in_progress.service_fqdn_list);
+        start_customer_deletion_worker(
+            db,
+            customer_id.0,
+            in_progress.service_fqdn_list,
+            ingest_sensors,
+            runtime_ingest_sensors,
+            pcap_sensors,
+            stream_direct_channels,
+            peer_notify,
+        );
         Ok(CustomerDataDeletionRequestStatus::Accepted)
     }
 }
@@ -334,13 +350,87 @@ fn delete_customer_data_with(
     Ok(())
 }
 
-fn start_customer_deletion_worker(db: Database, customer_id: u32, service_fqdn_list: Vec<String>) {
+#[allow(clippy::too_many_arguments)]
+fn start_customer_deletion_worker(
+    db: Database,
+    customer_id: u32,
+    service_fqdn_list: Vec<String>,
+    ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    pcap_sensors: PcapSensors,
+    stream_direct_channels: StreamDirectChannels,
+    peer_notify: Option<Arc<Notify>>,
+) {
     let worker_db = db.clone();
+    let worker_targets = service_fqdn_list.clone();
     let worker = tokio::task::spawn_blocking(move || {
-        delete_customer_data_from_db(&worker_db, &service_fqdn_list)
+        delete_customer_data_from_db(&worker_db, &worker_targets)
     });
 
-    tokio::spawn(supervise_worker(worker, db, customer_id));
+    tokio::spawn(supervise_worker(
+        worker,
+        db,
+        customer_id,
+        service_fqdn_list,
+        ingest_sensors,
+        runtime_ingest_sensors,
+        pcap_sensors,
+        stream_direct_channels,
+        peer_notify,
+    ));
+}
+
+async fn cleanup_runtime_for_targets(
+    targets: &[String],
+    ingest_sensors: &IngestSensors,
+    runtime_ingest_sensors: &RunTimeIngestSensors,
+    pcap_sensors: &PcapSensors,
+    stream_direct_channels: &StreamDirectChannels,
+    peer_notify: Option<&Arc<Notify>>,
+) {
+    info!(
+        target_count = targets.len(),
+        "Cleaning customer runtime state"
+    );
+
+    {
+        let mut ingest_sensors = ingest_sensors.write().await;
+        for target in targets {
+            ingest_sensors.remove(target);
+        }
+    }
+
+    {
+        let mut runtime_ingest_sensors = runtime_ingest_sensors.write().await;
+        for target in targets {
+            runtime_ingest_sensors.remove(target);
+        }
+    }
+
+    {
+        let mut pcap_sensors = pcap_sensors.write().await;
+        for target in targets {
+            pcap_sensors.remove(target);
+        }
+    }
+
+    let targets = targets.iter().map(String::as_str).collect::<HashSet<_>>();
+    stream_direct_channels.write().await.retain(|key, _| {
+        let target_sensor = match key {
+            StreamChannelKey::SemiSupervised { target_sensor, .. }
+            | StreamChannelKey::TimeSeriesGenerator { target_sensor, .. } => target_sensor,
+        };
+        !targets.contains(target_sensor.as_str())
+    });
+
+    if let Some(notify) = peer_notify {
+        notify.notify_one();
+    }
+
+    info!(
+        target_count = targets.len(),
+        "Customer runtime state cleaned"
+    );
 }
 
 #[derive(Debug)]
@@ -360,13 +450,30 @@ const TERMINAL_STATUS_UPDATE_ATTEMPTS: usize = 2;
 /// TODO(#1724): Register and drain this supervisor at the application lifecycle
 /// level before RocksDB shutdown. Until that coordination is implemented, the
 /// supervisor remains detached.
+#[allow(clippy::too_many_arguments)]
 async fn supervise_worker(
     worker: tokio::task::JoinHandle<AnyhowResult<()>>,
     db: Database,
     customer_id: u32,
+    service_fqdn_list: Vec<String>,
+    ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    pcap_sensors: PcapSensors,
+    stream_direct_channels: StreamDirectChannels,
+    peer_notify: Option<Arc<Notify>>,
 ) {
     let outcome = match worker.await {
         Ok(Ok(())) => {
+            info!(customer_id, "Customer database deletion succeeded");
+            cleanup_runtime_for_targets(
+                &service_fqdn_list,
+                &ingest_sensors,
+                &runtime_ingest_sensors,
+                &pcap_sensors,
+                &stream_direct_channels,
+                peer_notify.as_ref(),
+            )
+            .await;
             info!(customer_id, "Customer data deletion succeeded");
             DeletionOutcome::Succeeded
         }
@@ -427,21 +534,103 @@ fn now_nanos() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
     use std::time::Duration;
 
+    use giganto_client::publish::stream::{RequestStreamRecord, STREAM_REQUEST_ALL_SENSOR};
+    use tokio::sync::Notify;
+
     use super::{
-        PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES, delete_customer_data_from_db,
-        delete_customer_data_with, supervise_worker, validate_service_fqdn_list,
+        PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES, cleanup_runtime_for_targets,
+        delete_customer_data_from_db, delete_customer_data_with, supervise_worker,
+        validate_service_fqdn_list,
     };
     use crate::{
+        comm::{
+            IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
+            new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
+            new_stream_direct_channels, peer::tests::fixtures::SensorListPeerHarness,
+            stream_channel_key::StreamChannelKey,
+        },
         datetime::DateTime,
         graphql::tests::TestSchema,
         storage::{CustomerDataDeletion, CustomerDataDeletionStatus, Database, DbOptions},
     };
+
+    type RuntimeState = (
+        IngestSensors,
+        RunTimeIngestSensors,
+        PcapSensors,
+        StreamDirectChannels,
+    );
+
+    fn runtime_state(db: &Database) -> RuntimeState {
+        (
+            new_ingest_sensors(db),
+            new_runtime_ingest_sensors(),
+            new_pcap_sensors(),
+            new_stream_direct_channels(),
+        )
+    }
+
+    async fn supervise_test_worker(
+        worker: tokio::task::JoinHandle<anyhow::Result<()>>,
+        db: Database,
+        customer_id: u32,
+        service_fqdn_list: Vec<String>,
+        runtime_state: &RuntimeState,
+        peer_notify: Option<Arc<Notify>>,
+    ) {
+        supervise_worker(
+            worker,
+            db,
+            customer_id,
+            service_fqdn_list,
+            runtime_state.0.clone(),
+            runtime_state.1.clone(),
+            runtime_state.2.clone(),
+            runtime_state.3.clone(),
+            peer_notify,
+        )
+        .await;
+    }
+
+    async fn seed_runtime_target(runtime_state: &RuntimeState, target: &str) -> StreamChannelKey {
+        runtime_state.0.write().await.insert(target.to_string());
+        runtime_state
+            .1
+            .write()
+            .await
+            .insert(target.to_string(), DateTime::now());
+        runtime_state
+            .2
+            .write()
+            .await
+            .insert(target.to_string(), Vec::new());
+        let key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: "publisher".to_string(),
+            target_sensor: target.to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        runtime_state.3.write().await.insert(key.clone(), sender);
+        key
+    }
+
+    async fn assert_runtime_target_present(
+        runtime_state: &RuntimeState,
+        target: &str,
+        channel_key: &StreamChannelKey,
+    ) {
+        assert!(runtime_state.0.read().await.contains(target));
+        assert!(runtime_state.1.read().await.contains_key(target));
+        assert!(runtime_state.2.read().await.contains_key(target));
+        assert!(runtime_state.3.read().await.contains_key(channel_key));
+    }
 
     fn event_key(service_fqdn: &str, suffix: &[u8]) -> Vec<u8> {
         let mut key = service_fqdn.as_bytes().to_vec();
@@ -649,6 +838,231 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn multiple_runtime_targets_are_cleaned_without_affecting_other_state() {
+        let piglet = "piglet.node1.example.test";
+        let reproduce = "reproduce.node2.example.test";
+        let similar = "piglet.node1.example.test2";
+        let unrelated = "piglet.other.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[piglet, reproduce, similar, unrelated]);
+
+        schema.runtime_ingest_sensors.write().await.extend([
+            (piglet.to_string(), DateTime::now()),
+            (reproduce.to_string(), DateTime::now()),
+            (similar.to_string(), DateTime::now()),
+            (unrelated.to_string(), DateTime::now()),
+        ]);
+        schema.pcap_sensors.write().await.extend([
+            (piglet.to_string(), Vec::new()),
+            (reproduce.to_string(), Vec::new()),
+            (similar.to_string(), Vec::new()),
+            (unrelated.to_string(), Vec::new()),
+        ]);
+
+        let piglet_key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: "publisher".to_string(),
+            target_sensor: piglet.to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let reproduce_key = StreamChannelKey::TimeSeriesGenerator {
+            id: "reproduce-generator".to_string(),
+            target_sensor: reproduce.to_string(),
+            record_type: RequestStreamRecord::Dns,
+        };
+        let similar_key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: "publisher".to_string(),
+            target_sensor: similar.to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let wildcard_key = StreamChannelKey::TimeSeriesGenerator {
+            id: "wildcard-generator".to_string(),
+            target_sensor: STREAM_REQUEST_ALL_SENSOR.to_string(),
+            record_type: RequestStreamRecord::Dns,
+        };
+        let unrelated_key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: "publisher".to_string(),
+            target_sensor: unrelated.to_string(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let mut receivers = Vec::new();
+        {
+            let mut channels = schema.stream_direct_channels.write().await;
+            for key in [
+                piglet_key.clone(),
+                reproduce_key.clone(),
+                similar_key.clone(),
+                wildcard_key.clone(),
+                unrelated_key.clone(),
+            ] {
+                let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+                channels.insert(key, sender);
+                receivers.push(receiver);
+            }
+        }
+
+        let response = schema
+            .execute(&format!(
+                r#"mutation {{
+                    deleteCustomerData(
+                        serviceFqdnList: ["{piglet}", "{reproduce}"]
+                        customerId: "101"
+                    )
+                }}"#
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let completed = wait_for_terminal_job(&schema.db, 101).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+
+        let ingest_sensors = schema.ingest_sensors.read().await;
+        assert!(!ingest_sensors.contains(piglet));
+        assert!(!ingest_sensors.contains(reproduce));
+        assert!(ingest_sensors.contains(similar));
+        assert!(ingest_sensors.contains(unrelated));
+        drop(ingest_sensors);
+
+        let runtime_ingest_sensors = schema.runtime_ingest_sensors.read().await;
+        assert!(!runtime_ingest_sensors.contains_key(piglet));
+        assert!(!runtime_ingest_sensors.contains_key(reproduce));
+        assert!(runtime_ingest_sensors.contains_key(similar));
+        assert!(runtime_ingest_sensors.contains_key(unrelated));
+        drop(runtime_ingest_sensors);
+
+        let pcap_sensors = schema.pcap_sensors.read().await;
+        assert!(!pcap_sensors.contains_key(piglet));
+        assert!(!pcap_sensors.contains_key(reproduce));
+        assert!(pcap_sensors.contains_key(similar));
+        assert!(pcap_sensors.contains_key(unrelated));
+        drop(pcap_sensors);
+
+        let channels = schema.stream_direct_channels.read().await;
+        assert!(!channels.contains_key(&piglet_key));
+        assert!(!channels.contains_key(&reproduce_key));
+        assert!(channels.contains_key(&similar_key));
+        assert!(channels.contains_key(&wildcard_key));
+        assert!(channels.contains_key(&unrelated_key));
+    }
+
+    #[tokio::test]
+    async fn peer_propagation_happens_when_configured_and_is_optional() {
+        let target = "piglet.node1.example.test";
+        let peer_notify = Arc::new(Notify::new());
+        let schema = TestSchema::new_with_ingest_sensors_and_peer_notify(
+            &[target],
+            Some(peer_notify.clone()),
+        );
+
+        let response = schema
+            .execute(&format!(
+                r#"mutation {{
+                    deleteCustomerData(serviceFqdnList: ["{target}"] customerId: "102")
+                }}"#
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let completed = wait_for_terminal_job(&schema.db, 102).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        tokio::time::timeout(Duration::from_secs(1), peer_notify.notified())
+            .await
+            .expect("peer sensor-list notification was not sent");
+        drop(schema);
+
+        let without_peers = TestSchema::new_with_ingest_sensors(&[target]);
+        let response = without_peers
+            .execute(&format!(
+                r#"mutation {{
+                    deleteCustomerData(serviceFqdnList: ["{target}"] customerId: "103")
+                }}"#
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let completed = wait_for_terminal_job(&without_peers.db, 103).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn peer_receives_sensor_list_after_customer_target_is_removed() {
+        let target = "piglet.node1.example.test";
+        let unrelated = "reproduce.other.example.test";
+        let ingest_sensors = Arc::new(tokio::sync::RwLock::new(HashSet::from([
+            target.to_string(),
+            unrelated.to_string(),
+        ])));
+        let peer_notify = Arc::new(Notify::new());
+        let schema = TestSchema::new_with_shared_ingest_sensors_and_peer_notify(
+            ingest_sensors.clone(),
+            Some(peer_notify.clone()),
+        );
+        let (peer, initial_sensor_list) =
+            SensorListPeerHarness::start(ingest_sensors, peer_notify).await;
+        assert_eq!(
+            initial_sensor_list,
+            HashSet::from([target.to_string(), unrelated.to_string()])
+        );
+
+        let response = schema
+            .execute(&format!(
+                r#"mutation {{
+                    deleteCustomerData(serviceFqdnList: ["{target}"] customerId: "104")
+                }}"#
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let completed = wait_for_terminal_job(&schema.db, 104).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+
+        assert_eq!(
+            peer.receive_sensor_list().await,
+            HashSet::from([unrelated.to_string()])
+        );
+        peer.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn runtime_cleanup_is_idempotent() {
+        let target = "piglet.node1.example.test".to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let (ingest_sensors, runtime_ingest_sensors, pcap_sensors, stream_direct_channels) =
+            runtime_state(&db);
+        ingest_sensors.write().await.insert(target.clone());
+        runtime_ingest_sensors
+            .write()
+            .await
+            .insert(target.clone(), DateTime::now());
+        pcap_sensors
+            .write()
+            .await
+            .insert(target.clone(), Vec::new());
+        let exact_key = StreamChannelKey::SemiSupervised {
+            publisher_sensor: "publisher".to_string(),
+            target_sensor: target.clone(),
+            record_type: RequestStreamRecord::Conn,
+        };
+        let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        stream_direct_channels
+            .write()
+            .await
+            .insert(exact_key.clone(), sender);
+
+        for _ in 0..2 {
+            cleanup_runtime_for_targets(
+                std::slice::from_ref(&target),
+                &ingest_sensors,
+                &runtime_ingest_sensors,
+                &pcap_sensors,
+                &stream_direct_channels,
+                None,
+            )
+            .await;
+        }
+
+        assert!(!ingest_sensors.read().await.contains(&target));
+        assert!(!runtime_ingest_sensors.read().await.contains_key(&target));
+        assert!(!pcap_sensors.read().await.contains_key(&target));
+        assert!(!stream_direct_channels.read().await.contains_key(&exact_key));
+    }
+
     #[test]
     fn deletes_owned_ranges_and_preserves_other_data() {
         let dir = tempfile::tempdir().unwrap();
@@ -738,11 +1152,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unexpected_task_failure_is_persisted() {
+    async fn worker_panic_preserves_runtime_state_and_skips_peer_notification() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let target = "piglet.node1.example.test";
         let make_job = || CustomerDataDeletion {
-            service_fqdn_list: vec!["piglet.node1.example.test".to_string()],
+            service_fqdn_list: vec![target.to_string()],
             requested_at: 1,
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
@@ -753,7 +1168,18 @@ mod tests {
         let panicking_worker = tokio::task::spawn_blocking(|| {
             panic!("injected worker panic");
         });
-        supervise_worker(panicking_worker, db.clone(), 1).await;
+        let runtime_state = runtime_state(&db);
+        let channel_key = seed_runtime_target(&runtime_state, target).await;
+        let peer_notify = Arc::new(Notify::new());
+        supervise_test_worker(
+            panicking_worker,
+            db.clone(),
+            1,
+            vec![target.to_string()],
+            &runtime_state,
+            Some(peer_notify.clone()),
+        )
+        .await;
         let failed = store.get(1).unwrap().unwrap();
         assert_eq!(failed.status, CustomerDataDeletionStatus::Failed);
         assert!(failed.completed_at.is_some());
@@ -762,6 +1188,58 @@ mod tests {
                 .error
                 .as_deref()
                 .is_some_and(|message| message.contains("join failure"))
+        );
+        assert_runtime_target_present(&runtime_state, target, &channel_key).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), peer_notify.notified())
+                .await
+                .is_err(),
+            "peer notification must not fire after a worker panic"
+        );
+    }
+
+    #[tokio::test]
+    async fn database_deletion_failure_preserves_runtime_state_and_skips_peer_notification() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let target = "reproduce.node1.example.test";
+        let job = CustomerDataDeletion {
+            service_fqdn_list: vec![target.to_string()],
+            requested_at: 1,
+            status: CustomerDataDeletionStatus::InProgress,
+            completed_at: None,
+            error: None,
+        };
+        let store = db.customer_deletion_job_store().unwrap();
+        store.create(2, &job).unwrap();
+        let runtime_state = runtime_state(&db);
+        let channel_key = seed_runtime_target(&runtime_state, target).await;
+        let peer_notify = Arc::new(Notify::new());
+        let worker =
+            tokio::task::spawn_blocking(|| anyhow::bail!("injected RocksDB deletion failure"));
+
+        supervise_test_worker(
+            worker,
+            db.clone(),
+            2,
+            vec![target.to_string()],
+            &runtime_state,
+            Some(peer_notify.clone()),
+        )
+        .await;
+
+        let failed = store.get(2).unwrap().unwrap();
+        assert_eq!(failed.status, CustomerDataDeletionStatus::Failed);
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("injected RocksDB deletion failure")
+        );
+        assert_runtime_target_present(&runtime_state, target, &channel_key).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), peer_notify.notified())
+                .await
+                .is_err(),
+            "peer notification must not fire after database deletion fails"
         );
     }
 
@@ -780,22 +1258,19 @@ mod tests {
 
         store.create(1, &make_job()).unwrap();
         let succeeded_worker = tokio::task::spawn_blocking(|| Ok(()));
-        supervise_worker(succeeded_worker, db.clone(), 1).await;
+        let runtime_state = runtime_state(&db);
+        supervise_test_worker(
+            succeeded_worker,
+            db.clone(),
+            1,
+            vec!["piglet.node1.example.test".to_string()],
+            &runtime_state,
+            None,
+        )
+        .await;
         let succeeded = store.get(1).unwrap().unwrap();
         assert_eq!(succeeded.status, CustomerDataDeletionStatus::Succeeded);
         assert!(succeeded.completed_at.is_some());
         assert!(succeeded.error.is_none());
-
-        store.create(2, &make_job()).unwrap();
-        let deletion_error = "injected deletion failure".to_string();
-        let failed_worker = tokio::task::spawn_blocking({
-            let deletion_error = deletion_error.clone();
-            move || anyhow::bail!(deletion_error)
-        });
-        supervise_worker(failed_worker, db.clone(), 2).await;
-        let failed = store.get(2).unwrap().unwrap();
-        assert_eq!(failed.status, CustomerDataDeletionStatus::Failed);
-        assert!(failed.completed_at.is_some());
-        assert_eq!(failed.error.as_deref(), Some(deletion_error.as_str()));
     }
 }
