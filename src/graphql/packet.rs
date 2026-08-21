@@ -159,7 +159,6 @@ fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
 }
 
 #[Object]
-#[allow(clippy::unused_async)]
 impl PacketQuery {
     async fn packets(
         &self,

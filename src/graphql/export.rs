@@ -2023,7 +2023,6 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
 }
 
 #[Object]
-#[allow(clippy::unused_async)]
 impl ExportQuery {
     /// Exports matching events to a file and returns the download path.
     ///

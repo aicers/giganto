@@ -1,7 +1,13 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, future, sync::Arc};
 
 use anyhow::{Context as AnyhowContext, Result as AnyhowResult, anyhow};
-use async_graphql::{Context, Enum, Object, Result};
+use async_graphql::{
+    Context, ContextSelectionSet, Object, OutputType, Positioned, Result, ServerResult, Value,
+    indexmap::IndexMap,
+    parser::types::Field,
+    registry::{Deprecation, MetaEnumValue, MetaType, MetaTypeId, Registry},
+    resolver_utils::{EnumItem, EnumType},
+};
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
@@ -57,7 +63,7 @@ const REPRODUCE_COLUMN_FAMILIES: [&str; 18] = [
     "netflow9",
 ];
 
-#[derive(Enum, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CustomerDataDeletionRequestStatus {
     /// Terminal mutation response: this node accepted the request and started the deletion job.
     Accepted,
@@ -75,6 +81,116 @@ pub enum CustomerDataDeletionRequestStatus {
     ///
     /// This response remains node-local until cluster aggregation is implemented in #1727.
     NoLocalTargetOnThisNode,
+}
+
+impl EnumType for CustomerDataDeletionRequestStatus {
+    fn items() -> &'static [EnumItem<Self>] {
+        &[
+            EnumItem {
+                name: "ACCEPTED",
+                value: Self::Accepted,
+            },
+            EnumItem {
+                name: "ALREADY_COMPLETED",
+                value: Self::AlreadyCompleted,
+            },
+            EnumItem {
+                name: "DELETION_IN_PROGRESS",
+                value: Self::DeletionInProgress,
+            },
+            EnumItem {
+                name: "BLOCKED_BY_ANOTHER_DELETION",
+                value: Self::BlockedByAnotherDeletion,
+            },
+            EnumItem {
+                name: "BLOCKED_BY_RETENTION",
+                value: Self::BlockedByRetention,
+            },
+            EnumItem {
+                name: "BLOCKED_BY_SHUTDOWN",
+                value: Self::BlockedByShutdown,
+            },
+            EnumItem {
+                name: "NO_LOCAL_TARGET_ON_THIS_NODE",
+                value: Self::NoLocalTargetOnThisNode,
+            },
+        ]
+    }
+}
+
+// Keep this output-only enum explicit because async-graphql's Enum derive emits an
+// async OutputType::resolve implementation without awaits.
+impl OutputType for CustomerDataDeletionRequestStatus {
+    fn type_name() -> Cow<'static, str> {
+        Cow::Borrowed("CustomerDataDeletionRequestStatus")
+    }
+
+    fn create_type_info(registry: &mut Registry) -> String {
+        registry.create_output_type::<Self, _>(MetaTypeId::Enum, |_| MetaType::Enum {
+            name: Self::type_name().into_owned(),
+            description: None,
+            enum_values: [
+                (
+                    "ACCEPTED",
+                    "Terminal mutation response: this node accepted the request and started the deletion job.",
+                ),
+                (
+                    "ALREADY_COMPLETED",
+                    "Terminal mutation response: an earlier deletion job for this customer already succeeded.",
+                ),
+                (
+                    "DELETION_IN_PROGRESS",
+                    "Wait for the existing job: this customer's previously accepted deletion is still running.",
+                ),
+                (
+                    "BLOCKED_BY_ANOTHER_DELETION",
+                    "Retry later: another customer's deletion blocks this request, which was not accepted.",
+                ),
+                (
+                    "BLOCKED_BY_RETENTION",
+                    "Retry later: retention cleanup blocks this request, which was not accepted.",
+                ),
+                (
+                    "BLOCKED_BY_SHUTDOWN",
+                    "Retry after restart or on another node: shutdown blocks this request, which was not accepted.",
+                ),
+                (
+                    "NO_LOCAL_TARGET_ON_THIS_NODE",
+                    "Node-local no-op: none of the requested targets are stored on this node.\n\nThis response remains node-local until cluster aggregation is implemented in #1727.",
+                ),
+            ]
+            .into_iter()
+            .map(|(name, description)| {
+                (
+                    name.to_owned(),
+                    MetaEnumValue {
+                        name: name.to_owned(),
+                        description: Some(description.to_owned()),
+                        deprecation: Deprecation::NoDeprecated,
+                        visible: None,
+                        inaccessible: false,
+                        tags: Vec::new(),
+                        directive_invocations: Vec::new(),
+                    },
+                )
+            })
+            .collect::<IndexMap<_, _>>(),
+            visible: None,
+            inaccessible: false,
+            tags: Vec::new(),
+            rust_typename: Some(std::any::type_name::<Self>()),
+            directive_invocations: Vec::new(),
+            requires_scopes: Vec::new(),
+        })
+    }
+
+    fn resolve(
+        &self,
+        _: &ContextSelectionSet<'_>,
+        _: &Positioned<Field>,
+    ) -> impl Future<Output = ServerResult<Value>> + Send {
+        future::ready(Ok(async_graphql::resolver_utils::enum_value(*self)))
+    }
 }
 
 #[derive(Default)]
