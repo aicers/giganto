@@ -51,7 +51,8 @@ use rustls::{
     pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tempfile::TempDir;
-use tokio::sync::{Notify, RwLock, mpsc, oneshot, watch};
+use tokio::sync::{RwLock, mpsc, oneshot, watch};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::{Server, process_stream};
@@ -60,6 +61,7 @@ use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
 #[cfg(feature = "bootroot")]
 use crate::test_bootroot::{TestNode, bootroot_cluster_certs, bootroot_cluster_server_name};
 use crate::{
+    cancellation::TaskTracker,
     comm::{
         IngestSensors, PcapSensors, StreamDirectChannels,
         ingest::NetworkKey,
@@ -241,9 +243,10 @@ mod fixtures {
         pub(super) endpoint: Endpoint,
     }
 
+    /// A running publish entry task, plus the token that ends it.
     pub(super) struct ServerHandle {
-        pub(super) notify: Arc<Notify>,
-        pub(super) handle: tokio::task::JoinHandle<()>,
+        pub(super) token: CancellationToken,
+        pub(super) handle: tokio::task::JoinHandle<anyhow::Result<()>>,
     }
 
     pub(super) struct PcapFixture {
@@ -357,9 +360,14 @@ mod fixtures {
     }
 
     impl ServerHandle {
+        /// Cancels the entry task and waits for it to drain and return.
         pub(super) async fn shutdown(self) {
-            self.notify.notify_waiters();
-            let _ = self.handle.await;
+            self.token.cancel();
+            tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, self.handle)
+                .await
+                .expect("publish server drain timeout")
+                .expect("publish server task should not panic")
+                .expect("publish server should shut down cleanly");
         }
     }
 
@@ -724,9 +732,8 @@ mod fixtures {
             ingest_sensors,
             peers,
             peer_idents,
-            certs,
-        )
-        .await;
+            &certs,
+        );
 
         let publish = tokio::time::timeout(
             StdDuration::from_secs(2),
@@ -1088,6 +1095,12 @@ mod fixtures {
         let tls_watch = build_test_tls_watch(&certs);
         let (mut server_send, _ack_server, _ack_client) = build_ack_stream("ack.local").await;
 
+        // A throwaway tracker stands in for the publish subsystem's: the relay
+        // is registered rather than detached now, and dropping the tracker
+        // afterwards leaves it running exactly as the detached spawn did,
+        // because a `CancellationToken` does not cancel when it is dropped.
+        let tracker = TaskTracker::new();
+        let token = tracker.root_token().clone();
         crate::comm::publish::process_pcap_extract_filters(
             filters,
             pcap_sensors,
@@ -1095,6 +1108,9 @@ mod fixtures {
             peer_idents,
             tls_watch,
             &mut server_send,
+            "test",
+            &tracker,
+            &token,
         )
         .await
         .expect("process_pcap_extract_filters failed");
@@ -2728,66 +2744,17 @@ mod fixtures {
         endpoint
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn run_server_with_ready(
-        server: Server,
-        db: Database,
-        pcap_sensors: PcapSensors,
-        stream_direct_channels: StreamDirectChannels,
-        ingest_sensors: IngestSensors,
-        peers: Peers,
-        peer_idents: PeerIdents,
-        tls_watch: TlsWatch,
-        notify_shutdown: Arc<Notify>,
-        ready: oneshot::Sender<SocketAddr>,
-    ) {
-        let endpoint = Endpoint::server(server.server_config, server.server_address)
-            .expect("publish endpoint");
-        let local_addr = endpoint.local_addr().expect("publish local addr");
-        let _ = ready.send(local_addr);
+    /// How long a cancelled publish entry task is given to drain and return.
+    pub(super) const SERVER_SHUTDOWN_TIMEOUT: StdDuration = StdDuration::from_secs(10);
 
-        let mut conn_hdl: Option<tokio::task::JoinHandle<()>> = None;
-        loop {
-            tokio::select! {
-                Some(conn) = endpoint.accept() => {
-                    let db = db.clone();
-                    let pcap_sensors = pcap_sensors.clone();
-                    let stream_direct_channels = stream_direct_channels.clone();
-                    let notify_shutdown = notify_shutdown.clone();
-                    let ingest_sensors = ingest_sensors.clone();
-                    let peers = peers.clone();
-                    let peer_idents = peer_idents.clone();
-                    let tls_watch = tls_watch.clone();
-                    conn_hdl = Some(tokio::spawn(async move {
-                        if let Err(err) = crate::comm::publish::handle_connection(
-                            conn,
-                            db,
-                            pcap_sensors,
-                            stream_direct_channels,
-                            ingest_sensors,
-                            peers,
-                            peer_idents,
-                            tls_watch,
-                            notify_shutdown,
-                        )
-                        .await {
-                            panic!("publish connection handler failed: {err}");
-                        }
-                    }));
-                }
-                () = notify_shutdown.notified() => {
-                    endpoint.close(0_u32.into(), &[]);
-                    if let Some(handle) = conn_hdl {
-                        let _ = tokio::join!(handle);
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
+    /// Binds the production publish listener and runs it under a cancellation
+    /// token.
+    ///
+    /// The entry task, its accept loop, its tracker, and its shutdown sequence
+    /// are the ones the node runs; the harness only supplies the token that
+    /// ends them.
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn spawn_server(
+    pub(super) fn spawn_server(
         addr: SocketAddr,
         db: Database,
         pcap_sensors: PcapSensors,
@@ -2795,41 +2762,25 @@ mod fixtures {
         ingest_sensors: IngestSensors,
         peers: Peers,
         peer_idents: PeerIdents,
-        certs: Arc<Certs>,
+        certs: &Arc<Certs>,
     ) -> (SocketAddr, ServerHandle) {
-        let notify_shutdown = Arc::new(Notify::new());
-        let notify_for_run = notify_shutdown.clone();
-        let (ready_tx, ready_rx) = oneshot::channel();
-        let server = Server::new(addr, &certs);
-        let tls_watch = build_test_tls_watch(&certs);
+        let server = Server::new(addr, certs);
+        let tls_watch = build_test_tls_watch(certs);
+        let bound = server.bind().expect("bind publish test server");
+        let local_addr = bound.local_addr();
+        let token = CancellationToken::new();
+        let handle = tokio::spawn(bound.run(
+            db,
+            pcap_sensors,
+            stream_direct_channels,
+            ingest_sensors,
+            peers,
+            peer_idents,
+            tls_watch,
+            token.clone(),
+        ));
 
-        let handle = tokio::spawn(async move {
-            run_server_with_ready(
-                server,
-                db,
-                pcap_sensors,
-                stream_direct_channels,
-                ingest_sensors,
-                peers,
-                peer_idents,
-                tls_watch,
-                notify_for_run,
-                ready_tx,
-            )
-            .await;
-        });
-
-        let local_addr = ready_rx
-            .await
-            .expect("publish server did not report local addr");
-
-        (
-            local_addr,
-            ServerHandle {
-                notify: notify_shutdown,
-                handle,
-            },
-        )
+        (local_addr, ServerHandle { token, handle })
     }
 
     pub(super) fn default_time_range() -> (i64, i64) {
@@ -4422,9 +4373,8 @@ mod fixtures {
             node2_ingest_sensors,
             node2_peers.clone(),
             node2_peer_idents.clone(),
-            node2_certs.clone(),
-        )
-        .await;
+            &node2_certs,
+        );
 
         let db_dir = tempfile::tempdir().expect("create node1 temp dir");
         let db =
@@ -4446,9 +4396,8 @@ mod fixtures {
             ingest_sensors,
             peers.clone(),
             peer_idents.clone(),
-            certs,
-        )
-        .await;
+            &certs,
+        );
 
         {
             let mut node2_peers_guard = node2_peers.write().await;
@@ -4526,41 +4475,26 @@ async fn publish_server_run_accepts_connection_and_shutdown() {
     let ingest_sensors = build_ingest_sensors();
     let (peers, peer_idents) = new_peers_data(None);
     let certs = build_test_certs();
-    let notify_shutdown = Arc::new(Notify::new());
 
-    let server_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
-    let server = Server::new(server_addr, &certs);
-    let tls_watch = build_test_tls_watch(&certs);
-    let (ready_tx, ready_rx) = oneshot::channel();
-
-    let server_task = tokio::spawn(run_server_with_ready(
-        server,
+    let (server_addr, server_handle) = spawn_server(
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
         db,
         pcap_sensors,
         stream_direct_channels,
         ingest_sensors,
         peers,
         peer_idents,
-        tls_watch,
-        notify_shutdown.clone(),
-        ready_tx,
-    ));
-
-    let server_addr = tokio::time::timeout(StdDuration::from_secs(2), ready_rx)
-        .await
-        .expect("publish server ready timeout")
-        .expect("publish server did not report addr");
+        &certs,
+    );
 
     let publish = TestClient::new(server_addr, NODE1.server_name()).await;
     assert_eq!(publish.conn.remote_address().port(), server_addr.port());
 
     publish.close(b"publish_run_done").await;
 
-    notify_shutdown.notify_waiters();
-    let join_result = tokio::time::timeout(StdDuration::from_secs(2), server_task)
-        .await
-        .expect("publish server shutdown timeout");
-    assert!(join_result.is_ok(), "publish server task failed");
+    // Cancelling the token is the whole shutdown signal: the entry task leaves
+    // its accept loop, drains its tracker, and only then closes the endpoint.
+    server_handle.shutdown().await;
 }
 
 #[tokio::test]
@@ -5102,7 +5036,7 @@ async fn stream_channels_cleared_after_client_disconnect_without_records() {
 }
 
 #[tokio::test]
-async fn stream_channels_cleared_after_shutdown_signal() {
+async fn stream_channels_cleared_after_cancellation() {
     with_test_harness(|harness| {
         Box::pin(async move {
             let _stream = start_semi_supervised_subscription(
@@ -5118,7 +5052,7 @@ async fn stream_channels_cleared_after_shutdown_signal() {
                 "expected the subscription's channel key to be registered"
             );
 
-            harness.server_handle.notify.notify_waiters();
+            harness.server_handle.token.cancel();
 
             wait_for_registered_sensors(
                 &harness.stream_direct_channels,
@@ -5141,17 +5075,16 @@ async fn stream_channels_cleared_after_shutdown_signal() {
     .await;
 }
 
-/// Drives the forwarding loop's `notify_shutdown` branch on its own.
+/// Drives the forwarding loop's cancellation branch on its own.
 ///
-/// Every route that fires the shutdown signal in the server also closes the
-/// subscribing client's connection — the accept loop closes the endpoint and
-/// `handle_connection` closes the connection — so an end-to-end shutdown test
-/// cannot tell the shutdown branch apart from the disconnect branch. Driving
-/// `process_stream` over a bare connection, with a signal wired to nothing
-/// else, leaves the connection open so only the shutdown branch can end the
-/// subscription.
+/// The end-to-end shutdown does close the subscribing client's connection, but
+/// only after the drain, so a whole-server test cannot say whether the
+/// subscription ended on its token or on the connection going away. Driving
+/// `process_stream` over a bare connection, with a token wired to nothing
+/// else, leaves the connection open so only the cancellation branch can end
+/// the subscription.
 #[tokio::test]
-async fn subscription_shutdown_branch_clears_channels_with_the_connection_open() {
+async fn subscription_cancellation_branch_clears_channels_with_the_connection_open() {
     init_crypto();
 
     let temp_dir = tempfile::tempdir().expect("create publish temp dir");
@@ -5181,7 +5114,7 @@ async fn subscription_shutdown_branch_clears_channels_with_the_connection_open()
         async { connecting.await.expect("client side connection") },
     );
 
-    let notify_shutdown = Arc::new(Notify::new());
+    let token = CancellationToken::new();
     let subscription = tokio::spawn(process_stream(
         db.clone(),
         server_conn.clone(),
@@ -5193,7 +5126,7 @@ async fn subscription_shutdown_branch_clears_channels_with_the_connection_open()
             sensor: Some(vec![SENSOR_SEMI_SUPERVISED_TWO.to_string()]),
         },
         channels.clone(),
-        notify_shutdown.clone(),
+        token.clone(),
     ));
 
     wait_for_registered_sensors(
@@ -5203,27 +5136,20 @@ async fn subscription_shutdown_branch_clears_channels_with_the_connection_open()
     )
     .await;
 
-    // Nothing but the shutdown signal may end the subscription, so it has to
-    // still be running here — otherwise the cleared map below would prove
-    // nothing about the shutdown branch.
+    // Nothing but cancellation may end the subscription, so it has to still be
+    // running here — otherwise the cleared map below would prove nothing about
+    // the cancellation branch.
     assert!(
         !subscription.is_finished(),
-        "the subscription ended before the shutdown signal was sent"
+        "the subscription ended before its token was cancelled"
     );
 
-    // `notify_waiters` only wakes tasks already parked on the signal, so keep
-    // signalling until the subscription observes it.
-    let deadline = Instant::now() + StdDuration::from_secs(5);
-    while !subscription.is_finished() {
-        assert!(
-            Instant::now() < deadline,
-            "the subscription did not return on the shutdown signal"
-        );
-        notify_shutdown.notify_waiters();
-        tokio::time::sleep(StdDuration::from_millis(10)).await;
-    }
-    subscription
+    // The token is level-triggered, so one cancel is enough and the wait is
+    // the task returning rather than a poll interval.
+    token.cancel();
+    tokio::time::timeout(StdDuration::from_secs(5), subscription)
         .await
+        .expect("the subscription did not return on cancellation")
         .expect("subscription task panicked")
         .expect("subscription returned an error");
 
@@ -5231,12 +5157,12 @@ async fn subscription_shutdown_branch_clears_channels_with_the_connection_open()
     // what ended the loop.
     assert!(
         server_conn.close_reason().is_none(),
-        "the connection closed, so this did not isolate the shutdown branch"
+        "the connection closed, so this did not isolate the cancellation branch"
     );
     assert_eq!(
         registered_target_sensors(&channels).await,
         Vec::<String>::new(),
-        "expected the shutdown signal to clear the subscription's channel key"
+        "expected cancellation to clear the subscription's channel key"
     );
 
     // A dead sender left behind would tear down the ingest stream that hit it.
@@ -5850,6 +5776,7 @@ async fn process_raw_events_errors_when_peer_handshake_fails() {
         peers,
         peer_idents,
         &tls_watch,
+        &CancellationToken::new(),
     )
     .await
     .expect_err("process_raw_events should fail when peer handshake fails");
@@ -5889,6 +5816,7 @@ async fn process_raw_events_errors_when_peer_name_missing() {
         peers,
         peer_idents,
         &tls_watch,
+        &CancellationToken::new(),
     )
     .await
     .expect_err("process_raw_events should fail when peer name is missing");
@@ -6033,6 +5961,7 @@ async fn process_range_data_sends_local_results_and_done() {
         peers,
         peer_idents,
         &tls_watch,
+        &CancellationToken::new(),
         false,
     )
     .await
@@ -6094,6 +6023,7 @@ async fn process_range_data_prefers_local_over_peer() {
         peers,
         peer_idents,
         &tls_watch,
+        &CancellationToken::new(),
         false,
     )
     .await
@@ -6160,6 +6090,7 @@ async fn process_range_data_forwards_peer_results() {
         peers,
         peer_idents,
         &tls_watch,
+        &CancellationToken::new(),
         false,
     )
     .await
@@ -6215,6 +6146,7 @@ async fn process_range_data_errors_when_peer_done_missing() {
         peers,
         peer_idents,
         &tls_watch,
+        &CancellationToken::new(),
         false,
     )
     .await
@@ -6258,6 +6190,7 @@ async fn process_range_data_returns_error_without_owner() {
         peers,
         peer_idents,
         &tls_watch,
+        &CancellationToken::new(),
         false,
     )
     .await
@@ -6865,10 +6798,15 @@ async fn connect_supports_ipv6() {
     });
 
     let tls_watch = build_test_tls_watch(&certs);
-    let (client_endpoint, connection) =
-        super::connect(server_addr, NODE1.server_name(), &tls_watch)
-            .await
-            .expect("ipv6 connect failed");
+    let (client_endpoint, connection) = super::connect(
+        server_addr,
+        NODE1.server_name(),
+        &tls_watch,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("ipv6 connect failed")
+    .expect("connect must not be cancelled");
     let remote_addr = connection.remote_address();
     assert!(remote_addr.ip().is_ipv6(), "remote address is not ipv6");
     assert_eq!(remote_addr.ip(), server_addr.ip(), "remote ip mismatch");
@@ -6903,6 +6841,7 @@ mod tls_reload_connect {
     };
     use rustls::pki_types::CertificateDer;
     use tokio::sync::{Mutex as TokioMutex, mpsc};
+    use tokio_util::sync::CancellationToken;
 
     use super::super::{PUBLISH_VERSION_REQ, connect};
     use super::fixtures::init_crypto;
@@ -7064,9 +7003,15 @@ mod tls_reload_connect {
         let initial = Arc::new(loaded);
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
-        let (endpoint1, conn1) = connect(server_addr, TEST_SERVER_NAME, &watch)
-            .await
-            .expect("first connect");
+        let (endpoint1, conn1) = connect(
+            server_addr,
+            TEST_SERVER_NAME,
+            &watch,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("first connect")
+        .expect("connect must not be cancelled");
         let leaf_chain_1 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
             .await
             .expect("first cert timeout")
@@ -7087,9 +7032,15 @@ mod tls_reload_connect {
             .expect("rewrite client key");
         handle.reload();
 
-        let (endpoint2, conn2) = connect(server_addr, TEST_SERVER_NAME, &watch)
-            .await
-            .expect("second connect after reload");
+        let (endpoint2, conn2) = connect(
+            server_addr,
+            TEST_SERVER_NAME,
+            &watch,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("second connect after reload")
+        .expect("connect must not be cancelled");
         let leaf_chain_2 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
             .await
             .expect("second cert timeout")
@@ -7117,9 +7068,15 @@ mod tls_reload_connect {
         let initial = Arc::new(loaded);
         let (handle, watch) = ReloadHandle::new(paths, initial);
 
-        let (endpoint, conn) = connect(server_addr, TEST_SERVER_NAME, &watch)
-            .await
-            .expect("initial connect");
+        let (endpoint, conn) = connect(
+            server_addr,
+            TEST_SERVER_NAME,
+            &watch,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("initial connect")
+        .expect("connect must not be cancelled");
 
         let (new_cert_pem, new_key_pem) = sign_leaf(
             &fixture.ca,
@@ -7173,9 +7130,15 @@ mod tls_reload_connect {
 
         // A subsequent connect (e.g. a retry after the reload failure) must
         // still succeed using the preserved material.
-        let (endpoint, conn) = connect(server_addr, TEST_SERVER_NAME, &watch)
-            .await
-            .expect("connect after failed reload should succeed");
+        let (endpoint, conn) = connect(
+            server_addr,
+            TEST_SERVER_NAME,
+            &watch,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("connect after failed reload should succeed")
+        .expect("connect must not be cancelled");
         let leaf_chain = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
             .await
             .expect("cert timeout")
@@ -7200,9 +7163,15 @@ mod tls_reload_connect {
             .expect("rewrite client key");
         handle.reload();
 
-        let (endpoint2, conn2) = connect(server_addr, TEST_SERVER_NAME, &watch)
-            .await
-            .expect("connect after successful recovery");
+        let (endpoint2, conn2) = connect(
+            server_addr,
+            TEST_SERVER_NAME,
+            &watch,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("connect after successful recovery")
+        .expect("connect must not be cancelled");
         let leaf_chain_2 = tokio::time::timeout(StdDuration::from_secs(2), cert_rx.recv())
             .await
             .expect("recovery cert timeout")
@@ -7263,10 +7232,15 @@ mod tls_reload_connect {
         // because the client rejects the server's cert under the untrusted
         // CA snapshot.
         let watch_for_task = watch.clone();
-        let connect_task =
-            tokio::spawn(
-                async move { connect(server_addr, TEST_SERVER_NAME, &watch_for_task).await },
-            );
+        let connect_task = tokio::spawn(async move {
+            connect(
+                server_addr,
+                TEST_SERVER_NAME,
+                &watch_for_task,
+                &CancellationToken::new(),
+            )
+            .await
+        });
 
         // Wait long enough for at least one failed attempt plus the
         // initial 500ms backoff so the task is provably retrying.
@@ -7298,7 +7272,8 @@ mod tls_reload_connect {
             .await
             .expect("connect did not complete after mid-retry reload")
             .expect("connect task panicked")
-            .expect("connect must succeed once refreshed material is published");
+            .expect("connect must succeed once refreshed material is published")
+            .expect("connect must not be cancelled");
 
         let leaf_chain = tokio::time::timeout(StdDuration::from_secs(5), cert_rx.recv())
             .await
@@ -7439,5 +7414,709 @@ mod bootroot_service_fqdn_contract {
         assert_eq!(recv_ts, timestamp);
         assert_eq!(recv_sensor, local_fqdn);
         assert_eq!(recv_payload, payload);
+    }
+}
+
+/// Shutdown behaviour of the publish subsystem: cancellation, drain, admission
+/// closure, and the awaits that only a remote party could otherwise end.
+mod shutdown {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::time::Duration as StdDuration;
+
+    use giganto_client::connection::{client_handshake, server_handshake};
+    use giganto_client::publish::range::{MessageCode, RequestRange};
+    use giganto_client::publish::{
+        send_range_data_request, send_stream_request,
+        stream::{RequestSemiSupervisedStream, RequestStreamRecord, StreamRequestPayload},
+    };
+    use quinn::Endpoint;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    use super::fixtures::{
+        LogCapture, SERVER_SHUTDOWN_TIMEOUT, TestClient, TestHarness, assert_log_contains,
+        build_ingest_sensors, build_peer_idents, build_peers_for_sensor, build_range_request,
+        build_test_certs, build_test_tls_watch, init_client, init_crypto, open_range_stream,
+        recv_with_timeout, registered_target_sensors, setup_test_harness, spawn_server,
+        start_log_capture, start_semi_supervised_subscription,
+    };
+    use super::{NODE1, NODE2, PROTOCOL_VERSION, SENSOR_SEMI_SUPERVISED_ONE};
+    use crate::cancellation::TaskTracker;
+    use crate::comm::publish::{PUBLISH_VERSION_REQ, Server};
+    use crate::comm::{new_pcap_sensors, new_peers_data, new_stream_direct_channels};
+    use crate::server::config_server;
+    use crate::storage::{Database, DbOptions};
+
+    /// How long a cancelled task is given to return before the assertion that
+    /// it does fails.
+    const CANCEL_TIMEOUT: StdDuration = StdDuration::from_secs(5);
+
+    fn captured(capture: &LogCapture) -> String {
+        String::from_utf8_lossy(&capture.buffer.lock().expect("log capture lock poisoned"))
+            .into_owned()
+    }
+
+    /// A publish listener that cannot bind reports the failure instead of
+    /// panicking a spawned task.
+    ///
+    /// QUIC is UDP, so the port has to be held by a UDP socket for the publish
+    /// listener to lose it.
+    #[tokio::test]
+    async fn a_bind_failure_returns_an_error_from_the_entry_task() {
+        init_crypto();
+        let occupied =
+            std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("occupy the publish port");
+        let addr = occupied.local_addr().expect("occupied addr");
+
+        let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+        let db = Database::open(temp_dir.path(), &DbOptions::default())
+            .expect("open publish test database");
+        let certs = build_test_certs();
+        let (peers, peer_idents) = new_peers_data(None);
+
+        let err = Server::new(addr, &certs)
+            .run(
+                db,
+                new_pcap_sensors(),
+                new_stream_direct_channels(),
+                build_ingest_sensors(),
+                peers,
+                peer_idents,
+                build_test_tls_watch(&certs),
+                CancellationToken::new(),
+            )
+            .await
+            .expect_err("a publish listener that cannot bind must report it");
+        assert!(
+            format!("{err:#}").contains("failed to bind the publish listener"),
+            "the bind failure should name itself, got: {err:#}"
+        );
+    }
+
+    /// Cancelling the token lets the entry task return only after the work it
+    /// admitted has returned, and the subscription's routing entries are gone
+    /// by then.
+    #[tokio::test]
+    async fn cancellation_drains_publish_with_work_in_flight() {
+        let mut harness = setup_test_harness().await;
+
+        let _subscription = start_semi_supervised_subscription(
+            &mut harness.publish,
+            RequestStreamRecord::Conn,
+            &[SENSOR_SEMI_SUPERVISED_ONE],
+        )
+        .await;
+
+        // A request handler in flight alongside the subscription and the
+        // request-stream task the connection started.
+        let (mut send, _recv) = harness
+            .publish
+            .conn
+            .open_bi()
+            .await
+            .expect("open a request stream");
+        send_range_data_request(
+            &mut send,
+            MessageCode::ReqRange,
+            build_range_request(SENSOR_SEMI_SUPERVISED_ONE, "conn"),
+        )
+        .await
+        .expect("send a range request");
+
+        assert_eq!(
+            registered_target_sensors(&harness.stream_direct_channels).await,
+            vec![SENSOR_SEMI_SUPERVISED_ONE.to_string()],
+            "the subscription should be live when shutdown begins"
+        );
+
+        let TestHarness {
+            _temp_dir,
+            stream_direct_channels,
+            server_handle,
+            publish,
+            ..
+        } = harness;
+
+        let (logs, _guard) = start_log_capture();
+        tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, server_handle.shutdown())
+            .await
+            .expect("the publish entry task should drain and return");
+
+        assert!(
+            registered_target_sensors(&stream_direct_channels)
+                .await
+                .is_empty(),
+            "the subscription should have removed its routing entries before returning"
+        );
+        // A cooperative return is the success path, so the tracker's
+        // completion safety net must have nothing to say about it.
+        assert!(
+            !captured(&logs).contains("tracked task did not run to completion"),
+            "a cooperative shutdown must not report an incomplete task, got: {}",
+            captured(&logs)
+        );
+        drop(publish);
+    }
+
+    /// A client that finishes QUIC transport setup and never sends its publish
+    /// version message does not hold the drain open.
+    #[tokio::test]
+    async fn a_stalled_inbound_handshake_does_not_hold_the_drain_open() {
+        init_crypto();
+        let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+        let db = Database::open(temp_dir.path(), &DbOptions::default())
+            .expect("open publish test database");
+        let certs = build_test_certs();
+        let (peers, peer_idents) = new_peers_data(None);
+        let (server_addr, server_handle) = spawn_server(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            db,
+            new_pcap_sensors(),
+            new_stream_direct_channels(),
+            build_ingest_sensors(),
+            peers,
+            peer_idents,
+            &certs,
+        );
+
+        // Transport setup only: no `client_handshake`, so the server's
+        // `server_handshake` never resolves on its own.
+        let client_endpoint = init_client();
+        let _stalled = client_endpoint
+            .connect(server_addr, NODE1.server_name())
+            .expect("connecting to the publish listener")
+            .await
+            .expect("the QUIC handshake should complete");
+
+        tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, server_handle.shutdown())
+            .await
+            .expect("a stalled version handshake must not hold the drain open");
+    }
+
+    /// A client that arrives after the accept loop has left is neither
+    /// admitted nor rejected.
+    #[tokio::test]
+    async fn a_late_connection_is_dropped_rather_than_rejected() {
+        init_crypto();
+        let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+        let db = Database::open(temp_dir.path(), &DbOptions::default())
+            .expect("open publish test database");
+        let certs = build_test_certs();
+        let (peers, peer_idents) = new_peers_data(None);
+        let (server_addr, server_handle) = spawn_server(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            db,
+            new_pcap_sensors(),
+            new_stream_direct_channels(),
+            build_ingest_sensors(),
+            peers,
+            peer_idents,
+            &certs,
+        );
+
+        let (logs, _guard) = start_log_capture();
+        server_handle.token.cancel();
+
+        let client_endpoint = init_client();
+        let handshaked = tokio::time::timeout(StdDuration::from_secs(2), async {
+            let conn = client_endpoint
+                .connect(server_addr, NODE1.server_name())
+                .ok()?
+                .await
+                .ok()?;
+            client_handshake(&conn, PROTOCOL_VERSION).await.ok()
+        })
+        .await;
+        assert!(
+            !matches!(handshaked, Ok(Some(_))),
+            "a client arriving after cancellation must not complete a publish version exchange"
+        );
+
+        tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, server_handle.shutdown())
+            .await
+            .expect("a late arrival must not hold the drain open");
+
+        assert!(
+            !captured(&logs).contains("Rejected publish connection"),
+            "a late arrival is dropped, not rejected, got: {}",
+            captured(&logs)
+        );
+    }
+
+    /// Work a still-running handler tries to register after the tracker has
+    /// closed is refused, logged with what it belongs to, and not run outside
+    /// the tracker.
+    #[tokio::test]
+    async fn a_closed_tracker_refuses_and_logs_a_relay_spawn() {
+        init_crypto();
+        const SENSOR: &str = "pcap_refused_after_close";
+
+        let peer_certs = NODE2.build_certs();
+        let super::fixtures::PeerPcapServer {
+            addr: peer_addr,
+            connection_rx,
+            ..
+        } = super::fixtures::setup_peer_pcap_server(peer_certs).await;
+
+        let peers = build_peers_for_sensor(SENSOR, peer_addr);
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let (mut server_send, _ack_server, _ack_client) =
+            super::fixtures::build_ack_stream("ack.refused").await;
+
+        let tracker = TaskTracker::new();
+        let token = tracker.root_token().clone();
+        tracker.close().expect("close the publish tracker");
+
+        let (logs, _guard) = start_log_capture();
+        crate::comm::publish::process_pcap_extract_filters(
+            vec![super::fixtures::build_filter_for_sensor(SENSOR, 10, 20)],
+            new_pcap_sensors(),
+            peers,
+            peer_idents,
+            tls_watch,
+            &mut server_send,
+            "publish-request-refused",
+            &tracker,
+            &token,
+        )
+        .await
+        .expect("acknowledging the request still succeeds");
+
+        assert_log_contains(&logs, "Rejected publish-pcap-relay-publish-request-refused").await;
+        // Nothing ran in the refused relay's place: the peer never saw a dial.
+        super::fixtures::assert_no_peer_connection(connection_rx).await;
+    }
+
+    /// Drives one production `handle_connection` against `tracker` over a real
+    /// QUIC connection, and returns the client side of it.
+    ///
+    /// The caller decides when the tracker closes, which is what makes the
+    /// refusal branches reachable: a tracker closed before the call refuses
+    /// the request-stream task, and one closed while the handler is running
+    /// refuses whatever it registers next.
+    async fn drive_handle_connection(
+        tracker: &TaskTracker,
+        stream_direct_channels: crate::comm::StreamDirectChannels,
+    ) -> (TestClient, tempfile::TempDir) {
+        init_crypto();
+        let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+        let db = Database::open(temp_dir.path(), &DbOptions::default())
+            .expect("open publish test database");
+        let certs = build_test_certs();
+        let server_config = config_server(&certs).expect("publish server config");
+        let endpoint = Endpoint::server(
+            server_config,
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        )
+        .expect("start the publish listener");
+        let server_addr = endpoint.local_addr().expect("publish local addr");
+
+        let (peers, peer_idents) = new_peers_data(None);
+        let handler_tracker = tracker.clone();
+        let token = tracker.root_token().clone();
+        tokio::spawn(async move {
+            let incoming = endpoint.accept().await.expect("an incoming connection");
+            let _ = crate::comm::publish::handle_connection(
+                incoming,
+                db,
+                new_pcap_sensors(),
+                stream_direct_channels,
+                build_ingest_sensors(),
+                peers,
+                peer_idents,
+                build_test_tls_watch(&certs),
+                handler_tracker,
+                token,
+            )
+            .await;
+        });
+
+        let client = TestClient::new(server_addr, NODE1.server_name()).await;
+        (client, temp_dir)
+    }
+
+    /// A tracker closed before the connection handler reaches its
+    /// request-stream spawn refuses it, logs the refusal with the connection
+    /// it belongs to, and runs nothing in its place.
+    #[tokio::test]
+    async fn a_closed_tracker_refuses_the_request_stream_task() {
+        init_crypto();
+        let tracker = TaskTracker::new();
+        tracker.close().expect("close the publish tracker");
+        let channels = new_stream_direct_channels();
+
+        let (logs, _guard) = start_log_capture();
+        let (mut client, _temp_dir) = drive_handle_connection(&tracker, channels.clone()).await;
+
+        assert_log_contains(&logs, "Rejected publish-req-stream-").await;
+
+        // Nothing ran outside the tracker: no request-stream task means no
+        // subscription can be started on this connection. The refused task's
+        // receive side went with it, so the write below may be stopped
+        // outright; either outcome says the same thing.
+        let _ = send_stream_request(
+            &mut client.send,
+            StreamRequestPayload::SemiSupervised {
+                record_type: RequestStreamRecord::Conn,
+                request: RequestSemiSupervisedStream {
+                    start: 0,
+                    sensor: Some(vec![SENSOR_SEMI_SUPERVISED_ONE.to_string()]),
+                },
+            },
+        )
+        .await;
+        assert!(
+            tokio::time::timeout(StdDuration::from_secs(1), client.conn.accept_uni())
+                .await
+                .is_err(),
+            "a refused request-stream task must not answer a subscription"
+        );
+        assert!(
+            registered_target_sensors(&channels).await.is_empty(),
+            "a refused request-stream task must register no routing entries"
+        );
+
+        tracker.cancel_children();
+    }
+
+    /// A tracker closed while a connection handler is running refuses the
+    /// subscription and the request handler it registers next.
+    #[tokio::test]
+    async fn a_closed_tracker_refuses_a_subscription_and_a_request() {
+        init_crypto();
+        let tracker = TaskTracker::new();
+        let channels = new_stream_direct_channels();
+        let (mut client, _temp_dir) = drive_handle_connection(&tracker, channels.clone()).await;
+
+        // The request-stream task is admitted before the close, so it is the
+        // work it registers next that gets refused.
+        let deadline = std::time::Instant::now() + CANCEL_TIMEOUT;
+        while tracker.pending_count() == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the request-stream task should have been admitted"
+            );
+            tokio::task::yield_now().await;
+        }
+
+        let (logs, _guard) = start_log_capture();
+        tracker.close().expect("close the publish tracker");
+
+        send_stream_request(
+            &mut client.send,
+            StreamRequestPayload::SemiSupervised {
+                record_type: RequestStreamRecord::Conn,
+                request: RequestSemiSupervisedStream {
+                    start: 0,
+                    sensor: Some(vec![SENSOR_SEMI_SUPERVISED_ONE.to_string()]),
+                },
+            },
+        )
+        .await
+        .expect("sending a stream request");
+        assert_log_contains(&logs, "Rejected publish-stream-").await;
+        assert!(
+            registered_target_sensors(&channels).await.is_empty(),
+            "a refused subscription must register no routing entries"
+        );
+
+        let (mut send, _recv) = client.conn.open_bi().await.expect("open a request stream");
+        send_range_data_request(
+            &mut send,
+            MessageCode::ReqRange,
+            build_range_request(SENSOR_SEMI_SUPERVISED_ONE, "conn"),
+        )
+        .await
+        .expect("send a range request");
+        assert_log_contains(&logs, "Rejected publish-request-").await;
+
+        tracker.cancel_children();
+    }
+
+    /// A retry loop dialing a peer that never answers gives up when its token
+    /// fires, rather than dialing through the drain.
+    #[tokio::test]
+    async fn connect_repeatedly_gives_up_a_dial_on_cancellation() {
+        init_crypto();
+        // A UDP socket nobody reads: the dial reaches a live port, so no ICMP
+        // rejection cuts it short, and it waits out its handshake timeout.
+        let black_hole = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind the black hole socket");
+        let peer_addr = black_hole.local_addr().expect("black hole addr");
+
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let endpoint = Endpoint::client("[::]:0".parse().expect("client addr"))
+            .expect("build a client endpoint");
+        let token = CancellationToken::new();
+
+        let dial = tokio::spawn({
+            let token = token.clone();
+            async move {
+                crate::comm::publish::connect_repeatedly(
+                    &endpoint,
+                    peer_addr,
+                    NODE2.server_name(),
+                    &tls_watch,
+                    &token,
+                )
+                .await
+            }
+        });
+
+        // The first datagram off the endpoint is the dial: it proves the
+        // attempt is in flight before the token fires, with no sleep to guess
+        // at how long that takes.
+        let mut buf = [0_u8; 1];
+        tokio::time::timeout(CANCEL_TIMEOUT, black_hole.recv_from(&mut buf))
+            .await
+            .expect("the dial should reach the black hole")
+            .expect("read the dial datagram");
+
+        token.cancel();
+        let outcome = tokio::time::timeout(CANCEL_TIMEOUT, dial)
+            .await
+            .expect("a cancelled dial must return")
+            .expect("the dial task should not panic")
+            .expect("giving up a dial is a normal return, not an error");
+        assert!(
+            outcome.is_none(),
+            "a cancelled dial reports that it produced no connection"
+        );
+    }
+
+    /// The wait between dial attempts loses the same race.
+    ///
+    /// The server name is not a valid DNS name, so every attempt fails inside
+    /// `connect_with` without touching the network and the loop is in its
+    /// backoff almost at once.
+    #[tokio::test]
+    async fn connect_repeatedly_gives_up_a_retry_sleep_on_cancellation() {
+        init_crypto();
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let endpoint = Endpoint::client("[::]:0".parse().expect("client addr"))
+            .expect("build a client endpoint");
+        let token = CancellationToken::new();
+        let peer_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1);
+
+        let (logs, _guard) = start_log_capture();
+        let dial = tokio::spawn({
+            let token = token.clone();
+            async move {
+                crate::comm::publish::connect_repeatedly(
+                    &endpoint,
+                    peer_addr,
+                    "not a valid dns name",
+                    &tls_watch,
+                    &token,
+                )
+                .await
+            }
+        });
+
+        // The failure log is what says the loop has reached its backoff.
+        assert_log_contains(&logs, "Cannot connect:").await;
+
+        token.cancel();
+        let outcome = tokio::time::timeout(CANCEL_TIMEOUT, dial)
+            .await
+            .expect("a cancelled retry sleep must return")
+            .expect("the dial task should not panic")
+            .expect("giving up a retry is a normal return, not an error");
+        assert!(
+            outcome.is_none(),
+            "a cancelled retry reports that it produced no connection"
+        );
+    }
+
+    /// A peer that accepts a QUIC connection and never answers the publish
+    /// version exchange releases on cancellation.
+    #[tokio::test]
+    async fn a_stalled_outbound_handshake_releases_on_cancellation() {
+        init_crypto();
+        let peer_certs = NODE2.build_certs();
+        let server_config = config_server(&peer_certs).expect("peer publish server config");
+        let endpoint = Endpoint::server(
+            server_config,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+        .expect("start the stalling peer listener");
+        let peer_addr = endpoint.local_addr().expect("stalling peer addr");
+
+        let (accepted_tx, mut accepted_rx) = mpsc::unbounded_channel();
+        let accept_endpoint = endpoint.clone();
+        let _accept = tokio::spawn(async move {
+            let Some(incoming) = accept_endpoint.accept().await else {
+                return;
+            };
+            let Ok(connection) = incoming.await else {
+                return;
+            };
+            let _ = accepted_tx.send(());
+            // Never answers the version exchange; hold the connection open.
+            std::future::pending::<()>().await;
+            drop(connection);
+        });
+
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let token = CancellationToken::new();
+
+        let (connected, ()) = tokio::join!(
+            crate::comm::publish::connect(peer_addr, NODE2.server_name(), &tls_watch, &token),
+            async {
+                recv_with_timeout(&mut accepted_rx, "stalling peer accept", CANCEL_TIMEOUT).await;
+                token.cancel();
+            },
+        );
+        assert!(
+            connected
+                .expect("giving up a handshake is a normal return, not an error")
+                .is_none(),
+            "a cancelled outbound handshake reports no connection"
+        );
+    }
+
+    /// A peer that takes a range request and then goes quiet does not hold the
+    /// receive loop, or the drain behind it, open.
+    #[tokio::test]
+    async fn a_quiet_peer_releases_the_range_receive_loop_on_cancellation() {
+        init_crypto();
+        const SENSOR: &str = "range_quiet_peer";
+
+        let peer_certs = NODE2.build_certs();
+        let server_config = config_server(&peer_certs).expect("peer publish server config");
+        let endpoint = Endpoint::server(
+            server_config,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+        .expect("start the quiet peer listener");
+        let peer_addr = endpoint.local_addr().expect("quiet peer addr");
+
+        let (requested_tx, mut requested_rx) = mpsc::unbounded_channel();
+        let accept_endpoint = endpoint.clone();
+        let _accept = tokio::spawn(async move {
+            let Some(incoming) = accept_endpoint.accept().await else {
+                return;
+            };
+            let Ok(connection) = incoming.await else {
+                return;
+            };
+            if server_handshake(&connection, PUBLISH_VERSION_REQ)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let Ok((send, mut recv)) = connection.accept_bi().await else {
+                return;
+            };
+            if giganto_client::publish::receive_range_data_request(&mut recv)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = requested_tx.send(());
+            // Takes the request and answers nothing.
+            std::future::pending::<()>().await;
+            drop(send);
+        });
+
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let token = CancellationToken::new();
+        let (mut send, _client_conn) = open_range_stream("range.quiet.peer").await;
+
+        let request_range = RequestRange {
+            sensor: SENSOR.to_string(),
+            kind: "conn".to_string(),
+            start: 0,
+            end: i64::MAX,
+            count: 5,
+        };
+        let (relayed, ()) = tokio::join!(
+            crate::comm::publish::process_range_data_in_peer_giganto::<u8>(
+                &mut send,
+                peer_idents,
+                peer_addr,
+                &tls_watch,
+                request_range,
+                &token,
+            ),
+            async {
+                recv_with_timeout(
+                    &mut requested_rx,
+                    "quiet peer range request",
+                    CANCEL_TIMEOUT,
+                )
+                .await;
+                token.cancel();
+            },
+        );
+        relayed.expect("a peer that goes quiet ends the relay cooperatively");
+    }
+
+    /// A publish client can still be built against the harness after the
+    /// entry task has drained, and gets nothing.
+    #[tokio::test]
+    async fn the_endpoint_is_closed_only_after_the_drain() {
+        init_crypto();
+        let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+        let db = Database::open(temp_dir.path(), &DbOptions::default())
+            .expect("open publish test database");
+        let certs = build_test_certs();
+        let (peers, peer_idents) = new_peers_data(None);
+        let stream_direct_channels = new_stream_direct_channels();
+        let (server_addr, server_handle) = spawn_server(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            db,
+            new_pcap_sensors(),
+            stream_direct_channels.clone(),
+            build_ingest_sensors(),
+            peers,
+            peer_idents,
+            &certs,
+        );
+
+        let mut client = TestClient::new(server_addr, NODE1.server_name()).await;
+        let _subscription = start_semi_supervised_subscription(
+            &mut client,
+            RequestStreamRecord::Conn,
+            &[SENSOR_SEMI_SUPERVISED_ONE],
+        )
+        .await;
+
+        // The subscription is up, so its cleanup runs during the drain, on a
+        // connection the entry task closes only afterwards.
+        tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, server_handle.shutdown())
+            .await
+            .expect("the entry task should drain and return");
+        assert!(
+            registered_target_sensors(&stream_direct_channels)
+                .await
+                .is_empty(),
+            "the subscription's cleanup should have run before the entry task returned"
+        );
+
+        // The listener is gone once the entry task has returned.
+        let late = init_client();
+        let refused = tokio::time::timeout(StdDuration::from_secs(2), async {
+            late.connect(server_addr, NODE1.server_name())
+                .ok()?
+                .await
+                .ok()
+        })
+        .await;
+        assert!(
+            !matches!(refused, Ok(Some(_))),
+            "the publish endpoint should be closed once the entry task has returned"
+        );
+        drop(client);
     }
 }

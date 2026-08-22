@@ -985,10 +985,7 @@ mod listener_reload_contract_tests {
         use std::sync::Arc;
 
         use tempfile::tempdir;
-        use tokio::{
-            sync::{Notify, watch},
-            time::sleep,
-        };
+        use tokio::{sync::watch, time::sleep};
 
         use crate::comm::{
             new_ingest_sensors, new_pcap_sensors, new_peers_data, new_stream_direct_channels,
@@ -1020,7 +1017,7 @@ mod listener_reload_contract_tests {
             generation: 0,
         }));
 
-        let notify_shutdown = Arc::new(Notify::new());
+        let publish_token = tokio_util::sync::CancellationToken::new();
         let pcap_sensors = new_pcap_sensors();
         let ingest_sensors = new_ingest_sensors(&db);
         let stream_direct_channels = new_stream_direct_channels();
@@ -1028,7 +1025,7 @@ mod listener_reload_contract_tests {
 
         let server_task = {
             let db = db.clone();
-            let shutdown = notify_shutdown.clone();
+            let token = publish_token.clone();
             tokio::spawn(async move {
                 server
                     .run(
@@ -1039,9 +1036,9 @@ mod listener_reload_contract_tests {
                         peers,
                         peer_idents,
                         tls_watch,
-                        shutdown,
+                        token,
                     )
-                    .await;
+                    .await
             })
         };
 
@@ -1102,7 +1099,7 @@ mod listener_reload_contract_tests {
 
         pre_reload_conn.close(0u32.into(), b"done");
         post_reload_conn.close(0u32.into(), b"done");
-        notify_shutdown.notify_waiters();
+        publish_token.cancel();
         let _ = timeout(Duration::from_secs(3), server_task).await;
     }
 
@@ -1326,7 +1323,7 @@ mod listener_reload_contract_tests {
         let server_addr = server.local_addr();
         assert_ne!(server_addr.port(), 0);
 
-        let notify_shutdown = Arc::new(Notify::new());
+        let publish_token = tokio_util::sync::CancellationToken::new();
         let pcap_sensors = new_pcap_sensors();
         let ingest_sensors = new_ingest_sensors(&db);
         let stream_direct_channels = new_stream_direct_channels();
@@ -1334,7 +1331,7 @@ mod listener_reload_contract_tests {
 
         let server_task = {
             let db = db.clone();
-            let shutdown = notify_shutdown.clone();
+            let token = publish_token.clone();
             tokio::spawn(async move {
                 server
                     .run(
@@ -1345,9 +1342,9 @@ mod listener_reload_contract_tests {
                         peers,
                         peer_idents,
                         tls_watch,
-                        shutdown,
+                        token,
                     )
-                    .await;
+                    .await
             })
         };
 
@@ -1407,7 +1404,7 @@ mod listener_reload_contract_tests {
         );
 
         pre_reload_conn.close(0u32.into(), b"done");
-        notify_shutdown.notify_waiters();
+        publish_token.cancel();
         let _ = timeout(Duration::from_secs(3), server_task).await;
     }
 }

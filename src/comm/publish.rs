@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use giganto_client::connection::client_handshake;
@@ -41,14 +41,13 @@ use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig, VarInt};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
     select,
-    sync::{
-        Notify,
-        mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
-    },
+    sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use self::implement::RequestStreamMessage;
+use crate::cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report};
 use crate::comm::{
     IngestSensors, PcapSensors, StreamDirectChannels,
     ingest::{NetworkKey, implement::EventFilter},
@@ -65,6 +64,8 @@ use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 use crate::tls_reload::{self, TlsWatch};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.28.0,<0.29.0";
+/// Names the publish subsystem tracker in the drain progress log.
+const PUBLISH_DRAIN_LABEL: &str = "publish";
 
 pub struct Server {
     server_config: ServerConfig,
@@ -95,6 +96,14 @@ impl Server {
         })
     }
 
+    /// Binds the publish listener and serves it until `token` is cancelled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the listener cannot be bound, if the publish task
+    /// tracker rejects one of the subsystem's own tasks, or if a tracker lock
+    /// is poisoned. A bind failure used to panic a detached task; it is
+    /// reported to the caller now that the entry task is tracked.
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         self,
@@ -105,10 +114,10 @@ impl Server {
         peers: Peers,
         peer_idents: PeerIdents,
         tls_watch: TlsWatch,
-        notify_shutdown: Arc<Notify>,
-    ) {
+        token: CancellationToken,
+    ) -> Result<()> {
         self.bind()
-            .expect("endpoint")
+            .context("failed to bind the publish listener")?
             .run(
                 db,
                 pcap_sensors,
@@ -117,9 +126,9 @@ impl Server {
                 peers,
                 peer_idents,
                 tls_watch,
-                notify_shutdown,
+                token,
             )
-            .await;
+            .await
     }
 }
 
@@ -129,7 +138,22 @@ impl BoundServer {
         self.local_addr
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Serves the bound publish listener until `token` is cancelled, then
+    /// drains every task it admitted.
+    ///
+    /// Publish owns a subsystem tracker built from `token`, so the top-level
+    /// tracker's cancellation reaches every connection handler, every request
+    /// handler, every stream subscription, and every background PCAP relay it
+    /// started. Cancellation ends admission on both sides: this loop stops
+    /// accepting, and closing the tracker stops the handlers from registering
+    /// more work. The entry task returns only once the drain is empty, so no
+    /// publish task is left writing to a client when the generation moves on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the publish task tracker rejects one of the
+    /// subsystem's own tasks or if a tracker lock is poisoned.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(crate) async fn run(
         self,
         db: Database,
@@ -139,46 +163,41 @@ impl BoundServer {
         peers: Peers,
         peer_idents: PeerIdents,
         mut tls_watch: TlsWatch,
-        notify_shutdown: Arc<Notify>,
-    ) {
+        token: CancellationToken,
+    ) -> Result<()> {
         let local_addr = self.local_addr();
         let endpoint = self.endpoint;
         info!("Publish listening on {local_addr}");
 
-        let mut conn_hdl: Option<tokio::task::JoinHandle<()>> = None;
+        // Built from the token handed down by `main`, so the top-level
+        // `cancel_children` reaches everything registered here. Building it
+        // with `TaskTracker::new()` would start a fresh root and cut publish
+        // off from process shutdown without the compiler noticing.
+        let tracker = TaskTracker::with_token(token.clone());
+
         loop {
             select! {
-                Some(conn) = endpoint.accept()  => {
-                    let db = db.clone();
-                    let pcap_sensors = pcap_sensors.clone();
-                    let stream_direct_channels = stream_direct_channels.clone();
-                    let notify_shutdown = notify_shutdown.clone();
-                    let ingest_sensors = ingest_sensors.clone();
-                    let peers = peers.clone();
-                    let peer_idents = peer_idents.clone();
-                    let tls_watch = tls_watch.clone();
-                    conn_hdl = Some(tokio::spawn(async move {
-                        let remote = conn.remote_address();
-                        if let Err(e) = handle_connection(
-                            conn,
-                            db,
-                            pcap_sensors,
-                            stream_direct_channels,
-                            ingest_sensors,
-                            peers,
-                            peer_idents,
-                            tls_watch,
-                            notify_shutdown
-                        )
-                        .await
-                        {
-                            error!("Connection to {remote} failed: {}", e);
-                        }
-                    }));
-                },
+                biased;
+
+                // Cancellation branch. Nothing admitted is lost here: the arms
+                // below hold only a QUIC handshake that has not produced a
+                // connection yet and a TLS update that changes nothing for
+                // connections already up. A client that connects from now on
+                // is neither admitted nor rejected — `accept()` is simply no
+                // longer polled — and it ends when the endpoint is closed
+                // after the drain. `biased` is what keeps a steady stream of
+                // arrivals from starving this arm.
+                () = token.cancelled() => {
+                    info!("Shutting down publish");
+                    break;
+                }
+
                 // Reload TLS server config when new material is available.
                 // Existing connections remain alive; only new handshakes
-                // use the refreshed certificate.
+                // use the refreshed certificate. Polled ahead of the accept
+                // arm because a `biased` select takes the first ready arm, and
+                // a steady stream of incoming connections would otherwise keep
+                // a reload waiting.
                 Ok(()) = tls_watch.changed() => {
                     let tls = tls_watch.borrow_and_update().clone();
                     match config_server(&tls.certs) {
@@ -194,21 +213,90 @@ impl BoundServer {
                         }
                     }
                 },
-                () = notify_shutdown.notified() => {
-                    endpoint.close(0_u32.into(), &[]);
-                    if let Some(handle) = conn_hdl {
-                        info!("Shutting down connections");
-                        let _ = tokio::join!(handle);
+
+                Some(conn) = endpoint.accept() => {
+                    let remote = conn.remote_address();
+                    let db = db.clone();
+                    let pcap_sensors = pcap_sensors.clone();
+                    let stream_direct_channels = stream_direct_channels.clone();
+                    let ingest_sensors = ingest_sensors.clone();
+                    let peers = peers.clone();
+                    let peer_idents = peer_idents.clone();
+                    let tls_watch = tls_watch.clone();
+                    let connection_tracker = tracker.clone();
+                    let spawned = tracker.spawn(
+                        format!("publish-conn-{remote}"),
+                        move |token| async move {
+                            if let Err(e) = handle_connection(
+                                conn,
+                                db,
+                                pcap_sensors,
+                                stream_direct_channels,
+                                ingest_sensors,
+                                peers,
+                                peer_idents,
+                                tls_watch,
+                                connection_tracker,
+                                token,
+                            )
+                            .await
+                            {
+                                error!("Publish connection to {remote} failed: {e}");
+                            }
+                        },
+                    );
+                    // The handle is dropped: a connection handler logs its own
+                    // domain errors and the tracker reports any task that
+                    // vanishes without returning, so there is no outcome left
+                    // for the entry task to observe. The rejection branch is
+                    // defensive — the loop leaves on cancellation before the
+                    // tracker is closed, so nothing in the shutdown sequence
+                    // makes it fire — but the `Result` has to be handled and
+                    // the branch records the invariant.
+                    if let Err(e) = spawned {
+                        warn!("Rejected publish connection from {remote}: {e}");
                     }
-                    info!("Shutting down publish");
-                    break;
                 },
             }
         }
+
+        // Admission rejection, the half the accept loop cannot do on its own:
+        // a closed tracker turns away every request handler, subscription, and
+        // relay a still-running handler might try to register.
+        tracker
+            .close()
+            .context("failed to close the publish task tracker")?;
+        // Same policy as the top level: report every round and keep waiting.
+        // `drain_with_report` closes and cancels again, both idempotent.
+        drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PUBLISH_DRAIN_LABEL)
+            .await
+            .context("failed to drain the publish task tracker")?;
+
+        // Only now, with every handler returned, is the listener torn down.
+        // Closing it earlier would kill the connections the subscriptions and
+        // request handlers are still writing their last frames on, and it is
+        // also what ends the connections that arrived after the accept loop
+        // left.
+        endpoint.close(0_u32.into(), &[]);
+        endpoint.wait_idle().await;
+
+        Ok(())
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Serves one publish connection: the version handshake, the request-stream
+/// task, and one request handler per bi-directional stream the client opens.
+///
+/// Cancelled by explicit branches. This task owns the connection every task it
+/// spawns writes on, so it must not die by drop: the two branches that fire
+/// before any work is admitted close the connection, and every branch after
+/// that leaves it open for the post-drain endpoint close.
+///
+/// `tracker` is the publish subsystem tracker, carried in so the request
+/// stream and the request handlers spawned here land in the same registry as
+/// this task rather than escaping it, and `token` is this task's own child of
+/// that tracker's root.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn handle_connection(
     conn: quinn::Incoming,
     db: Database,
@@ -218,11 +306,37 @@ async fn handle_connection(
     peers: Peers,
     peer_idents: PeerIdents,
     tls_watch: TlsWatch,
-    notify_shutdown: Arc<Notify>,
+    tracker: TaskTracker,
+    token: CancellationToken,
 ) -> Result<()> {
-    let connection = conn.await?;
+    let remote = conn.remote_address();
 
-    let (send, recv) = match server_handshake(&connection, PUBLISH_VERSION_REQ).await {
+    // Cancellation branch. The QUIC handshake is dropped before it yields a
+    // connection, so nothing has been admitted and there is nothing to clean
+    // up. Without this arm a client that opens a connection and then stalls
+    // would hold the publish drain open for as long as it cared to.
+    let connection = select! {
+        biased;
+        () = token.cancelled() => return Ok(()),
+        connection = conn => connection?,
+    };
+
+    // Cancellation branch. Same story one step further in: the version
+    // handshake is dropped and the connection is closed. A client can finish
+    // QUIC transport setup and never send its version message, so this wait
+    // is the one a stalled client would otherwise park the drain on. Nothing
+    // has been admitted on this connection yet, and the client has been told
+    // nothing, so closing it here gives it a close frame instead of a
+    // connection that dies by drop.
+    let handshake = select! {
+        biased;
+        () = token.cancelled() => {
+            connection.close(0_u32.into(), b"shutting down");
+            return Ok(());
+        }
+        handshake = server_handshake(&connection, PUBLISH_VERSION_REQ) => handshake,
+    };
+    let (send, recv) = match handshake {
         Ok((send, recv)) => {
             info!("Compatible version");
             (send, recv)
@@ -237,26 +351,65 @@ async fn handle_connection(
     log_connected_client(&cert_chain)?;
     let (service_name, sensor) = service_fqdn_from_cert(&cert_chain)?;
 
-    let req_stream_hdl: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> =
-        tokio::spawn({
-            let tls_watch = tls_watch.clone();
-            request_stream(
-                connection.clone(),
-                db.clone(),
+    let req_stream_name = format!("publish-req-stream-{sensor}-{remote}");
+    let spawned = tracker.spawn(req_stream_name.clone(), {
+        let error_label = req_stream_name.clone();
+        let connection = connection.clone();
+        let db = db.clone();
+        let sensor = sensor.clone();
+        let pcap_sensors = pcap_sensors.clone();
+        let stream_direct_channels = stream_direct_channels.clone();
+        let peers = peers.clone();
+        let peer_idents = peer_idents.clone();
+        let tls_watch = tls_watch.clone();
+        let stream_tracker = tracker.clone();
+        move |token| async move {
+            if let Err(e) = request_stream(
+                connection,
+                db,
                 send,
                 recv,
                 sensor,
-                pcap_sensors.clone(),
-                stream_direct_channels.clone(),
-                peers.clone(),
-                peer_idents.clone(),
+                pcap_sensors,
+                stream_direct_channels,
+                peers,
+                peer_idents,
                 tls_watch,
-                notify_shutdown.clone(),
+                stream_tracker,
+                token,
             )
-        });
+            .await
+            {
+                error!("{error_label} failed: {e}");
+            }
+        }
+    });
+    // The handle is dropped rather than joined on the way out: the
+    // request-stream task names itself in its own error log, the tracker
+    // reports it if it ends without returning, and the drain is what waits for
+    // it now. A rejection means admission has already closed, so the
+    // subscription work this stream would have carried stays unrun.
+    if let Err(e) = spawned {
+        warn!("Rejected {req_stream_name}: {e}");
+    }
 
     loop {
         select! {
+            biased;
+
+            // Cancellation branch. The pending `accept_bi` is dropped, so a
+            // stream the client was in the middle of opening is lost; nothing
+            // was written on it, and the client detects the missing response
+            // and retries.
+            //
+            // This connection has admitted work by now, so it is deliberately
+            // left open: the request-stream task, the subscriptions it
+            // started, and the request handlers below are all still writing
+            // and cleaning up on it, and they observe their own tokens. The
+            // endpoint close at the end of the entry task's shutdown sequence
+            // delivers the close frame to every remaining connection at once.
+            () = token.cancelled() => return Ok(()),
+
             stream = connection.accept_bi()  => {
                 let stream = match stream {
                     Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
@@ -269,22 +422,57 @@ async fn handle_connection(
                     Ok(s) => s,
                 };
 
+                let task_name = format!("publish-request-{sensor}-{}", stream.1.id());
+                let error_label = task_name.clone();
+                let request_label = task_name.clone();
                 let db = db.clone();
                 let pcap_sensors = pcap_sensors.clone();
                 let ingest_sensors = ingest_sensors.clone();
                 let peers = peers.clone();
                 let peer_idents = peer_idents.clone();
                 let tls_watch = tls_watch.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_request(stream, db, pcap_sensors, ingest_sensors, peers, peer_idents, tls_watch).await {
-                        error!("Failed: {}", e);
+                let request_tracker = tracker.clone();
+                let spawned = tracker.spawn(task_name.clone(), move |token| async move {
+                    // Cancelled by drop, at the task level. Everything a
+                    // request handler holds is a QUIC stream and a store
+                    // iterator, and the only loss is a response the client
+                    // sees truncated and retries, so the body is dropped
+                    // wherever it happens to be awaiting rather than carrying
+                    // a branch at each of its many response writes. Dropping
+                    // the inner future does not trip the tracker's
+                    // completion warning: the tracked future is this wrapper,
+                    // and the wrapper returns normally.
+                    let request_token = token.clone();
+                    select! {
+                        biased;
+                        () = token.cancelled() => {}
+                        result = handle_request(
+                            stream,
+                            db,
+                            pcap_sensors,
+                            ingest_sensors,
+                            peers,
+                            peer_idents,
+                            tls_watch,
+                            request_tracker,
+                            request_label,
+                            request_token,
+                        ) => {
+                            if let Err(e) = result {
+                                error!("{error_label} failed: {e}");
+                            }
+                        }
                     }
                 });
-            },
-            () = notify_shutdown.notified() => {
-                connection.close(0_u32.into(), &[]);
-                req_stream_hdl.await??;
-                return Ok(())
+                // The handle is dropped for the same reason the entry task
+                // drops this connection's: the handler names itself in its own
+                // error log, and the tracker reports it if it ends without
+                // returning. A rejected request means admission has already
+                // closed, so the request stays unrun and the cancellation
+                // branch takes over on the next round.
+                if let Err(e) = spawned {
+                    warn!("Rejected {task_name}: {e}");
+                }
             },
         }
     }
@@ -296,7 +484,14 @@ fn log_connected_client(cert_chain: &[rustls::pki_types::CertificateDer<'_>]) ->
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Reads stream requests off a publish connection's control stream and starts
+/// one task per subscription, plus one background relay task per accepted PCAP
+/// extraction request.
+///
+/// Cancelled by explicit branches. It owns no shared state of its own — the
+/// subscriptions it starts own theirs — but it does own the control stream's
+/// receive side, so it stops reading rather than dying by drop.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn request_stream(
     connection: Connection,
     stream_db: Database,
@@ -308,10 +503,22 @@ async fn request_stream(
     peers: Peers,
     peer_idents: PeerIdents,
     tls_watch: TlsWatch,
-    notify_shutdown: Arc<Notify>,
+    tracker: TaskTracker,
+    token: CancellationToken,
 ) -> Result<()> {
     loop {
-        match receive_stream_request(&mut recv).await {
+        // Cancellation branch. A stream request that was half-read off the
+        // control stream is dropped; nothing was started for it and nothing
+        // was answered, so the client sees the connection end without a start
+        // message and re-subscribes to the next generation. Subscriptions and
+        // relays already started are tracked and drained on their own.
+        let request = select! {
+            biased;
+            () = token.cancelled() => return Ok(()),
+            request = receive_stream_request(&mut recv) => request,
+        };
+
+        match request {
             Ok(stream_payload) => {
                 let db = stream_db.clone();
                 let conn = connection.clone();
@@ -327,6 +534,9 @@ async fn request_stream(
                             peer_idents.clone(),
                             tls_watch.clone(),
                             &mut send,
+                            &conn_sensor,
+                            &tracker,
+                            &token,
                         )
                         .await?;
                     }
@@ -334,8 +544,9 @@ async fn request_stream(
                         record_type,
                         request,
                     } => {
-                        let notify_shutdown = notify_shutdown.clone();
-                        tokio::spawn(async move {
+                        let task_name = stream_task_name(Some(&conn_sensor), record_type, &request);
+                        let error_label = task_name.clone();
+                        let spawned = tracker.spawn(task_name.clone(), move |token| async move {
                             if let Err(e) = process_stream(
                                 db,
                                 conn,
@@ -344,20 +555,29 @@ async fn request_stream(
                                 record_type,
                                 request,
                                 stream_direct_channels,
-                                notify_shutdown,
+                                token,
                             )
                             .await
                             {
-                                error!("{}", e);
+                                error!("{error_label} failed: {e}");
                             }
                         });
+                        // The handle is dropped: the subscription reports its
+                        // own errors under the name above, and the drain is
+                        // what waits for it. A rejection means admission has
+                        // already closed, so the subscription stays unrun
+                        // rather than escaping the tracker.
+                        if let Err(e) = spawned {
+                            warn!("Rejected {task_name}: {e}");
+                        }
                     }
                     StreamRequestPayload::TimeSeriesGenerator {
                         record_type,
                         request,
                     } => {
-                        let notify_shutdown = notify_shutdown.clone();
-                        tokio::spawn(async move {
+                        let task_name = stream_task_name(None, record_type, &request);
+                        let error_label = task_name.clone();
+                        let spawned = tracker.spawn(task_name.clone(), move |token| async move {
                             if let Err(e) = process_stream(
                                 db,
                                 conn,
@@ -366,18 +586,23 @@ async fn request_stream(
                                 record_type,
                                 request,
                                 stream_direct_channels,
-                                notify_shutdown,
+                                token,
                             )
                             .await
                             {
-                                error!("{}", e);
+                                error!("{error_label} failed: {e}");
                             }
                         });
+                        // Dropped and logged for the same reasons as the
+                        // semi-supervised subscription above.
+                        if let Err(e) = spawned {
+                            warn!("Rejected {task_name}: {e}");
+                        }
                     }
                 }
             }
             Err(e) => {
-                error!("Publish error {}", e);
+                error!("Publish stream request from {conn_sensor} failed: {e}");
                 let _ = recv.stop(VarInt::from_u32(0));
                 break;
             }
@@ -386,6 +611,36 @@ async fn request_stream(
     Ok(())
 }
 
+/// Names one subscription task after the sensor it serves and, for a time
+/// series generator, the stream id its request carries.
+///
+/// Only the time series generator request implements `sensor` and `id`; the
+/// semi-supervised one panics on both, so its name comes from the connection's
+/// sensor instead.
+fn stream_task_name<T: RequestStreamMessage>(
+    conn_sensor: Option<&str>,
+    record_type: RequestStreamRecord,
+    request: &T,
+) -> String {
+    if request.is_time_series_generator() {
+        let sensor = request.sensor().unwrap_or_else(|_| "unknown".to_string());
+        return match request.id() {
+            Some(id) => format!("publish-stream-{sensor}-{record_type:?}-{id}"),
+            None => format!("publish-stream-{sensor}-{record_type:?}"),
+        };
+    }
+    let sensor = conn_sensor.unwrap_or("unknown");
+    format!("publish-stream-{sensor}-{record_type:?}")
+}
+
+/// Acknowledges a PCAP extraction request and starts the background relay that
+/// carries it to the sensors and peers in charge.
+///
+/// The acknowledgement means the request was accepted for background
+/// processing, not that the relay completed, so the relay is best-effort: it
+/// stays tracked, observes cancellation, and reports what it could not deliver
+/// through the log rather than gaining a durable-retry guarantee.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn process_pcap_extract_filters(
     filters: Vec<PcapFilter>,
     pcap_sensors: PcapSensors,
@@ -393,23 +648,52 @@ async fn process_pcap_extract_filters(
     peer_idents: PeerIdents,
     tls_watch: TlsWatch,
     resp_send: &mut SendStream,
+    owner: &str,
+    tracker: &TaskTracker,
+    token: &CancellationToken,
 ) -> Result<()> {
     let mut buf = Vec::new();
-    send_ok(resp_send, &mut buf, ())
-        .await
-        .context("Failed to send ok")?;
+    // Cancellation branch. The acknowledgement is abandoned unwritten, so the
+    // request is never accepted and no relay is started for it; the client
+    // sees no ack and can retry against the next generation.
+    let acked = select! {
+        biased;
+        () = token.cancelled() => return Ok(()),
+        acked = send_ok(resp_send, &mut buf, ()) => acked,
+    };
+    acked.context("Failed to send ok")?;
 
-    let tls_watch = tls_watch.clone();
-    tokio::spawn(async move {
+    let task_name = format!("publish-pcap-relay-{owner}");
+    let error_label = task_name.clone();
+    let spawned = tracker.spawn(task_name.clone(), move |token| async move {
+        // Cancelled by explicit branches. The relay owns outbound peer
+        // connections, so a branch that fires with one up closes it rather
+        // than letting it die by drop.
         for filter in filters {
+            if token.is_cancelled() {
+                // The filters left unrelayed are reported rather than
+                // retried: the ack promised acceptance, not delivery.
+                warn!("{error_label} gave up a pcap filter on shutdown");
+                break;
+            }
             if let Some(sensor_conn) =
                 get_pcap_conn_if_current_giganto_in_charge(pcap_sensors.clone(), &filter.sensor)
                     .await
             {
-                // send/receive extract request from the Sensor
-                match pcap_extract_request(&sensor_conn, &filter).await {
-                    Ok(()) => (),
-                    Err(e) => debug!("Failed to relay pcap request: {e}"),
+                // send/receive extract request from the Sensor.
+                //
+                // Cancellation branch. The exchange with the sensor is
+                // dropped; the sensor owns that connection, so there is
+                // nothing here to close.
+                let Some(relayed) = token
+                    .run_until_cancelled(pcap_extract_request(&sensor_conn, &filter))
+                    .await
+                else {
+                    warn!("{error_label} gave up relaying a pcap request to a sensor");
+                    break;
+                };
+                if let Err(e) = relayed {
+                    debug!("{error_label}: Failed to relay pcap request: {e}");
                 }
             } else if let Some(peer_addr) =
                 peer_in_charge_publish_addr(peers.clone(), &filter.sensor).await
@@ -424,46 +708,88 @@ async fn process_pcap_extract_filters(
                         peer_ident.hostname.clone()
                     } else {
                         error!(
-                            "Peer's server name cannot be identitified. addr: {peer_addr}, sensor: {}",
+                            "{error_label}: Peer's server name cannot be identitified. addr: {peer_addr}, sensor: {}",
                             filter.sensor
                         );
                         continue;
                     }
                 };
-                if let Ok((endpoint, connection, mut peer_send, mut peer_recv)) =
-                    request_range_data_to_peer(
-                        peer_addr,
-                        peer_name.as_str(),
-                        &tls_watch,
-                        MessageCode::Pcap,
-                        filter,
-                    )
-                    .await
+                match request_range_data_to_peer(
+                    peer_addr,
+                    peer_name.as_str(),
+                    &tls_watch,
+                    MessageCode::Pcap,
+                    filter,
+                    &token,
+                )
+                .await
                 {
-                    if let Err(e) = recv_ack_response(&mut peer_recv).await {
+                    // Cancelled while dialing, handshaking, or writing the
+                    // request. Whatever was up has already been closed by
+                    // `request_range_data_to_peer`.
+                    Ok(None) => {
+                        warn!(
+                            "{error_label} gave up relaying a pcap request to peer {peer_addr}"
+                        );
+                        break;
+                    }
+                    Ok(Some((endpoint, connection, mut peer_send, mut peer_recv))) => {
+                        // Cancellation branch. The peer has the request and
+                        // may still act on it; only our wait for its
+                        // acknowledgement is abandoned. The connection is
+                        // closed below either way, so the peer is told.
+                        match token
+                            .run_until_cancelled(recv_ack_response(&mut peer_recv))
+                            .await
+                        {
+                            Some(Ok(())) => {}
+                            Some(Err(e)) => error!(
+                                "{error_label}: Failed to receive ack response from peer. addr: {peer_addr} name: {peer_name} {e}"
+                            ),
+                            None => warn!(
+                                "{error_label} gave up waiting for peer {peer_addr} to acknowledge a pcap request"
+                            ),
+                        }
+                        peer_send.finish().ok();
+                        drop(peer_recv);
+                        close_peer_connection(&endpoint, &connection).await;
+                        if token.is_cancelled() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
                         error!(
-                            "Failed to receive ack response from peer. addr: {peer_addr} name: {peer_name} {e}"
+                            "{error_label}: Failed to connect to peer's publish module. addr: {peer_addr} name: {peer_name}: {e}"
                         );
                     }
-                    peer_send.finish().ok();
-                    drop(peer_recv);
-                    connection.close(0_u32.into(), &[]);
-                    endpoint.wait_idle().await;
-                } else {
-                    error!(
-                        "Failed to connect to peer's publish module. addr: {peer_addr} name: {peer_name}"
-                    );
                 }
             } else {
                 error!(
-                    "Neither this node nor peers are in charge of requested pcap sensor {}",
+                    "{error_label}: Neither this node nor peers are in charge of requested pcap sensor {}",
                     filter.sensor
                 );
             }
         }
     });
+    // The handle is dropped: the relay reports every filter it could not
+    // deliver under the name above, and the drain waits for it. A rejection
+    // means admission has already closed, so the relay stays unrun — the
+    // acknowledgement already written promised acceptance, not delivery.
+    if let Err(e) = spawned {
+        warn!("Rejected {task_name}: {e}");
+    }
 
     Ok(())
+}
+
+/// Closes an outbound peer connection and lets the close frame go out.
+///
+/// `wait_idle` is the one remote-dependent await in publish that needs no
+/// cancellation branch: it follows a local `close`, so QUIC's drain period
+/// bounds it rather than the peer.
+async fn close_peer_connection(endpoint: &Endpoint, connection: &Connection) {
+    connection.close(0_u32.into(), &[]);
+    endpoint.wait_idle().await;
 }
 
 async fn get_pcap_conn_if_current_giganto_in_charge(
@@ -477,6 +803,11 @@ async fn get_pcap_conn_if_current_giganto_in_charge(
         .and_then(|connections| connections.last().cloned())
 }
 
+/// Runs one stream subscription against the store its record type lives in.
+///
+/// Cancelled by explicit branches, never by drop: the subscription registers
+/// entries in `stream_direct_channels` and owes their removal on every exit
+/// path, which a dropped future could not perform.
 #[allow(clippy::too_many_arguments)]
 async fn process_stream<T>(
     db: Database,
@@ -486,7 +817,7 @@ async fn process_stream<T>(
     record_type: RequestStreamRecord,
     request_msg: T,
     stream_direct_channels: StreamDirectChannels,
-    notify_shutdown: Arc<Notify>,
+    token: CancellationToken,
 ) -> Result<()>
 where
     T: RequestStreamMessage,
@@ -503,7 +834,7 @@ where
                         sensor,
                         kind,
                         stream_direct_channels,
-                        notify_shutdown,
+                        token,
                     )
                     .await
                     {
@@ -585,13 +916,20 @@ async fn send_stream<T, N>(
     sensor: Option<String>,
     kind: Option<String>,
     stream_direct_channels: StreamDirectChannels,
-    notify_shutdown: Arc<Notify>,
+    token: CancellationToken,
 ) -> Result<()>
 where
     T: EventFilter + Serialize + DeserializeOwned + Display,
     N: RequestStreamMessage,
 {
-    let mut sender = conn.open_uni().await?;
+    // Cancellation branch. The subscription's outbound stream has not been
+    // opened yet and nothing has been registered in `stream_direct_channels`,
+    // so there is no cleanup to run and the client sees no start message.
+    let mut sender = select! {
+        biased;
+        () = token.cancelled() => return Ok(()),
+        sender = conn.open_uni() => sender?,
+    };
     let channel_keys = msg.channel_keys(sensor.as_deref(), record_type)?;
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
@@ -605,10 +943,19 @@ where
     // The entries just registered belong to this task from here on, so every
     // exit path below has to run through `remove_owned_channel_keys`. The
     // removal cannot be left to a `Drop` implementation because it needs the
-    // async write guard.
+    // async write guard, and it is why this task is never cancelled by drop.
     let result: Result<()> = async {
-        let last_ts = start_stream(&mut sender, &store, &msg, record_type, kind).await?;
-        forward_realtime_records(&mut sender, &mut recv, &conn, &notify_shutdown, last_ts).await;
+        // Cancellation branch. The start message and the records replayed
+        // ahead of the realtime stream are QUIC writes a client that stopped
+        // reading can stall; dropping them truncates a stream the client can
+        // detect. The cleanup below still runs, because only this inner
+        // future is dropped, not the task.
+        let last_ts = select! {
+            biased;
+            () = token.cancelled() => return Ok(()),
+            last_ts = start_stream(&mut sender, &store, &msg, record_type, kind) => last_ts?,
+        };
+        forward_realtime_records(&mut sender, &mut recv, &conn, &token, last_ts).await;
         Ok(())
     }
     .await;
@@ -685,36 +1032,58 @@ where
 /// Forwards realtime record raw data to the subscribing client until the
 /// subscription ends.
 ///
-/// The loop ends on the shutdown signal, on a failure to write to the client's
-/// QUIC stream, or on the client disconnecting. It deliberately does not end on
+/// The loop ends on cancellation, on a failure to write to the client's QUIC
+/// stream, or on the client disconnecting. It deliberately does not end on
 /// the channel closing: the caller keeps the original `UnboundedSender` alive
 /// for the whole subscription, so `recv` stays pending even once the last map
 /// entry naming this subscription is gone.
+///
+/// Returning is what lets the caller run the subscription's cleanup, so both
+/// awaits that depend on a remote party — the channel receive that only a
+/// matching record ends, and the QUIC write a client that stopped reading can
+/// stall — carry their own cancellation branch.
 async fn forward_realtime_records(
     sender: &mut SendStream,
     recv: &mut UnboundedReceiver<Vec<u8>>,
     conn: &Connection,
-    notify_shutdown: &Notify,
+    token: &CancellationToken,
     last_ts: i64,
 ) {
     loop {
-        select! {
-            Some(buf) = recv.recv() => {
-                let ts = i64::from_le_bytes(buf.get(..TIMESTAMP_SIZE).expect("timestamp_size").try_into().expect("timestamp"));
-                if last_ts > ts {
-                    continue;
-                }
-                if let Err(e) = frame::send_bytes(sender, &buf).await {
-                    debug!("Failed to send a realtime record to the subscribing client: {e}");
-                    break;
-                }
-            }
-            () = notify_shutdown.notified() => {
-                break;
-            }
-            _ = conn.closed() => {
-                break;
-            }
+        let buf = select! {
+            biased;
+
+            // Cancellation branch. The subscription stops forwarding; a
+            // record that arrives from here on is lost, and the client
+            // re-subscribes to the next generation. The caller removes this
+            // subscription's routing entries as soon as this returns.
+            () = token.cancelled() => break,
+
+            Some(buf) = recv.recv() => buf,
+            _ = conn.closed() => break,
+        };
+
+        let ts = i64::from_le_bytes(
+            buf.get(..TIMESTAMP_SIZE)
+                .expect("timestamp_size")
+                .try_into()
+                .expect("timestamp"),
+        );
+        if last_ts > ts {
+            continue;
+        }
+
+        // Cancellation branch. The record being written is dropped
+        // mid-frame; the client detects the truncated stream, and the
+        // cleanup the caller owes still runs.
+        let sent = select! {
+            biased;
+            () = token.cancelled() => break,
+            sent = frame::send_bytes(sender, &buf) => sent,
+        };
+        if let Err(e) = sent {
+            debug!("Failed to send a realtime record to the subscribing client: {e}");
+            break;
         }
     }
 }
@@ -774,7 +1143,21 @@ where
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+/// Answers one range or raw-data request off a publish connection.
+///
+/// The caller runs this as one branch of a `select!` against the task's token,
+/// so cancellation drops it wherever it happens to be awaiting; see the
+/// comment at that spawn site for why cancel-by-drop is safe here. `token` is
+/// still threaded through the peer relay paths below, because the awaits those
+/// reach — a dial against an unreachable peer, its retry sleep, an outbound
+/// handshake, and a peer that has gone quiet — are shared with the PCAP relay
+/// task, which is not cancelled by drop.
+///
+/// `tracker` is the publish subsystem tracker, needed because a PCAP
+/// extraction request arriving on this stream starts a background relay task
+/// that has to be registered rather than detached, and `label` names this
+/// request in that relay's task name and in the rejection log.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
     db: Database,
@@ -783,6 +1166,9 @@ async fn handle_request(
     peers: Peers,
     peer_idents: PeerIdents,
     tls_watch: TlsWatch,
+    tracker: TaskTracker,
+    label: String,
+    token: CancellationToken,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_range_data_request(&mut recv).await?;
     match msg_type {
@@ -800,6 +1186,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -813,6 +1200,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -827,6 +1215,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -840,6 +1229,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -853,6 +1243,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -866,6 +1257,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -879,6 +1271,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         true,
                     )
                     .await?;
@@ -892,6 +1285,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -906,6 +1300,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -919,6 +1314,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -932,6 +1328,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -945,6 +1342,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -958,6 +1356,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -972,6 +1371,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -985,6 +1385,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -998,6 +1399,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1011,6 +1413,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1024,6 +1427,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1037,6 +1441,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1050,6 +1455,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1063,6 +1469,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1076,6 +1483,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1090,6 +1498,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1104,6 +1513,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1118,6 +1528,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1132,6 +1543,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1146,6 +1558,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1160,6 +1573,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1174,6 +1588,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1188,6 +1603,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1202,6 +1618,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1216,6 +1633,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1230,6 +1648,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1244,6 +1663,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1258,6 +1678,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1272,6 +1693,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1286,6 +1708,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1300,6 +1723,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                         false,
                     )
                     .await?;
@@ -1329,6 +1753,9 @@ async fn handle_request(
                 peer_idents.clone(),
                 tls_watch.clone(),
                 &mut send,
+                &label,
+                &tracker,
+                &token,
             )
             .await?;
         }
@@ -1345,6 +1772,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1357,6 +1785,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1369,6 +1798,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1381,6 +1811,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1393,6 +1824,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1405,6 +1837,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1417,6 +1850,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1429,6 +1863,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1441,6 +1876,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1453,6 +1889,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1465,6 +1902,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1477,6 +1915,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1489,6 +1928,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1501,6 +1941,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1513,6 +1954,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1525,6 +1967,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1537,6 +1980,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1549,6 +1993,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1561,6 +2006,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1573,6 +2019,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1586,6 +2033,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1598,6 +2046,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1610,6 +2059,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1622,6 +2072,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1634,6 +2085,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1646,6 +2098,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1658,6 +2111,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1670,6 +2124,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1682,6 +2137,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1694,6 +2150,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1706,6 +2163,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1718,6 +2176,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1730,6 +2189,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1742,6 +2202,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1754,6 +2215,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1766,6 +2228,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1778,6 +2241,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1790,6 +2254,7 @@ async fn handle_request(
                         peers,
                         peer_idents,
                         &tls_watch,
+                        &token,
                     )
                     .await?;
                 }
@@ -1811,6 +2276,7 @@ async fn process_range_data<T, I>(
     peers: Peers,
     peer_idents: PeerIdents,
     tls_watch: &TlsWatch,
+    token: &CancellationToken,
     availed_kind: bool,
 ) -> Result<()>
 where
@@ -1827,6 +2293,7 @@ where
             peer_addr,
             tls_watch,
             request_range,
+            token,
         )
         .await?;
     } else {
@@ -1899,22 +2366,41 @@ async fn process_range_data_in_peer_giganto<I>(
     peer_addr: SocketAddr,
     tls_watch: &TlsWatch,
     request_range: RequestRange,
+    token: &CancellationToken,
 ) -> Result<()>
 where
     I: DeserializeOwned + Serialize,
 {
     let peer_name = peer_name(peer_idents, &peer_addr).await?;
-    let (endpoint, connection, mut peer_send, mut peer_recv) = request_range_data_to_peer(
+    let Some((endpoint, connection, mut peer_send, mut peer_recv)) = request_range_data_to_peer(
         peer_addr,
         peer_name.as_str(),
         tls_watch,
         MessageCode::ReqRange,
         request_range,
+        token,
     )
-    .await?;
+    .await?
+    else {
+        // Cancelled while dialing, handshaking, or writing the request.
+        // Whatever was up has already been closed; the client sees a range
+        // response that ends without its terminator and retries.
+        return Ok(());
+    };
     loop {
-        let event: Option<(i64, String, Vec<I>)> = receive_range_data(&mut peer_recv).await?;
-        if let Some(event_data) = event {
+        // Cancellation branch. A peer that accepted the request and then went
+        // quiet would otherwise hold this read, and the drain behind it, open
+        // for as long as it stayed quiet. What is lost is the rest of the
+        // peer's response, which the client detects as incomplete.
+        let Some(event) = token
+            .run_until_cancelled(receive_range_data::<Option<(i64, String, Vec<I>)>>(
+                &mut peer_recv,
+            ))
+            .await
+        else {
+            break;
+        };
+        if let Some(event_data) = event? {
             let event_data_again: Option<(i64, String, Vec<I>)> = Some(event_data);
             let send_buf = bincode::serialize(&event_data_again)
                 .map_err(PublishError::SerialDeserialFailure)?;
@@ -1925,29 +2411,59 @@ where
     }
     peer_send.finish().ok();
     drop(peer_recv);
-    connection.close(0_u32.into(), &[]);
-    endpoint.wait_idle().await;
+    close_peer_connection(&endpoint, &connection).await;
     Ok(())
 }
 
+/// Dials the peer in charge and writes one request to it.
+///
+/// Returns `Ok(None)` when `token` fires before the request is on the wire.
+/// Cancellation past the dial closes the connection rather than letting it die
+/// by drop, so the peer is told instead of being left to time it out.
 async fn request_range_data_to_peer<T>(
     peer_addr: SocketAddr,
     peer_name: &str,
     tls_watch: &TlsWatch,
     message_code: MessageCode,
     request_data: T,
-) -> Result<(Endpoint, Connection, SendStream, RecvStream)>
+    token: &CancellationToken,
+) -> Result<Option<(Endpoint, Connection, SendStream, RecvStream)>>
 where
     T: Serialize,
 {
-    let (endpoint, connection) = connect(peer_addr, peer_name, tls_watch).await?;
+    let Some((endpoint, connection)) = connect(peer_addr, peer_name, tls_watch, token).await?
+    else {
+        return Ok(None);
+    };
 
-    let (mut send, recv) = connection.open_bi().await?;
-    send_range_data_request(&mut send, message_code, request_data).await?;
+    // Cancellation branch. A peer that never accepts the stream would hold
+    // this open indefinitely. Nothing has been requested yet, so the loss is
+    // the request itself.
+    let Some(opened) = token.run_until_cancelled(connection.open_bi()).await else {
+        close_peer_connection(&endpoint, &connection).await;
+        return Ok(None);
+    };
+    let (mut send, recv) = opened?;
 
-    Ok((endpoint, connection, send, recv))
+    // Cancellation branch. Same loss one step further in: the request is
+    // abandoned half-written, and the peer is told by the close below.
+    let Some(requested) = token
+        .run_until_cancelled(send_range_data_request(
+            &mut send,
+            message_code,
+            request_data,
+        ))
+        .await
+    else {
+        close_peer_connection(&endpoint, &connection).await;
+        return Ok(None);
+    };
+    requested?;
+
+    Ok(Some((endpoint, connection, send, recv)))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_raw_events<T, I>(
     send: &mut SendStream,
     store: RawEventStore<'_, T>,
@@ -1956,6 +2472,7 @@ async fn process_raw_events<T, I>(
     peers: Peers,
     peer_idents: PeerIdents,
     tls_watch: &TlsWatch,
+    token: &CancellationToken,
 ) -> Result<()>
 where
     T: DeserializeOwned + ResponseRangeData,
@@ -1976,6 +2493,7 @@ where
             peers,
             peer_idents,
             handle_by_peer_gigantos,
+            token,
         )
         .await?;
     }
@@ -2023,6 +2541,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_raw_event_in_peer_gigantos<I>(
     send: &mut SendStream,
     kind: String,
@@ -2030,6 +2549,7 @@ async fn process_raw_event_in_peer_gigantos<I>(
     peers: Peers,
     peer_idents: PeerIdents,
     handle_by_peer_gigantos: Vec<(String, Vec<i64>)>,
+    token: &CancellationToken,
 ) -> Result<()>
 where
     I: DeserializeOwned + Serialize,
@@ -2047,41 +2567,85 @@ where
         if let Some(peer_addr) = peer_in_charge_publish_addr(peers.clone(), &sensor).await {
             let peer_name = peer_name(peer_idents.clone(), &peer_addr).await?;
 
-            let (endpoint, connection) = connect(peer_addr, peer_name.as_str(), tls_watch).await?;
-            let (mut peer_send, mut peer_recv) = connection.open_bi().await?;
+            let Some((endpoint, connection)) =
+                connect(peer_addr, peer_name.as_str(), tls_watch, token).await?
+            else {
+                // Cancelled while dialing or handshaking. The client sees a
+                // raw-data response that ends without its terminator.
+                break;
+            };
 
-            send_range_data_request(
-                &mut peer_send,
-                MessageCode::RawData,
-                RequestRawData {
-                    kind: kind.clone(),
-                    input,
-                },
-            )
-            .await?;
+            // Cancellation branch. A peer that never accepts the stream would
+            // hold this open indefinitely; the loss is the request itself,
+            // and the close below tells the peer.
+            let Some(opened) = token.run_until_cancelled(connection.open_bi()).await else {
+                close_peer_connection(&endpoint, &connection).await;
+                break;
+            };
+            let (mut peer_send, mut peer_recv) = opened?;
 
-            while let Some(event) =
-                receive_range_data::<Option<(i64, String, Vec<I>)>>(&mut peer_recv).await?
-            {
+            // Cancellation branch. Same loss one step further in: the request
+            // is abandoned half-written.
+            let Some(requested) = token
+                .run_until_cancelled(send_range_data_request(
+                    &mut peer_send,
+                    MessageCode::RawData,
+                    RequestRawData {
+                        kind: kind.clone(),
+                        input,
+                    },
+                ))
+                .await
+            else {
+                close_peer_connection(&endpoint, &connection).await;
+                break;
+            };
+            requested?;
+
+            loop {
+                // Cancellation branch. A peer that accepted the request and
+                // then went quiet would otherwise hold this read, and the
+                // drain behind it, open. What is lost is the rest of the
+                // peer's response, which the client detects as incomplete.
+                let Some(event) = token
+                    .run_until_cancelled(receive_range_data::<Option<(i64, String, Vec<I>)>>(
+                        &mut peer_recv,
+                    ))
+                    .await
+                else {
+                    break;
+                };
+                let Some(event) = event? else {
+                    break;
+                };
                 let send_buf = bincode::serialize(&Some(event))
                     .map_err(PublishError::SerialDeserialFailure)?;
                 send_raw(send, &send_buf).await?;
             }
             peer_send.finish().ok();
             drop(peer_recv);
-            connection.close(0_u32.into(), &[]);
-            endpoint.wait_idle().await;
+            close_peer_connection(&endpoint, &connection).await;
+            if token.is_cancelled() {
+                break;
+            }
         }
     }
 
     Ok(())
 }
 
+/// Dials a peer's publish listener and completes the version handshake.
+///
+/// Returns `Ok(None)` when `token` fires first. The retry loop below never
+/// gives up on its own, so this is the only thing that ends a dial against a
+/// peer that is not coming back — and a dial nothing ended is exactly what a
+/// drain cannot tolerate.
 async fn connect(
     server_addr: SocketAddr,
     server_name: &str,
     tls_watch: &TlsWatch,
-) -> Result<(Endpoint, Connection)> {
+    token: &CancellationToken,
+) -> Result<Option<(Endpoint, Connection)>> {
     let client_addr = if server_addr.is_ipv6() {
         IpAddr::V6(Ipv6Addr::UNSPECIFIED)
     } else {
@@ -2089,34 +2653,64 @@ async fn connect(
     };
 
     let endpoint = Endpoint::client(SocketAddr::new(client_addr, 0))?;
-    let conn = connect_repeatedly(&endpoint, server_addr, server_name, tls_watch).await?;
+    let Some(conn) =
+        connect_repeatedly(&endpoint, server_addr, server_name, tls_watch, token).await?
+    else {
+        return Ok(None);
+    };
 
-    client_handshake(&conn, env!("CARGO_PKG_VERSION")).await?;
-    Ok((endpoint, conn))
+    // Cancellation branch. A peer that completes QUIC transport setup and then
+    // never answers the version exchange would hold this open indefinitely.
+    // The connection is up but the peer has been told nothing, so it is closed
+    // rather than left to die by drop.
+    let Some(handshake) = token
+        .run_until_cancelled(client_handshake(&conn, env!("CARGO_PKG_VERSION")))
+        .await
+    else {
+        close_peer_connection(&endpoint, &conn).await;
+        return Ok(None);
+    };
+    handshake?;
+    Ok(Some((endpoint, conn)))
 }
 
+/// Retries the dial until it succeeds or `token` fires, returning `Ok(None)`
+/// in the latter case.
+///
+/// The exponential backoff is unchanged; what is new is that both awaits it
+/// contains — the dial attempt and the wait between attempts — lose a race
+/// against cancellation, so a caller parked on an unreachable peer returns
+/// instead of retrying through the drain.
 async fn connect_repeatedly(
     endpoint: &Endpoint,
     server_addr: SocketAddr,
     server_name: &str,
     tls_watch: &TlsWatch,
-) -> Result<Connection> {
+    token: &CancellationToken,
+) -> Result<Option<Connection>> {
     let max_delay = Duration::from_secs(30);
     let mut delay = Duration::from_millis(500);
 
     loop {
+        if token.is_cancelled() {
+            return Ok(None);
+        }
         // Re-snapshot the latest TLS material on every attempt so a reload
         // that completes mid-retry is picked up by the next connect.
         let tls = tls_reload::get_current_tls_material(tls_watch);
         match config_client(&tls.certs) {
             Ok(client_config) => {
                 match endpoint.connect_with(client_config, server_addr, server_name) {
-                    Ok(connecting) => match connecting.await {
-                        Ok(conn) => {
+                    // Cancellation branch. One dial attempt is lost. Nothing
+                    // has been opened on the connection, so there is nothing
+                    // to close and nothing to clean up.
+                    Ok(connecting) => match token.run_until_cancelled(connecting).await {
+                        None => return Ok(None),
+                        Some(Ok(conn)) => {
                             info!("Connected to {}", server_addr);
-                            return Ok(conn);
+                            return Ok(Some(conn));
                         }
-                        Err(e) => warn!("Cannot connect to controller: {:#}, retrying", e),
+                        Some(Err(e)) => warn!("Cannot connect to controller: {:#}, retrying", e),
                     },
                     Err(e) => {
                         warn!("Cannot connect: {:#}, retrying", e);
@@ -2126,7 +2720,15 @@ async fn connect_repeatedly(
             Err(e) => warn!("Cannot build client TLS config: {:#}, retrying", e),
         }
         delay = std::cmp::min(max_delay, delay * 2);
-        tokio::time::sleep(delay).await;
+        // Cancellation branch. The wait between attempts is abandoned and the
+        // dial is given up; the same nothing is lost as above.
+        if token
+            .run_until_cancelled(tokio::time::sleep(delay))
+            .await
+            .is_none()
+        {
+            return Ok(None);
+        }
     }
 }
 
