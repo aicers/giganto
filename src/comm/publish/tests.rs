@@ -7438,10 +7438,10 @@ mod shutdown {
 
     use super::fixtures::{
         LogCapture, SERVER_SHUTDOWN_TIMEOUT, TestClient, TestHarness, assert_log_contains,
-        build_ingest_sensors, build_peer_idents, build_peers_for_sensor, build_range_request,
-        build_test_certs, build_test_tls_watch, init_client, init_crypto, open_range_stream,
-        recv_with_timeout, registered_target_sensors, setup_test_harness, spawn_server,
-        start_log_capture, start_semi_supervised_subscription,
+        build_filter_for_sensor, build_ingest_sensors, build_peer_idents, build_peers_for_sensor,
+        build_range_request, build_test_certs, build_test_tls_watch, init_client, init_crypto,
+        open_range_stream, recv_with_timeout, registered_target_sensors, setup_test_harness,
+        spawn_server, start_log_capture, start_semi_supervised_subscription,
     };
     use super::{NODE1, NODE2, PROTOCOL_VERSION, SENSOR_SEMI_SUPERVISED_ONE};
     use crate::cancellation::TaskTracker;
@@ -8344,5 +8344,86 @@ mod shutdown {
             "a cancelled relay returns cooperatively, got: {}",
             captured(&logs)
         );
+    }
+
+    /// A packet-capture relay accepted through the production entry task holds
+    /// the drain open until it gives up, and the entry task returns only
+    /// afterwards.
+    ///
+    /// The relay is the one tracked publish task with no client stream of its
+    /// own: its acknowledgement is written before it starts, so nothing the
+    /// client can observe says whether the drain waited for it. Driving it
+    /// through `BoundServer::run`, rather than calling
+    /// `process_pcap_extract_filters` against a tracker the test built itself,
+    /// is what puts the entry task's own tracker between the two.
+    #[tokio::test]
+    async fn the_drain_waits_for_a_pcap_relay_started_through_the_entry_task() {
+        init_crypto();
+        const SENSOR: &str = "pcap_relay_drained_by_entry_task";
+
+        // A UDP socket nobody reads, so the relay's dial stays in flight
+        // instead of being refused.
+        let black_hole = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind the black hole socket");
+        let peer_addr = black_hole.local_addr().expect("black hole addr");
+
+        let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+        let db = Database::open(temp_dir.path(), &DbOptions::default())
+            .expect("open publish test database");
+        let certs = build_test_certs();
+        let (server_addr, server_handle) = spawn_server(
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            db,
+            new_pcap_sensors(),
+            new_stream_direct_channels(),
+            build_ingest_sensors(),
+            build_peers_for_sensor(SENSOR, peer_addr),
+            build_peer_idents(peer_addr, NODE2.server_name()),
+            &certs,
+        );
+
+        let mut client = TestClient::new(server_addr, NODE1.server_name()).await;
+        let (logs, _guard) = start_log_capture();
+        send_stream_request(
+            &mut client.send,
+            StreamRequestPayload::PcapExtraction {
+                filter: vec![build_filter_for_sensor(SENSOR, 10, 20)],
+            },
+        )
+        .await
+        .expect("sending the pcap extraction request");
+
+        // The first datagram off the relay's endpoint says its task is live
+        // and parked in the dial, so the shutdown below lands on real work
+        // rather than on a relay that has not started yet.
+        let mut buf = [0_u8; 1];
+        tokio::time::timeout(CANCEL_TIMEOUT, black_hole.recv_from(&mut buf))
+            .await
+            .expect("the relay should have dialled the peer")
+            .expect("read the dial datagram");
+
+        tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, server_handle.shutdown())
+            .await
+            .expect("a relay parked in a dial must not hold the drain open");
+
+        // The relay named itself and reported the filter it could not deliver,
+        // and it returned cooperatively rather than being dropped mid-dial.
+        assert!(
+            captured(&logs).contains("publish-pcap-relay-"),
+            "the report should name the relay task, got: {}",
+            captured(&logs)
+        );
+        assert!(
+            captured(&logs).contains("gave up relaying a pcap request to peer"),
+            "the relay should have reported what it gave up, got: {}",
+            captured(&logs)
+        );
+        assert!(
+            !captured(&logs).contains("tracked task did not run to completion"),
+            "a cancelled relay returns cooperatively, got: {}",
+            captured(&logs)
+        );
+        drop(client);
     }
 }
