@@ -5141,6 +5141,78 @@ async fn stream_channels_cleared_after_shutdown_signal() {
     .await;
 }
 
+#[tokio::test]
+async fn stream_channels_cleared_after_quic_send_failure() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let mut stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE, SENSOR_SEMI_SUPERVISED_TWO],
+            )
+            .await;
+
+            assert_eq!(
+                registered_target_sensors(&harness.stream_direct_channels).await,
+                vec![
+                    SENSOR_SEMI_SUPERVISED_ONE.to_string(),
+                    SENSOR_SEMI_SUPERVISED_TWO.to_string()
+                ],
+                "expected the subscription's channel keys to be registered"
+            );
+
+            // Refusing the uni stream makes the subscription's next write to it
+            // fail while the connection itself stays open.
+            let _ = stream.stop(quinn::VarInt::from_u32(0));
+
+            // The write fails only once `STOP_SENDING` has reached the server,
+            // so keep publishing until the subscription notices, bounded by a
+            // deadline. Publishing stays successful either way: before the
+            // failure the subscription's senders are live, and afterwards its
+            // keys are gone.
+            let deadline = Instant::now() + StdDuration::from_secs(5);
+            loop {
+                let sensors = registered_target_sensors(&harness.stream_direct_channels).await;
+                if sensors.is_empty() {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "stream channels not cleared after a failed QUIC send; \
+                     registered target sensors: {sensors:?}"
+                );
+                send_direct_stream(
+                    &NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn),
+                    &gen_conn_raw_event(),
+                    next_timestamp(),
+                    SENSOR_SEMI_SUPERVISED_ONE,
+                    harness.stream_direct_channels.clone(),
+                )
+                .await
+                .expect("send_direct_stream failed");
+                tokio::time::sleep(StdDuration::from_millis(10)).await;
+            }
+
+            // The failed subscription leaves the connection and its request
+            // loop intact, so a fresh subscription is still dispatched on it.
+            let mut second_stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+            assert_receives_direct_record(
+                &mut second_stream,
+                &harness.stream_direct_channels,
+                SENSOR_SEMI_SUPERVISED_ONE,
+                RequestStreamRecord::Conn,
+            )
+            .await;
+        })
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn stream_channels_cleared_when_time_series_replay_fails() {
     with_log_capture(|log_capture| async move {
