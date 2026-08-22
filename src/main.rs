@@ -60,12 +60,6 @@ const WAIT_SHUTDOWN: u64 = 15;
 /// what tells a shutdown that is waiting on a subsystem apart from one waiting
 /// on the top level.
 const TOP_LEVEL_DRAIN_LABEL: &str = "shutdown";
-/// How often the shutdown signal is re-sent to the subsystems that still
-/// listen on a `Notify` while their handles are joined.
-///
-/// Short enough that a subsystem which missed the first signal is not what a
-/// shutdown is waiting on, long enough that the repeat is not a spin.
-const SHUTDOWN_NOTIFY_RETRY: Duration = Duration::from_millis(100);
 
 /// Creates a reqwest client configured for mTLS GraphQL communication.
 ///
@@ -278,8 +272,9 @@ enum GenerationEnd {
     /// exit ends the generation through the same shutdown sequence as the
     /// intents, and `main` reports it as a failure rather than exiting
     /// cleanly. Ingest is the only entry task the top-level tracker watches
-    /// for now: peer is registered in the tracker but its handle is not kept,
-    /// and publish joins it as it moves into the tracker.
+    /// for now: peer and publish are registered in the tracker but their
+    /// handles are not kept, so an early exit of either goes unwatched until
+    /// the process-level lifecycle work takes that on.
     IngestExited,
 }
 
@@ -352,8 +347,8 @@ async fn run_generation(
     // in scope where the subsystems below are spawned, it is drained on every
     // shutdown arm, and it is dropped with the generation — a `TaskTracker`
     // cannot be reopened once closed, so two generations can never share one
-    // registry. Ingest, retention, and peer are registered in it below;
-    // publish moves into it in the issue that follows.
+    // registry. Ingest, retention, peer, and publish are all registered in it
+    // below.
     let top_level_tracker = TaskTracker::new();
 
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
@@ -450,18 +445,49 @@ async fn run_generation(
             .context("failed to register the peer entry task")?;
     }
 
+    // Publish is tracked the way peer is: the tracker hands it the
+    // generation's cancellation token and waits for its entry task in the
+    // drain below, and its handle is dropped. Publish reports its own failure
+    // where it happens and the tracker's registry guard names a panic or an
+    // abort, so the only outcome a retained handle would add is a normal early
+    // exit. Acting on that — a node that keeps serving without publish — is
+    // process-level lifecycle work (#1569), which is also why no
+    // `GenerationEnd` variant watches this task the way one watches ingest.
     let publish_server =
         publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
-    let publish_task_handle: JoinHandle<()> = task::spawn(publish_server.run(
-        database.clone(),
-        pcap_sensors.clone(),
-        stream_direct_channels.clone(),
-        ingest_sensors.clone(),
-        peers.clone(),
-        peer_idents.clone(),
-        process.tls_watch.clone(),
-        notify_shutdown.clone(),
-    ));
+    top_level_tracker
+        .spawn("publish", {
+            let db = database.clone();
+            let pcap_sensors = pcap_sensors.clone();
+            let stream_direct_channels = stream_direct_channels.clone();
+            let ingest_sensors = ingest_sensors.clone();
+            let peers = peers.clone();
+            let peer_idents = peer_idents.clone();
+            let tls_watch = process.tls_watch.clone();
+            move |token| async move {
+                let result = publish_server
+                    .run(
+                        db,
+                        pcap_sensors,
+                        stream_direct_channels,
+                        ingest_sensors,
+                        peers,
+                        peer_idents,
+                        tls_watch,
+                        token,
+                    )
+                    .await;
+                // Reported here, the way ingest's and peer's are, rather than
+                // at a call site that reads the handle back: a listener whose
+                // address is taken returns at once, and a node left running
+                // without publish must not go unreported until shutdown.
+                if let Err(e) = &result {
+                    error!("Publish subsystem terminated unexpectedly: {e:#}");
+                }
+                result
+            }
+        })
+        .context("failed to register the publish entry task")?;
 
     let ingest_server =
         ingest::Server::new(settings.config.visible.ingest_srv_addr, &certs.clone());
@@ -523,13 +549,14 @@ async fn run_generation(
     // sequence runs once here instead of once per arm. The order is the one
     // each arm had.
     shutdown_web(web_controller.take()).await;
+    // Publish was the last subsystem listening on `notify_shutdown`, and it
+    // now takes its signal from the token like the rest. The signal is still
+    // raised because retiring the `Notify` belongs to the process-level
+    // lifecycle work (#1569); nothing subscribes to it today.
     notify_shutdown.notify_waiters();
-    // The tracked subsystems take their signal from the token rather than from
-    // `notify_shutdown`, so cancelling here starts them draining alongside the
-    // ones that are still notified. `shutdown_generation` cancels again, which
-    // is idempotent.
+    // Every subsystem is tracked, so cancelling here is what starts them all
+    // draining. `shutdown_generation` cancels again, which is idempotent.
     top_level_tracker.cancel_children();
-    wait_for_task_shutdown(&notify_shutdown, publish_task_handle).await;
     shutdown_generation(
         &top_level_tracker,
         retain_task_handle,
@@ -886,40 +913,6 @@ async fn reload_https_server<S>(
     }
 }
 
-/// Waits for the subsystems that still take their signal from
-/// `notify_shutdown`, repeating the signal until every one of them has joined.
-///
-/// Ingest, retention, and peer are not among them: they are registered in the
-/// per-generation top-level tracker, so they are cancelled and waited for by
-/// [`shutdown_generation`] instead. Publish, the one subsystem left here,
-/// moves the same way in the issue that follows.
-///
-/// `Notify::notify_waiters` leaves nothing behind for a task that is not
-/// waiting yet. A publish server still binding its listener misses the
-/// notification outright, and then waits on its own interval. Until now the
-/// only thing that ended a generation was an intent that arrived long after
-/// startup, so the window was out of reach; an entry task that ends on its own
-/// reaches it, and does so at exactly the moment the window is widest.
-///
-/// So the signal is repeated. A subsystem that has already observed it ignores
-/// the extra wakeup, and the loop goes away as publish moves onto the
-/// cancellation token in the issue that follows. This is a retry cadence and
-/// not a delay: nothing waits out `SHUTDOWN_NOTIFY_RETRY` once the handles are
-/// ready to join.
-async fn wait_for_task_shutdown(notify_shutdown: &Notify, publish_task_handle: JoinHandle<()>) {
-    let joined = async {
-        let _ = publish_task_handle.await;
-    };
-    tokio::pin!(joined);
-
-    loop {
-        select! {
-            () = &mut joined => break,
-            () = sleep(SHUTDOWN_NOTIFY_RETRY) => notify_shutdown.notify_waiters(),
-        }
-    }
-}
-
 /// Reports how the ingest entry task ended once the generation is shutting
 /// down.
 ///
@@ -1083,23 +1076,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn wait_for_task_shutdown_joins_the_publish_handle() {
-        let publish_done = Arc::new(AtomicBool::new(false));
-
-        let publish_task_handle = tokio::spawn({
-            let publish_done = publish_done.clone();
-            async move {
-                sleep(Duration::from_millis(30)).await;
-                publish_done.store(true, Ordering::SeqCst);
-            }
-        });
-
-        wait_for_task_shutdown(&Notify::new(), publish_task_handle).await;
-
-        assert!(publish_done.load(Ordering::SeqCst));
-    }
-
     /// Every ending the retention handle can carry reaches the log.
     ///
     /// The drain that precedes this report says only that the task exited, so
@@ -1160,37 +1136,6 @@ mod tests {
             output.contains("Retention did not run to completion"),
             "an abort nobody asked for should be reported, got: {output}"
         );
-    }
-
-    /// A subsystem that was not waiting when the signal was first sent still
-    /// sees it.
-    ///
-    /// `Notify::notify_waiters` leaves no permit behind, so the first signal —
-    /// the one the caller sends before this wait starts — is lost on a task
-    /// that has not reached its `notified()` yet. Repeating it is what makes
-    /// the handle join at all; without the repeat this test hangs.
-    #[tokio::test]
-    async fn wait_for_task_shutdown_repeats_a_signal_a_subsystem_missed() {
-        let notify_shutdown = Arc::new(Notify::new());
-        let late = tokio::spawn({
-            let notify_shutdown = Arc::clone(&notify_shutdown);
-            async move {
-                // Longer than the retry cadence, so the signal the caller
-                // sends below cannot be the one this waiter catches.
-                sleep(SHUTDOWN_NOTIFY_RETRY * 3).await;
-                notify_shutdown.notified().await;
-            }
-        });
-
-        // What the shutdown sequence does before it starts waiting, and what
-        // the task above is guaranteed to miss.
-        notify_shutdown.notify_waiters();
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            wait_for_task_shutdown(&notify_shutdown, late),
-        )
-        .await
-        .expect("a subsystem that missed the first signal should still be joined");
     }
 
     mod reload_https_server_tests {
@@ -1866,15 +1811,13 @@ mod tests {
 
         /// Waits until every `needle` has appeared in the captured log.
         ///
-        /// This is the synchronization the terminate intent needs.
-        /// `notify_shutdown` is delivered with `notify_waiters`, which reaches
-        /// only the tasks already parked on it, so signalling before the
-        /// subsystems are up would notify nobody and the join that follows
-        /// would never return. Each subsystem announces itself with no await
-        /// between the announcement and the park, and on this test's
-        /// current-thread runtime the announcement can only be observed after
-        /// that poll has finished — so a subsystem whose line is in the log is
-        /// parked.
+        /// This is the synchronization the intent-driven tests need. The
+        /// cancellation a subsystem now shuts down on stays raised, so an
+        /// intent sent too early is no longer lost — but a generation that
+        /// ends before its subsystems are up never produces the startup and
+        /// shutdown lines those tests assert on. A subsystem announces itself
+        /// with no await between the announcement and the wait that follows,
+        /// so a subsystem whose line is in the log is serving.
         async fn wait_for_logs(logs: &Arc<Mutex<Vec<u8>>>, needles: &[&str]) {
             let wait = async {
                 while !needles.iter().all(|needle| captured(logs).contains(needle)) {
@@ -2410,12 +2353,20 @@ mod tests {
                 output.contains("Termination signal: daemon exit"),
                 "the terminate arm should have run, got: {output}"
             );
-            // Ingest and retention are the tasks in the top-level tracker,
-            // and both stop on the cancellation the drain delivers, so the
-            // drain returns on its first round with nothing to report.
+            // Ingest, publish, and retention are the tasks in the top-level
+            // tracker, and all of them stop on the cancellation the drain
+            // delivers, so the drain returns on its first round with nothing
+            // to report.
             assert!(
                 output.contains("Retention stopped"),
                 "the retention task should have stopped cleanly, got: {output}"
+            );
+            // Nothing here joins a publish handle, and publish no longer
+            // listens on `notify_shutdown`, so this line can only come from
+            // the token the top-level tracker handed its entry task.
+            assert!(
+                output.contains("Shutting down publish"),
+                "the generation's cancellation should reach publish, got: {output}"
             );
             assert!(
                 !output.contains("shutdown drain round"),
@@ -2595,6 +2546,62 @@ mod tests {
             assert!(
                 output.contains("Shutting down publish"),
                 "the early exit should run the same shutdown sequence as an intent, got: {output}"
+            );
+        }
+
+        /// A publish listener that cannot bind is reported where it happens,
+        /// and the generation keeps serving.
+        ///
+        /// This is the other half of the ingest case above. Publish is not
+        /// watched by a `GenerationEnd` variant, so nothing outside the entry
+        /// task ever reads its result back; if the task did not report the
+        /// failure itself, a node serving no publish traffic would run to the
+        /// end of the generation without a word about it. The terminate intent
+        /// is what ends this one, which is also the proof that the early exit
+        /// did not.
+        #[tokio::test]
+        async fn a_publish_listener_that_cannot_bind_is_reported() {
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+
+            // QUIC is UDP, so the port has to be held by a UDP socket for the
+            // publish listener to lose it.
+            let occupied = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .expect("occupy the publish port");
+            settings.config.visible.publish_srv_addr =
+                occupied.local_addr().expect("occupied addr");
+
+            let (logs, _guard) = capture_logs();
+            let (end, ()) = tokio::join!(
+                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &[
+                            "Ingest listening on",
+                            "Publish subsystem terminated unexpectedly",
+                        ],
+                    )
+                    .await;
+                    notify_terminate.notify_one();
+                }
+            );
+            let end = end
+                .expect("a terminate intent should end the generation")
+                .expect("a failed publish listener should not fail the generation");
+
+            assert_eq!(end, GenerationEnd::Terminate);
+
+            let output = captured(&logs);
+            assert!(
+                output.contains("failed to bind the publish listener"),
+                "the bind failure itself should be reported, got: {output}"
+            );
+            assert!(
+                !output.contains("tracked task did not run to completion"),
+                "the entry task returned, it did not vanish, got: {output}"
             );
         }
 

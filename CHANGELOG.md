@@ -72,11 +72,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   removed its entry from the peer state. Peer-list and sensor-list updates
   that fail on the way out are reported instead of disappearing, and shutdown
   no longer spends a fixed half-second on peers that had nothing left to do.
+- Fixed publish shutdown so that it waits for publish work to finish instead of
+  dropping it. Shutting the node down previously closed the publish listener
+  first and then waited only for the most recently accepted connection: every
+  earlier connection, every request in flight, every stream subscription, and
+  every accepted packet-capture relay was cut off mid-write, and a subscription
+  killed that way left a stale entry in the realtime routing table. Publish now
+  stops accepting connections as soon as shutdown begins, stops admitting new
+  requests, subscriptions, and relays, and returns only once every one of them
+  has finished and cleaned up — closing the listener last, so the work still
+  running has a connection to finish on. Waits that only a remote party can end
+  no longer hold shutdown open either: a client that connects and never sends
+  its version message, a peer that accepts a request and goes quiet, and a
+  retry loop dialing an unreachable peer all give up when shutdown starts.
+  Failures that used to vanish with a detached task, including a publish
+  listener that cannot bind, are now reported.
 - Fixed a shutdown that could hang indefinitely when the signal arrived in the
   first moments after startup. A subsystem that had not yet begun listening
   missed the one-shot notification and then waited out its own interval before
-  noticing, so the node never exited. The signal is now repeated until every
-  subsystem has stopped.
+  noticing, so the node never exited. Every subsystem now takes its shutdown
+  signal from a cancellation that stays raised, so a subsystem that starts
+  listening late sees it the moment it looks instead of missing it.
 
 ### Changed
 
