@@ -233,9 +233,12 @@ impl Peer {
     }
 
     /// Internal entry point shared by [`Peer::run`] and tests. The optional
-    /// `ready` channel lets tests observe the bound server address and the
-    /// shared client TLS slot once both are constructed, without forcing
-    /// production callers to plumb a sender they do not need.
+    /// `ready` channel lets tests observe the bound server address, the
+    /// shared client TLS slot, and a sending half of the peer-identity
+    /// channel this task owns, once all three exist — without forcing
+    /// production callers to plumb a sender they do not need. Handing the
+    /// peer-identity sender out is what lets a test offer an identity on the
+    /// real channel and see the entry task's `receiver.close()` refuse it.
     ///
     /// # Errors
     ///
@@ -252,7 +255,7 @@ impl Peer {
         config_path: String,
         mut tls_watch: TlsWatch,
         token: CancellationToken,
-        ready: Option<oneshot::Sender<(SocketAddr, SharedClientConfig)>>,
+        ready: Option<oneshot::Sender<(SocketAddr, SharedClientConfig, Sender<PeerIdentity>)>>,
     ) -> Result<()> {
         let server_endpoint = Endpoint::server(self.server_config, self.local_address)
             .context("failed to create peer server endpoint")?;
@@ -266,8 +269,9 @@ impl Peer {
             Endpoint::client(client_socket).context("failed to create peer client endpoint")?;
         let shared_client_config =
             new_shared_client_config(self.client_config, self.initial_generation);
+        let (sender, mut receiver): (Sender<PeerIdentity>, Receiver<PeerIdentity>) = channel(100);
         if let Some(tx) = ready {
-            let _ = tx.send((local_addr, shared_client_config.clone()));
+            let _ = tx.send((local_addr, shared_client_config.clone(), sender.clone()));
         }
         // Atomically read the most recent watched material AND mark it as
         // seen. If a reload landed between when the watch receiver was
@@ -282,8 +286,6 @@ impl Peer {
                 apply_peer_tls_reload(&server_endpoint, &shared_client_config, &material);
             }
         }
-
-        let (sender, mut receiver): (Sender<PeerIdentity>, Receiver<PeerIdentity>) = channel(100);
 
         let Ok(config_doc) = read_toml_file(&config_path) else {
             bail!("Failed to open/read config's toml file");
@@ -1377,7 +1379,7 @@ pub mod tests {
         use giganto_client::frame::{send_bytes, send_raw};
         use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream};
         use tempfile::TempDir;
-        use tokio::sync::{Notify, RwLock, oneshot};
+        use tokio::sync::{Notify, RwLock, mpsc, oneshot};
         use tokio::time::sleep;
         use toml_edit::DocumentMut;
 
@@ -1991,7 +1993,7 @@ pub mod tests {
             notify_sensor: Arc<Notify>,
             config_path: String,
             token: CancellationToken,
-            ready: oneshot::Sender<(SocketAddr, SharedClientConfig)>,
+            ready: oneshot::Sender<(SocketAddr, SharedClientConfig, mpsc::Sender<PeerIdentity>)>,
         ) -> Result<()> {
             let (_tls_tx, tls_watch) = test_tls_watch_from_certs(create_certs());
             peer.run_with_ready(
@@ -2080,7 +2082,7 @@ pub mod tests {
                     ready_tx,
                 ));
 
-                let (server_addr, _) = with_timeout("peer server ready timeout", ready_rx)
+                let (server_addr, _, _) = with_timeout("peer server ready timeout", ready_rx)
                     .await
                     .expect("peer server did not report its address");
                 let mut client = TestClient::new(server_addr).await;
@@ -2222,7 +2224,7 @@ pub mod tests {
         ));
 
         // run peer client
-        let (server_addr, _) = with_timeout("peer server ready timeout", ready_rx)
+        let (server_addr, _, _) = with_timeout("peer server ready timeout", ready_rx)
             .await
             .expect("peer server did not report addr");
         let mut peer_client_one = TestClient::new(server_addr).await;
@@ -2329,7 +2331,7 @@ pub mod tests {
             ready_tx,
         ));
 
-        let (run_addr, _) = with_timeout("peer server ready timeout", ready_rx)
+        let (run_addr, _, _) = with_timeout("peer server ready timeout", ready_rx)
             .await
             .expect("peer server did not report addr");
         let mut client = TestClient::new(run_addr).await;
@@ -4033,7 +4035,7 @@ pub mod tests {
             .await
         });
 
-        let (server_addr, _shared_client_config) = with_timeout("peer server ready", ready_rx)
+        let (server_addr, _shared_client_config, _) = with_timeout("peer server ready", ready_rx)
             .await
             .expect("peer ready");
 
@@ -4121,7 +4123,7 @@ pub mod tests {
             Some(ready_tx),
         ));
 
-        let (server_addr, _shared_client_config) = with_timeout("peer server ready", ready_rx)
+        let (server_addr, _shared_client_config, _) = with_timeout("peer server ready", ready_rx)
             .await
             .expect("peer ready");
 
@@ -4546,7 +4548,7 @@ pub mod tests {
             Some(ready_tx),
         ));
 
-        let (server_addr, _shared_client_config) = with_timeout("peer server ready", ready_rx)
+        let (server_addr, _shared_client_config, _) = with_timeout("peer server ready", ready_rx)
             .await
             .expect("peer ready");
 
@@ -4640,7 +4642,7 @@ pub mod tests {
             Some(ready_tx),
         ));
 
-        let (_server_addr, shared_client_config) = with_timeout("peer server ready", ready_rx)
+        let (_server_addr, shared_client_config, _) = with_timeout("peer server ready", ready_rx)
             .await
             .expect("peer ready");
 
@@ -4699,17 +4701,21 @@ pub mod tests {
         use super::super::{
             PEER_DRAIN_LABEL, PEER_VERSION_REQ, PeerCode, PeerConns, PeerIdentity, PeerInfo, Peers,
             client_connection, receive_peer_data, request_init_info, response_init_info,
-            send_peer_data, server_connection, update_to_new_peer_list_with_writer,
+            send_peer_data, server_connection, spawn_request_handler,
+            update_to_new_peer_list_with_writer,
         };
         use super::fixtures::{
-            PROTOCOL_VERSION, TEST_TIMEOUT, TempConfig, TestClient, accept_incoming,
-            build_peer_conn_info, build_peer_conn_info_with_sensors, create_certs,
-            create_node2_certs, init_client, init_crypto, init_shared_client_config, peer_identity,
-            peer_info, run_peer_with_ready, setup_server_endpoint,
-            setup_server_endpoint_with_certs, small_stream_window_client_endpoint,
-            test_connect_name, test_connect_name_node2, wait_for_peer_info, with_timeout,
+            ConnectedPeers, PROTOCOL_VERSION, TEST_TIMEOUT, TempConfig, TestClient,
+            accept_incoming, build_peer_conn_info, build_peer_conn_info_with_sensors,
+            connect_client_server, create_certs, create_node2_certs, init_client, init_crypto,
+            init_shared_client_config, peer_identity, peer_info, run_peer_with_ready,
+            setup_server_endpoint, setup_server_endpoint_with_certs,
+            small_stream_window_client_endpoint, test_connect_name, test_connect_name_node2,
+            wait_for_peer_info, with_timeout,
         };
-        use crate::cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report};
+        use crate::cancellation::{
+            DRAIN_REPORT_INTERVAL, DrainOutcome, TaskTracker, drain_with_report,
+        };
         use crate::comm::peer::Peer;
 
         /// A dial that shutdown has already made unservable must fail rather
@@ -4718,6 +4724,9 @@ pub mod tests {
         /// How long a test waits to establish that something is genuinely
         /// blocked before it runs the step meant to release it.
         const BLOCKED_PROBE: Duration = Duration::from_millis(200);
+        /// The remote a directly driven request handler is registered
+        /// under, so a test can name the task it expects to find pending.
+        const BLOCKED_REMOTE: &str = "127.0.0.1:7100";
 
         #[derive(Clone, Default)]
         struct SharedLogBuffer(Arc<StdMutex<Vec<u8>>>);
@@ -4811,6 +4820,28 @@ pub mod tests {
             );
         }
 
+        /// Waits until `predicate` holds, polling the runtime rather than
+        /// sleeping for a span that would have to guess how long the work
+        /// takes.
+        async fn wait_until<F>(label: &'static str, mut predicate: F)
+        where
+            F: FnMut() -> bool,
+        {
+            let fut = async {
+                let mut interval = tokio::time::interval(Duration::from_millis(5));
+                loop {
+                    interval.tick().await;
+                    if predicate() {
+                        return;
+                    }
+                }
+            };
+            assert!(
+                tokio::time::timeout(TEST_TIMEOUT, fut).await.is_ok(),
+                "{label}"
+            );
+        }
+
         /// State the shared peer maps are keyed on and the tests read back.
         fn local_address() -> SocketAddr {
             "127.0.0.1:2222".parse().expect("local address")
@@ -4823,6 +4854,9 @@ pub mod tests {
             handle: tokio::task::JoinHandle<Result<()>>,
             peers: Peers,
             notify_sensor: Arc<Notify>,
+            /// A sending half of the peer-identity channel the entry task
+            /// created, so a test can offer an identity on the real channel.
+            peer_sender: mpsc::Sender<PeerIdentity>,
             _config: TempConfig,
         }
 
@@ -4856,7 +4890,7 @@ pub mod tests {
                     token.clone(),
                     ready_tx,
                 ));
-                let (addr, _) = with_timeout("peer server ready timeout", ready_rx)
+                let (addr, _, peer_sender) = with_timeout("peer server ready timeout", ready_rx)
                     .await
                     .expect("peer server did not report its address");
                 Self {
@@ -4865,6 +4899,7 @@ pub mod tests {
                     handle,
                     peers,
                     notify_sensor,
+                    peer_sender,
                     _config: config,
                 }
             }
@@ -5177,80 +5212,129 @@ pub mod tests {
             );
         }
 
-        /// A peer-list update blocked on a full peer-identity channel returns
-        /// once the entry task closes the receive side, and reports the
-        /// enqueue failure rather than swallowing it.
+        /// A tracked `handle_request` task blocked on a full peer-identity
+        /// channel is released when the receive side closes, and the peer
+        /// drain that was waiting on it then completes.
+        ///
+        /// The block is established before the release: a bounded drain
+        /// reports the request task as still pending, so the completion below
+        /// distinguishes a task the close freed from one that was never stuck.
+        /// The channel is the test's own, at a capacity the test picked, since
+        /// how many identities it takes to fill the entry task's channel is an
+        /// implementation detail of the entry task.
         #[tokio::test]
-        async fn a_blocked_peer_identity_send_returns_when_the_receive_side_closes() {
+        async fn a_tracked_request_task_blocked_on_the_peer_identity_channel_is_released() {
             let (logs, _guard) = capture_logs();
+            init_crypto();
+            let (server_endpoint, server_addr) = setup_server_endpoint();
+            let ConnectedPeers {
+                client_endpoint: _client_endpoint,
+                server_conn,
+                client_conn,
+            } = connect_client_server(&server_endpoint, server_addr).await;
+
+            // One slot and nobody receiving: the first of the two identities
+            // below is buffered and the second has nowhere to go.
             let (sender, mut receiver) = mpsc::channel::<PeerIdentity>(1);
-            sender
-                .send(peer_identity(
-                    "127.0.0.1:7001".parse().expect("addr"),
-                    "already-queued",
-                ))
-                .await
-                .expect("fill the channel");
+            let queued = sender.clone();
+            let (mut peer_conn_info, _config) = build_peer_conn_info(local_address());
+            peer_conn_info.peer_sender = sender;
+            let tracker = TaskTracker::new();
 
-            let doc = "peers = []".parse::<DocumentMut>().expect("doc");
-            let config = TempConfig::from_doc(&doc);
-            let path = config.path().to_string();
-            let peer_list = Arc::new(RwLock::new(HashSet::new()));
-            let recv_peer_list = HashSet::from([peer_identity(
-                "127.0.0.1:7002".parse().expect("addr"),
-                "discovered-during-shutdown",
-            )]);
-            let mut update = tokio::spawn(async move {
-                update_to_new_peer_list_with_writer(
-                    recv_peer_list,
-                    local_address(),
-                    peer_list,
-                    sender,
-                    Arc::new(Mutex::new(doc)),
-                    &path,
-                    |_doc, _path| Ok(()),
-                )
+            // The frame the handler reads: two peers neither the local address
+            // nor the (empty) peer list already covers.
+            let (mut send, _recv) = client_conn
+                .open_bi()
                 .await
-            });
+                .expect("open the request stream");
+            send_peer_data(
+                &mut send,
+                PeerCode::UpdatePeerList,
+                HashSet::from([
+                    peer_identity("127.0.0.1:7001".parse().expect("addr"), "blocked-peer-one"),
+                    peer_identity("127.0.0.1:7002".parse().expect("addr"), "blocked-peer-two"),
+                ]),
+            )
+            .await
+            .expect("send the peer list frame");
+            send.finish().ok();
 
-            // Nobody is receiving and the channel is full, so the update
-            // cannot get past its enqueue on its own.
+            let stream = with_timeout("request stream timeout", server_conn.accept_bi())
+                .await
+                .expect("accept the request stream");
+            spawn_request_handler(&tracker, stream, &peer_conn_info, BLOCKED_REMOTE);
+            let task_name = format!("peer-request-{BLOCKED_REMOTE}");
+
+            // The handler has received its frame and taken the only slot, so
+            // the enqueue it is on now is the one that cannot complete.
+            wait_until("the handler never filled the peer-identity channel", || {
+                queued.capacity() == 0
+            })
+            .await;
+            let pending = match tracker
+                .drain(BLOCKED_PROBE)
+                .await
+                .expect("drain the tracker")
+            {
+                DrainOutcome::Pending(pending) => pending,
+                DrainOutcome::Drained => {
+                    panic!("the request task cannot get past its enqueue on its own")
+                }
+            };
             assert!(
-                tokio::time::timeout(BLOCKED_PROBE, &mut update)
-                    .await
-                    .is_err(),
-                "the update should be blocked on the full channel"
+                pending.iter().any(|task| task.name == task_name),
+                "the pending snapshot should name the blocked request task, got: {pending:?}"
             );
 
             // What the entry task does once it has observed cancellation.
             receiver.close();
 
-            with_timeout("blocked update timeout", update)
-                .await
-                .expect("the blocked update should have returned")
-                .expect("a refused enqueue is reported, not returned as an error");
+            with_timeout(
+                "peer drain timeout",
+                drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL),
+            )
+            .await
+            .expect("the drain should complete once the receive side is closed");
             wait_for_log(&logs, "Failed to enqueue peer connection attempt").await;
         }
 
-        /// A peer identity offered after the receive side is closed starts no
-        /// client connection and is reported through the existing path.
+        /// A peer identity offered on the entry task's own peer-identity
+        /// sender, after that task has returned, is refused: no client
+        /// connection is started and the refusal is reported rather than
+        /// swallowed or returned as an error.
+        ///
+        /// The sender comes out of the running entry task through the `ready`
+        /// payload, so the refusal is the real channel's, not a stand-in the
+        /// test closed itself. The entry task's `peer_conns` map is its own,
+        /// and it is dropped with the task; what a dial would have left behind
+        /// is a `peers` entry and a connection attempt in the log, so those are
+        /// what the test reads back. Joining the entry task also drops the
+        /// receiver, which closes the channel by itself, so what this pins is
+        /// that the post-return refusal reaches the reporting path — the
+        /// release of a send already parked on a full channel is what the
+        /// preceding test pins on `receiver.close()` alone.
         #[tokio::test]
-        async fn a_peer_identity_offered_after_the_receive_side_closed_is_reported() {
+        async fn a_peer_identity_offered_after_the_entry_task_returned_is_refused() {
             let (logs, _guard) = capture_logs();
-            let (sender, mut receiver) = mpsc::channel::<PeerIdentity>(100);
-            receiver.close();
+            let harness = PeerHarness::start(&[], HashSet::new()).await;
+            let peer_sender = harness.peer_sender.clone();
+            let late_peer = peer_identity("127.0.0.1:7003".parse().expect("addr"), "late-peer");
+
+            // Joining the entry task is what says its `receiver.close()` has
+            // run: it closes the receive side on its way out of the loop.
+            let peers = harness.cancel_and_join().await;
+            assert!(
+                peer_sender.is_closed(),
+                "the entry task should have closed the peer-identity receive side"
+            );
 
             let doc = "peers = []".parse::<DocumentMut>().expect("doc");
             let config = TempConfig::from_doc(&doc);
-            let recv_peer_list = HashSet::from([peer_identity(
-                "127.0.0.1:7003".parse().expect("addr"),
-                "late-peer",
-            )]);
             update_to_new_peer_list_with_writer(
-                recv_peer_list,
+                HashSet::from([late_peer.clone()]),
                 local_address(),
                 Arc::new(RwLock::new(HashSet::new())),
-                sender,
+                peer_sender,
                 Arc::new(Mutex::new(doc)),
                 config.path(),
                 |_doc, _path| Ok(()),
@@ -5258,11 +5342,18 @@ pub mod tests {
             .await
             .expect("a refused enqueue is reported, not returned as an error");
 
-            assert!(
-                receiver.recv().await.is_none(),
-                "nothing should have been enqueued, so no client connection starts"
-            );
             wait_for_log(&logs, "Failed to enqueue peer connection attempt").await;
+            let output = logs.contents();
+            let addr = late_peer.addr;
+            assert!(
+                !output.contains(&format!("Peer connection to {addr}"))
+                    && !output.contains(&format!("Rejected peer connection to {addr}")),
+                "a refused identity must not have been dialed, got: {output}"
+            );
+            assert!(
+                peers.read().await.is_empty(),
+                "a refused identity must not reach the peer state"
+            );
         }
 
         /// A registration attempt that reaches an already closed tracker is
