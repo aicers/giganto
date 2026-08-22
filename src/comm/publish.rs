@@ -616,7 +616,9 @@ async fn request_stream(
 ///
 /// Only the time series generator request implements `sensor` and `id`; the
 /// semi-supervised one panics on both, so its name comes from the connection's
-/// sensor instead.
+/// sensor instead. Neither is required to answer: a request that carries no
+/// sensor or no id still has to be named, so what it does not supply is left
+/// out of the name rather than failing it.
 fn stream_task_name<T: RequestStreamMessage>(
     conn_sensor: Option<&str>,
     record_type: RequestStreamRecord,
@@ -624,10 +626,8 @@ fn stream_task_name<T: RequestStreamMessage>(
 ) -> String {
     if request.is_time_series_generator() {
         let sensor = request.sensor().unwrap_or_else(|_| "unknown".to_string());
-        return match request.id() {
-            Some(id) => format!("publish-stream-{sensor}-{record_type:?}-{id}"),
-            None => format!("publish-stream-{sensor}-{record_type:?}"),
-        };
+        let id = request.id().map_or_else(String::new, |id| format!("-{id}"));
+        return format!("publish-stream-{sensor}-{record_type:?}{id}");
     }
     let sensor = conn_sensor.unwrap_or("unknown");
     format!("publish-stream-{sensor}-{record_type:?}")
