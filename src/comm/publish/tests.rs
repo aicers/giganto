@@ -54,7 +54,7 @@ use tempfile::TempDir;
 use tokio::sync::{Notify, RwLock, mpsc, oneshot, watch};
 use tracing_subscriber::fmt::MakeWriter;
 
-use super::Server;
+use super::{Server, process_stream};
 #[cfg(not(feature = "bootroot"))]
 use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
 #[cfg(feature = "bootroot")]
@@ -5139,6 +5139,111 @@ async fn stream_channels_cleared_after_shutdown_signal() {
         })
     })
     .await;
+}
+
+/// Drives the forwarding loop's `notify_shutdown` branch on its own.
+///
+/// Every route that fires the shutdown signal in the server also closes the
+/// subscribing client's connection — the accept loop closes the endpoint and
+/// `handle_connection` closes the connection — so an end-to-end shutdown test
+/// cannot tell the shutdown branch apart from the disconnect branch. Driving
+/// `process_stream` over a bare connection, with a signal wired to nothing
+/// else, leaves the connection open so only the shutdown branch can end the
+/// subscription.
+#[tokio::test]
+async fn subscription_shutdown_branch_clears_channels_with_the_connection_open() {
+    init_crypto();
+
+    let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+    let db =
+        Database::open(temp_dir.path(), &DbOptions::default()).expect("open publish test database");
+    let channels = new_stream_direct_channels();
+    let certs = build_test_certs();
+
+    let server = Server::new(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0), &certs);
+    let endpoint = Endpoint::server(server.server_config, server.server_address)
+        .expect("subscription endpoint");
+    let server_addr = endpoint.local_addr().expect("subscription local addr");
+
+    let client_endpoint = init_client();
+    let connecting = client_endpoint
+        .connect(server_addr, NODE1.server_name())
+        .expect("connecting to the subscription endpoint");
+    let (server_conn, client_conn) = tokio::join!(
+        async {
+            endpoint
+                .accept()
+                .await
+                .expect("incoming connection")
+                .await
+                .expect("server side connection")
+        },
+        async { connecting.await.expect("client side connection") },
+    );
+
+    let notify_shutdown = Arc::new(Notify::new());
+    let subscription = tokio::spawn(process_stream(
+        db.clone(),
+        server_conn.clone(),
+        Some(SENSOR_SEMI_SUPERVISED_ONE.to_string()),
+        None,
+        RequestStreamRecord::Conn,
+        RequestSemiSupervisedStream {
+            start: 0,
+            sensor: Some(vec![SENSOR_SEMI_SUPERVISED_TWO.to_string()]),
+        },
+        channels.clone(),
+        notify_shutdown.clone(),
+    ));
+
+    wait_for_registered_sensors(
+        &channels,
+        "subscription did not register its channel key",
+        |sensors| sensors == [SENSOR_SEMI_SUPERVISED_TWO.to_string()],
+    )
+    .await;
+
+    // `notify_waiters` only wakes tasks already parked on the signal, so keep
+    // signalling until the subscription observes it.
+    let deadline = Instant::now() + StdDuration::from_secs(5);
+    while !subscription.is_finished() {
+        assert!(
+            Instant::now() < deadline,
+            "the subscription did not return on the shutdown signal"
+        );
+        notify_shutdown.notify_waiters();
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
+    subscription
+        .await
+        .expect("subscription task panicked")
+        .expect("subscription returned an error");
+
+    // Neither side of the connection closed, so the disconnect branch cannot be
+    // what ended the loop.
+    assert!(
+        server_conn.close_reason().is_none(),
+        "the connection closed, so this did not isolate the shutdown branch"
+    );
+    assert_eq!(
+        registered_target_sensors(&channels).await,
+        Vec::<String>::new(),
+        "expected the shutdown signal to clear the subscription's channel key"
+    );
+
+    // A dead sender left behind would tear down the ingest stream that hit it.
+    send_direct_stream(
+        &NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, RequestStreamRecord::Conn),
+        &gen_conn_raw_event(),
+        next_timestamp(),
+        SENSOR_SEMI_SUPERVISED_TWO,
+        channels.clone(),
+    )
+    .await
+    .expect("send_direct_stream after shutdown failed");
+
+    client_conn.close(0_u32.into(), b"shutdown_branch_done");
+    client_endpoint.wait_idle().await;
 }
 
 #[tokio::test]
