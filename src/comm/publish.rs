@@ -920,6 +920,13 @@ where
     T: EventFilter + Serialize + DeserializeOwned + Display,
     N: RequestStreamMessage,
 {
+    // The same name the caller registered this subscription under, rebuilt
+    // from the same inputs. A send failure below is reported here rather than
+    // returned, so without it that line would be the one thing in the
+    // subscription path that cannot be traced back to which of a connection's
+    // live subscriptions it came from.
+    let subscription = stream_task_name(sensor.as_deref(), record_type, &msg);
+
     // Cancellation branch. The subscription's outbound stream has not been
     // opened yet and nothing has been registered in `stream_direct_channels`,
     // so there is no cleanup to run and the client sees no start message.
@@ -953,7 +960,15 @@ where
             () = token.cancelled() => return Ok(()),
             last_ts = start_stream(&mut sender, &store, &msg, record_type, kind) => last_ts?,
         };
-        forward_realtime_records(&mut sender, &mut recv, &conn, &token, last_ts).await;
+        forward_realtime_records(
+            &mut sender,
+            &mut recv,
+            &conn,
+            &token,
+            last_ts,
+            &subscription,
+        )
+        .await;
         Ok(())
     }
     .await;
@@ -1046,6 +1061,7 @@ async fn forward_realtime_records(
     conn: &Connection,
     token: &CancellationToken,
     last_ts: i64,
+    subscription: &str,
 ) {
     loop {
         let buf = select! {
@@ -1080,7 +1096,9 @@ async fn forward_realtime_records(
             sent = frame::send_bytes(sender, &buf) => sent,
         };
         if let Err(e) = sent {
-            debug!("Failed to send a realtime record to the subscribing client: {e}");
+            debug!(
+                "{subscription}: Failed to send a realtime record to the subscribing client: {e}"
+            );
             break;
         }
     }
