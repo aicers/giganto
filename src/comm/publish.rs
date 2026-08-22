@@ -607,56 +607,7 @@ where
     // removal cannot be left to a `Drop` implementation because it needs the
     // async write guard.
     let result: Result<()> = async {
-        let mut last_ts = 0_i64;
-
-        // send stored record raw data
-        if msg.is_semi_supervised() {
-            send_semi_supervised_stream_start_message(&mut sender, record_type)
-                .await
-                .map_err(|e| {
-                    anyhow!("Failed to write the semi-supervised engine start message: {e}")
-                })?;
-            info!(
-                "Start the semi-supervised engine's publish stream : {:?}",
-                record_type
-            );
-        } else if msg.is_time_series_generator() {
-            let id = msg.id().expect("The time series generator always sends RequestTimeSeriesGeneratorStream with an id, so this value is guaranteed to exist.");
-            send_time_series_generator_stream_start_message(&mut sender, id)
-                .await
-                .map_err(|e| {
-                    anyhow!("Failed to write the time series generator start message: {e}")
-                })?;
-            info!(
-                "Start time series generator's publish stream : {:?}",
-                record_type
-            );
-
-            let key_builder = StorageKey::builder()
-                .start_key(&msg.sensor()?)
-                .mid_key(kind.map(|s| s.as_bytes().to_vec()));
-            let from_key = key_builder
-                .clone()
-                .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(msg.start_time())))
-                .build();
-            let to_key = key_builder.upper_open_bound_end_key(None).build();
-            let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-
-            for item in iter {
-                let (key, val) = item.context("Failed to read database")?;
-                let (Some(orig_addr), Some(resp_addr)) = (val.orig_addr(), val.resp_addr()) else {
-                    bail!("Failed to deserialize database data");
-                };
-                if msg.filter_ip(orig_addr, resp_addr) {
-                    let timestamp =
-                        i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-                    send_time_series_generator_data(&mut sender, timestamp, val).await?;
-                    last_ts = timestamp;
-                }
-            }
-        }
-
-        // send realtime record raw data
+        let last_ts = start_stream(&mut sender, &store, &msg, record_type, kind).await?;
         forward_realtime_records(&mut sender, &mut recv, &conn, &notify_shutdown, last_ts).await;
         Ok(())
     }
@@ -664,6 +615,71 @@ where
 
     remove_owned_channel_keys(&stream_direct_channels, &channel_keys, &send).await;
     result
+}
+
+/// Writes the subscription's stream start message and, for a time series
+/// generator, replays the stored records that precede the realtime stream.
+///
+/// Returns the timestamp of the last replayed record, or `0` when nothing was
+/// replayed.
+async fn start_stream<T, N>(
+    sender: &mut SendStream,
+    store: &RawEventStore<'_, T>,
+    msg: &N,
+    record_type: RequestStreamRecord,
+    kind: Option<String>,
+) -> Result<i64>
+where
+    T: EventFilter + Serialize + DeserializeOwned + Display,
+    N: RequestStreamMessage,
+{
+    let mut last_ts = 0_i64;
+
+    // send stored record raw data
+    if msg.is_semi_supervised() {
+        send_semi_supervised_stream_start_message(sender, record_type)
+            .await
+            .map_err(|e| {
+                anyhow!("Failed to write the semi-supervised engine start message: {e}")
+            })?;
+        info!(
+            "Start the semi-supervised engine's publish stream : {:?}",
+            record_type
+        );
+    } else if msg.is_time_series_generator() {
+        let id = msg.id().expect("The time series generator always sends RequestTimeSeriesGeneratorStream with an id, so this value is guaranteed to exist.");
+        send_time_series_generator_stream_start_message(sender, id)
+            .await
+            .map_err(|e| anyhow!("Failed to write the time series generator start message: {e}"))?;
+        info!(
+            "Start time series generator's publish stream : {:?}",
+            record_type
+        );
+
+        let key_builder = StorageKey::builder()
+            .start_key(&msg.sensor()?)
+            .mid_key(kind.map(|s| s.as_bytes().to_vec()));
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(msg.start_time())))
+            .build();
+        let to_key = key_builder.upper_open_bound_end_key(None).build();
+        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+
+        for item in iter {
+            let (key, val) = item.context("Failed to read database")?;
+            let (Some(orig_addr), Some(resp_addr)) = (val.orig_addr(), val.resp_addr()) else {
+                bail!("Failed to deserialize database data");
+            };
+            if msg.filter_ip(orig_addr, resp_addr) {
+                let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
+                send_time_series_generator_data(sender, timestamp, val).await?;
+                last_ts = timestamp;
+            }
+        }
+    }
+
+    Ok(last_ts)
 }
 
 /// Forwards realtime record raw data to the subscribing client until the

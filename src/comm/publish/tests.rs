@@ -5270,6 +5270,8 @@ async fn time_series_generator_skips_realtime_record_older_than_replay() {
     with_test_harness(|harness| {
         Box::pin(async move {
             let sensor = SENSOR_TIME_SERIES_GENERATOR_THREE;
+            let first_db_timestamp = next_timestamp();
+            let first_db_payload = insert_conn_stream(&harness.db, sensor, first_db_timestamp);
             let db_timestamp = next_timestamp();
             let db_payload = insert_conn_stream(&harness.db, sensor, db_timestamp);
 
@@ -5294,11 +5296,25 @@ async fn time_series_generator_skips_realtime_record_older_than_replay() {
                 .expect("receiving time series generator start message");
             assert_eq!(start_msg, POLICY_ID);
 
+            // Stored records are replayed in timestamp order ahead of the
+            // realtime stream.
             let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
                 .await
-                .expect("receiving replayed record");
-            assert_eq!(recv_timestamp, db_timestamp, "replay timestamp mismatch");
-            assert_eq!(recv_data, db_payload, "replay payload mismatch");
+                .expect("receiving first replayed record");
+            assert_eq!(
+                recv_timestamp, first_db_timestamp,
+                "first replay timestamp mismatch"
+            );
+            assert_eq!(recv_data, first_db_payload, "first replay payload mismatch");
+
+            let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
+                .await
+                .expect("receiving second replayed record");
+            assert_eq!(
+                recv_timestamp, db_timestamp,
+                "second replay timestamp mismatch"
+            );
+            assert_eq!(recv_data, db_payload, "second replay payload mismatch");
 
             let key = NetworkKey::new(sensor, RequestStreamRecord::Conn);
             let stale_payload = gen_conn_raw_event();
