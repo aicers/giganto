@@ -241,7 +241,7 @@ impl BoundServer {
                             )
                             .await
                             {
-                                error!("Publish connection to {remote} failed: {e}");
+                                error!("Publish connection to {remote} failed: {e:#}");
                             }
                         },
                     );
@@ -380,7 +380,7 @@ async fn handle_connection(
             )
             .await
             {
-                error!("{error_label} failed: {e}");
+                error!("{error_label} failed: {e:#}");
             }
         }
     });
@@ -459,7 +459,7 @@ async fn handle_connection(
                             request_token,
                         ) => {
                             if let Err(e) = result {
-                                error!("{error_label} failed: {e}");
+                                error!("{error_label} failed: {e:#}");
                             }
                         }
                     }
@@ -559,7 +559,7 @@ async fn request_stream(
                             )
                             .await
                             {
-                                error!("{error_label} failed: {e}");
+                                error!("{error_label} failed: {e:#}");
                             }
                         });
                         // The handle is dropped: the subscription reports its
@@ -590,7 +590,7 @@ async fn request_stream(
                             )
                             .await
                             {
-                                error!("{error_label} failed: {e}");
+                                error!("{error_label} failed: {e:#}");
                             }
                         });
                         // Dropped and logged for the same reasons as the
@@ -602,7 +602,7 @@ async fn request_stream(
                 }
             }
             Err(e) => {
-                error!("Publish stream request from {conn_sensor} failed: {e}");
+                error!("Publish stream request from {conn_sensor} failed: {e:#}");
                 let _ = recv.stop(VarInt::from_u32(0));
                 break;
             }
@@ -808,6 +808,13 @@ async fn get_pcap_conn_if_current_giganto_in_charge(
 /// Cancelled by explicit branches, never by drop: the subscription registers
 /// entries in `stream_direct_channels` and owes their removal on every exit
 /// path, which a dropped future could not perform.
+///
+/// # Errors
+///
+/// Returns an error if the record type's store cannot be opened or if the
+/// subscription fails. Both are reported by the caller's spawn wrapper, which
+/// is what names the subscription they came from; logging them here would
+/// leave a reader unable to tell which of several live subscriptions failed.
 #[allow(clippy::too_many_arguments)]
 async fn process_stream<T>(
     db: Database,
@@ -824,27 +831,18 @@ where
 {
     macro_rules! handle_store {
         ($store_fn:ident, $store_name:expr) => {
-            match db.$store_fn() {
-                Ok(store) => {
-                    if let Err(e) = send_stream(
-                        store,
-                        conn,
-                        record_type,
-                        request_msg,
-                        sensor,
-                        kind,
-                        stream_direct_channels,
-                        token,
-                    )
-                    .await
-                    {
-                        error!("Failed to send network stream : {}", e);
-                    }
-                }
-                Err(_) => {
-                    error!("Failed to open {} store", $store_name);
-                }
-            }
+            send_stream(
+                db.$store_fn()
+                    .with_context(|| format!("Failed to open {} store", $store_name))?,
+                conn,
+                record_type,
+                request_msg,
+                sensor,
+                kind,
+                stream_direct_channels,
+                token,
+            )
+            .await?
         };
     }
 

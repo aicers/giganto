@@ -5284,9 +5284,12 @@ async fn stream_channels_cleared_when_time_series_replay_fails() {
                 .await
                 .expect("sending time series generator stream request failed");
 
+                // The subscription's own task name carries the failure, so a
+                // reader can tell which of several live subscriptions it came
+                // from.
                 assert_log_contains(
                     &log_capture,
-                    "Failed to send network stream : Failed to deserialize database data",
+                    "publish-stream-src3-Log-1 failed: Failed to deserialize database data",
                 )
                 .await;
 
@@ -7560,6 +7563,13 @@ mod shutdown {
 
     /// A client that finishes QUIC transport setup and never sends its publish
     /// version message does not hold the drain open.
+    ///
+    /// Which of the two pre-admission branches gives up on this connection is
+    /// deliberately not asserted. A client is established before the server
+    /// is, so cancellation can land either on the `conn.await` that has not
+    /// yielded a connection yet or on the `server_handshake` past it, and
+    /// nothing the client can observe says which — the drain returning is what
+    /// this test is for.
     #[tokio::test]
     async fn a_stalled_inbound_handshake_does_not_hold_the_drain_open() {
         init_crypto();
@@ -7582,7 +7592,7 @@ mod shutdown {
         // Transport setup only: no `client_handshake`, so the server's
         // `server_handshake` never resolves on its own.
         let client_endpoint = init_client();
-        let _stalled = client_endpoint
+        let stalled = client_endpoint
             .connect(server_addr, NODE1.server_name())
             .expect("connecting to the publish listener")
             .await
@@ -7591,6 +7601,12 @@ mod shutdown {
         tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, server_handle.shutdown())
             .await
             .expect("a stalled version handshake must not hold the drain open");
+
+        // Whichever branch gave up on it, the client is told rather than left
+        // to time the connection out on its own.
+        tokio::time::timeout(CANCEL_TIMEOUT, stalled.closed())
+            .await
+            .expect("the abandoned connection should have been closed");
     }
 
     /// A client that arrives after the accept loop has left is neither
@@ -8102,6 +8118,23 @@ mod shutdown {
                 .await
                 .is_empty(),
             "the subscription's cleanup should have run before the entry task returned"
+        );
+
+        // A connection that has admitted work is left for the post-drain
+        // endpoint close, which sends no reason. The only branches that close
+        // a publish connection themselves — the one that gives up on the
+        // version handshake and the one that rejects an incompatible version —
+        // both send one, so an empty reason says neither of them fired here.
+        let closed = tokio::time::timeout(CANCEL_TIMEOUT, client.conn.closed())
+            .await
+            .expect("the drained connection should have been closed");
+        assert!(
+            matches!(
+                &closed,
+                quinn::ConnectionError::ApplicationClosed(close) if close.reason.is_empty()
+            ),
+            "a connection with work in flight should outlive the drain and be closed \
+             by the endpoint, got: {closed:?}"
         );
 
         // The listener is gone once the entry task has returned.

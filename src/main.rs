@@ -1811,15 +1811,13 @@ mod tests {
 
         /// Waits until every `needle` has appeared in the captured log.
         ///
-        /// This is the synchronization the terminate intent needs.
-        /// `notify_shutdown` is delivered with `notify_waiters`, which reaches
-        /// only the tasks already parked on it, so signalling before the
-        /// subsystems are up would notify nobody and the join that follows
-        /// would never return. Each subsystem announces itself with no await
-        /// between the announcement and the park, and on this test's
-        /// current-thread runtime the announcement can only be observed after
-        /// that poll has finished — so a subsystem whose line is in the log is
-        /// parked.
+        /// This is the synchronization the intent-driven tests need. The
+        /// cancellation a subsystem now shuts down on stays raised, so an
+        /// intent sent too early is no longer lost — but a generation that
+        /// ends before its subsystems are up never produces the startup and
+        /// shutdown lines those tests assert on. A subsystem announces itself
+        /// with no await between the announcement and the wait that follows,
+        /// so a subsystem whose line is in the log is serving.
         async fn wait_for_logs(logs: &Arc<Mutex<Vec<u8>>>, needles: &[&str]) {
             let wait = async {
                 while !needles.iter().all(|needle| captured(logs).contains(needle)) {
