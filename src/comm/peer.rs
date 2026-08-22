@@ -4849,9 +4849,7 @@ pub mod tests {
         /// enqueue, so a test can tie a refusal to the identity it dropped
         /// rather than to any mention of that identity in the log.
         fn refusals(output: &str) -> impl Iterator<Item = &str> {
-            output
-                .lines()
-                .filter(|line| line.contains(REFUSED_ENQUEUE))
+            output.lines().filter(|line| line.contains(REFUSED_ENQUEUE))
         }
 
         /// State the shared peer maps are keyed on and the tests read back.
