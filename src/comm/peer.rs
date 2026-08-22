@@ -25,10 +25,12 @@ use tokio::{
     },
     time::sleep,
 };
+use tokio_util::sync::CancellationToken;
 use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
 use crate::{
+    cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report},
     comm::IngestSensors,
     graphql::status::{
         CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR, TomlPeers, insert_toml_peers,
@@ -102,13 +104,8 @@ fn current_applied_generation(slot: &SharedClientConfig) -> u64 {
 //   all Gigantos in the cluster to use the same protocol version for compatibility.
 const PEER_VERSION_REQ: &str = ">=0.28.0,<0.29.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
-/// Milliseconds the peer subsystem waits out before closing its endpoint or a
-/// connection on shutdown. They stand in for a drain peer does not yet
-/// perform, and #1567 replaces them with cooperative cancellation the way
-/// ingest did. Kept private to this module, and named for peer rather than for
-/// the server at large, so nothing else adopts them in the meantime.
-const PEER_ENDPOINT_DELAY: u64 = 300;
-const PEER_CONNECTION_DELAY: u64 = 200;
+/// Names the peer subsystem tracker in the drain progress log.
+const PEER_DRAIN_LABEL: &str = "peer";
 
 pub type Peers = Arc<RwLock<HashMap<String, PeerInfo>>>;
 #[allow(clippy::module_name_repetitions)]
@@ -203,6 +200,14 @@ impl Peer {
         })
     }
 
+    /// Serves the peer subsystem until `token` is cancelled, then drains
+    /// every task it admitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either endpoint cannot be created, if the
+    /// configuration file cannot be read, or if the peer task tracker's lock
+    /// is poisoned while closing or draining it.
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         self,
@@ -210,18 +215,18 @@ impl Peer {
         peers: Peers,
         peer_idents: PeerIdents,
         notify_sensor: Arc<Notify>,
-        notify_shutdown: Arc<Notify>,
         config_path: String,
         tls_watch: TlsWatch,
+        token: CancellationToken,
     ) -> Result<()> {
         self.run_with_ready(
             ingest_sensors,
             peers,
             peer_idents,
             notify_sensor,
-            notify_shutdown,
             config_path,
             tls_watch,
+            token,
             None,
         )
         .await
@@ -231,16 +236,22 @@ impl Peer {
     /// `ready` channel lets tests observe the bound server address and the
     /// shared client TLS slot once both are constructed, without forcing
     /// production callers to plumb a sender they do not need.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either endpoint cannot be created, if the
+    /// configuration file cannot be read, or if the peer task tracker's lock
+    /// is poisoned while closing or draining it.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) async fn run_with_ready(
         self,
         ingest_sensors: IngestSensors,
         peers: Peers,
         peer_idents: PeerIdents,
         notify_sensor: Arc<Notify>,
-        notify_shutdown: Arc<Notify>,
         config_path: String,
         mut tls_watch: TlsWatch,
+        token: CancellationToken,
         ready: Option<oneshot::Sender<(SocketAddr, SharedClientConfig)>>,
     ) -> Result<()> {
         let server_endpoint = Endpoint::server(self.server_config, self.local_address)
@@ -291,42 +302,84 @@ impl Peer {
             config_path,
         };
 
-        tokio::spawn(client_run(
-            client_endpoint.clone(),
-            shared_client_config.clone(),
-            peer_conn_info.clone(),
-            self.local_connect_name.clone(),
-            notify_shutdown.clone(),
-        ));
+        // Built from the token handed down by `main`, so the top-level
+        // `cancel_children` reaches every peer task registered here and by the
+        // connection handlers in turn. Building it with `TaskTracker::new()`
+        // would start a fresh root and cut peer off from process shutdown
+        // without the compiler noticing.
+        let tracker = TaskTracker::with_token(token.clone());
+
+        // The initial bootstrap the detached `client_run` task used to do,
+        // inline in the entry task: dialing the configured peers is the entry
+        // task's own startup work, and each dial is registered in the tracker
+        // rather than being spawned behind a task nothing waits for.
+        for peer in snapshot_peer_identities(&peer_conn_info.peer_identities).await {
+            spawn_client_connection(
+                &tracker,
+                &client_endpoint,
+                &shared_client_config,
+                peer,
+                &peer_conn_info,
+                &self.local_connect_name,
+            );
+        }
 
         let mut tls_reload_closed = false;
         loop {
             select! {
+                biased;
+
+                // Cancellation branch. What is lost here is only work that has
+                // not started: an inbound handshake quinn has not yet handed
+                // over, a peer identity still queued in the channel, and a TLS
+                // update that changes nothing for connections already up. The
+                // entry task has no per-connection state of its own to clean
+                // up, so its cleanup is the shutdown sequence below — close
+                // admission, close the endpoints and connections, close the
+                // peer-identity receive side — and it returns only once the
+                // drain that follows is empty.
+                () = token.cancelled() => {
+                    info!("Shutting down peer");
+                    break;
+                }
+
                 Some(conn) = server_endpoint.accept()  => {
-                    let peer_conn_info = peer_conn_info.clone();
-                    let notify_shutdown = notify_shutdown.clone();
-                    tokio::spawn(async move {
-                        let remote = conn.remote_address();
-                        if let Err(e) = server_connection(
-                            conn,
-                            peer_conn_info,
-                            notify_shutdown,
-                        )
-                        .await
-                        {
-                            error!("Connection to {remote} failed: {e}");
+                    let remote = conn.remote_address();
+                    let spawned = tracker.spawn(format!("peer-server-conn-{remote}"), {
+                        let peer_conn_info = peer_conn_info.clone();
+                        let tracker = tracker.clone();
+                        move |token| async move {
+                            if let Err(e) = server_connection(
+                                conn,
+                                peer_conn_info,
+                                tracker,
+                                token,
+                            )
+                            .await
+                            {
+                                error!("Connection to {remote} failed: {e}");
+                            }
                         }
                     });
+                    // The handle is dropped: the handler logs its own domain
+                    // errors and the tracker's registry guard names a task
+                    // that vanishes without returning. Admission only closes
+                    // after cancellation, so a rejection here means shutdown
+                    // has begun and the remote will reconnect to the next
+                    // generation.
+                    if let Err(e) = spawned {
+                        warn!("Rejected peer connection from {remote}: {e}");
+                    }
                 },
                 Some(peer) = receiver.recv()  => {
-                    tokio::spawn(client_connection(
-                        client_endpoint.clone(),
-                        shared_client_config.clone(),
+                    spawn_client_connection(
+                        &tracker,
+                        &client_endpoint,
+                        &shared_client_config,
                         peer,
-                        peer_conn_info.clone(),
-                        self.local_connect_name.clone(),
-                        notify_shutdown.clone(),
-                    ));
+                        &peer_conn_info,
+                        &self.local_connect_name,
+                    );
                 },
                 res = tls_watch.changed(), if !tls_reload_closed => {
                     if res.is_err() {
@@ -341,15 +394,53 @@ impl Peer {
                         &material,
                     );
                 },
-                () = notify_shutdown.notified() => {
-                    sleep(Duration::from_millis(PEER_ENDPOINT_DELAY)).await;      // Wait time for connection to be ready for shutdown.
-                    server_endpoint.close(0_u32.into(), &[]);
-                    info!("Shutting down peer");
-                    return Ok(())
-                }
-
             }
         }
+
+        // Admission rejection, the half leaving the accept loop cannot do on
+        // its own: a closed tracker turns away every request handler and
+        // sensor-update fan-out a still-running connection handler might try
+        // to register. Closing does not cancel, so everything already tracked
+        // keeps running until it observes cancellation for itself.
+        tracker
+            .close()
+            .context("failed to close the peer task tracker")?;
+
+        // Closing the endpoints is what releases the awaits no token reaches:
+        // the `giganto_client` handshakes, the init-info frame exchanges, a
+        // `receive_peer_data` waiting on a frame that never arrives,
+        // `accept_bi`, an outbound dial, and an `update_peer_info` stream
+        // write the remote never reads. Closing an endpoint closes the
+        // connections on it too; the explicit sweep below covers a connection
+        // whose endpoint a test drives separately.
+        server_endpoint.close(0_u32.into(), b"shutting down");
+        client_endpoint.close(0_u32.into(), b"shutting down");
+        for connection in snapshot_connections(&peer_conn_info.peer_conns).await {
+            connection.close(0_u32.into(), b"shutting down");
+        }
+
+        // The peer-identity channel holds 100 entries and its receiver is a
+        // local of this task, so a `handle_request` blocked sending into a
+        // full channel nobody drains would hang the drain forever. Closing the
+        // receive side makes that send fail at once through the existing
+        // `Failed to enqueue peer connection attempt` path. Peers discovered
+        // during shutdown are not dialed; that loss is accepted.
+        receiver.close();
+
+        // State cleanup. Every connection handler removes its own `peer_conns`
+        // and `peers` entries before it returns, so what is left to the entry
+        // task is its own hold on peer state: dropping its `PeerConns` clone
+        // releases the last `peer_sender` outside the handlers, so the channel
+        // is closed rather than merely drained once they have returned.
+        drop(peer_conn_info);
+
+        // Same policy as the top level: report every round and keep waiting.
+        // `drain_with_report` closes and cancels again, both idempotent.
+        drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL)
+            .await
+            .context("failed to drain the peer task tracker")?;
+
+        Ok(())
     }
 }
 
@@ -404,24 +495,105 @@ fn apply_peer_tls_reload(
     );
 }
 
-async fn client_run(
-    client_endpoint: Endpoint,
-    shared_client_config: SharedClientConfig,
-    peer_conn_info: PeerConns,
-    local_connect_name: String,
-    notify_shutdown: Arc<Notify>,
+/// Registers one outbound peer connection in the peer-local tracker.
+///
+/// Used by the entry task for both the startup bootstrap and every peer
+/// identity that later arrives on the peer-identity channel. The handle is
+/// dropped: `client_connection` logs its own domain errors and the tracker's
+/// registry guard names a task that ends without returning, so there is no
+/// outcome left for the entry task to observe.
+fn spawn_client_connection(
+    tracker: &TaskTracker,
+    client_endpoint: &Endpoint,
+    shared_client_config: &SharedClientConfig,
+    peer_info: PeerIdentity,
+    peer_conn_info: &PeerConns,
+    local_connect_name: &str,
 ) {
-    let peer_identities = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
-    for peer in peer_identities {
-        tokio::spawn(client_connection(
-            client_endpoint.clone(),
-            shared_client_config.clone(),
-            peer,
-            peer_conn_info.clone(),
-            local_connect_name.clone(),
-            notify_shutdown.clone(),
-        ));
+    let addr = peer_info.addr;
+    let spawned = tracker.spawn(format!("peer-client-conn-{addr}"), {
+        let client_endpoint = client_endpoint.clone();
+        let shared_client_config = shared_client_config.clone();
+        let peer_conn_info = peer_conn_info.clone();
+        let local_connect_name = local_connect_name.to_string();
+        let tracker = tracker.clone();
+        move |token| async move {
+            if let Err(e) = client_connection(
+                client_endpoint,
+                shared_client_config,
+                peer_info,
+                peer_conn_info,
+                local_connect_name,
+                tracker,
+                token,
+            )
+            .await
+            {
+                error!("Peer connection to {addr} failed: {e}");
+            }
+        }
+    });
+    // Admission only closes after cancellation, so a rejection here means the
+    // entry task has already begun shutting down and this peer will be dialed
+    // by the next generation instead.
+    if let Err(e) = spawned {
+        warn!("Rejected peer connection to {addr}: {e}");
     }
+}
+
+/// Registers one `update_peer_info` fan-out in the peer-local tracker.
+///
+/// The fan-out is no longer fire-and-forget: a send that fails is logged with
+/// the peer and the update kind, and a registration the closed tracker refuses
+/// is logged and dropped rather than being spawned outside the tracker.
+fn spawn_peer_info_update<T>(
+    tracker: &TaskTracker,
+    connection: Connection,
+    msg_type: PeerCode,
+    peer_data: T,
+) where
+    T: Serialize + DeserializeOwned + Send + 'static,
+{
+    let remote = connection.remote_address();
+    let spawned = tracker.spawn(
+        format!("peer-update-{msg_type:?}-{remote}"),
+        move |_token| async move {
+            if let Err(e) = update_peer_info::<T>(connection, msg_type, peer_data).await {
+                warn!("Failed to send {msg_type:?} to peer {remote}: {e}");
+            }
+        },
+    );
+    if let Err(e) = spawned {
+        warn!("Rejected {msg_type:?} to peer {remote}: {e}");
+    }
+}
+
+/// Drops this connection's entries from the shared peer state.
+///
+/// Every path out of a connection handler runs this before returning — the
+/// cancellation path as much as the connection-error path — because `Drop`
+/// cannot `.await` and the entry task's drain ends the moment the handlers
+/// return. Both removals are idempotent, so a handler that already cleaned up
+/// on an earlier lap costs nothing here.
+async fn remove_peer_state(
+    peer_conn_info: &PeerConns,
+    remote_peer_dedup_key: &str,
+    remote_addr: &str,
+) {
+    peer_conn_info
+        .peer_conns
+        .write()
+        .await
+        .remove(remote_peer_dedup_key);
+    peer_conn_info.peers.write().await.remove(remote_addr);
+}
+
+/// How a connection handler's serve loop ended.
+enum ConnectionExit {
+    /// The connection is gone but the peer is still worth dialing again.
+    Retry,
+    /// The handler is done with this peer.
+    Done,
 }
 
 async fn connect(
@@ -455,21 +627,97 @@ fn get_port_from_config(config_key: &str, config_doc: &DocumentMut) -> Option<u1
         })
 }
 
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+/// Registers one inbound peer request stream in the peer-local tracker.
+///
+/// Shared by both connection loops. A stream the closed tracker refuses is
+/// logged with the peer it came from and dropped; the frame on it was never
+/// fully received or validated, so nothing acknowledged is lost with it.
+fn spawn_request_handler(
+    tracker: &TaskTracker,
+    stream: (SendStream, RecvStream),
+    peer_conn_info: &PeerConns,
+    remote_addr: &str,
+) {
+    let remote = remote_addr.to_string();
+    let spawned = tracker.spawn(format!("peer-request-{remote_addr}"), {
+        let peer_conn_info = peer_conn_info.clone();
+        let remote = remote.clone();
+        move |_token| async move {
+            if let Err(e) = handle_request(
+                stream,
+                peer_conn_info.local_address,
+                remote.clone(),
+                peer_conn_info.peer_identities.clone(),
+                peer_conn_info.peers.clone(),
+                peer_conn_info.peer_sender.clone(),
+                peer_conn_info.config_doc.clone(),
+                &peer_conn_info.config_path,
+            )
+            .await
+            {
+                error!("Peer request from {remote} failed: {e}");
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        warn!("Rejected peer request from {remote}: {e}");
+    }
+}
+
+/// Fans the current `ingest_sensors` snapshot out to every live peer
+/// connection, one tracked task per connection.
+///
+/// A wake on `notify_sensor` sends the whole snapshot as it stands at that
+/// moment rather than a per-change delta, so a notification that coalesced
+/// with another or was dropped costs no sensor state.
+async fn fan_out_sensor_list(
+    tracker: &TaskTracker,
+    peer_conn_info: &PeerConns,
+    graphql_port: Option<u16>,
+    publish_port: Option<u16>,
+) {
+    let sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
+    for conn in snapshot_connections(&peer_conn_info.peer_conns).await {
+        spawn_peer_info_update::<PeerInfo>(
+            tracker,
+            conn,
+            PeerCode::UpdateSensorList,
+            PeerInfo {
+                ingest_sensors: sensor_list.clone(),
+                graphql_port,
+                publish_port,
+            },
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn client_connection(
     client_endpoint: Endpoint,
     shared_client_config: SharedClientConfig,
     peer_info: PeerIdentity,
     peer_conn_info: PeerConns,
     local_connect_name: String,
-    notify_shutdown: Arc<Notify>,
+    tracker: TaskTracker,
+    token: CancellationToken,
 ) -> Result<()> {
     let (graphql_port, publish_port) = {
         let config_doc = peer_conn_info.config_doc.lock().await;
         get_peer_ports(&config_doc)
     };
     'connection: loop {
-        match connect(&client_endpoint, &shared_client_config, &peer_info).await {
+        // The dial is one of the two awaits closure does not release: an
+        // unreachable address keeps `connect_with` waiting out its handshake
+        // timeout with no connection to close. What is lost when the token
+        // fires here is one dial attempt; nothing has been inserted into
+        // `peer_conns` or `peers` yet, so there is nothing to clean up.
+        let Some(dialed) = token
+            .run_until_cancelled(connect(&client_endpoint, &shared_client_config, &peer_info))
+            .await
+        else {
+            return Ok(());
+        };
+        match dialed {
             Ok((connection, mut send, mut recv, snapshot_gen)) => {
                 // If peer TLS state was reloaded while this reconnect was
                 // in flight, the connection we just established was dialed
@@ -502,122 +750,33 @@ async fn client_connection(
                     }
                 };
 
-                let send_sensor_list: HashSet<String> =
-                    peer_conn_info.ingest_sensors.read().await.to_owned();
-
-                // Add my peer info to the peer list.
-                let mut send_peer_list =
-                    snapshot_peer_identities(&peer_conn_info.peer_identities).await;
-                send_peer_list.insert(PeerIdentity {
-                    addr: peer_conn_info.local_address,
-                    hostname: local_connect_name.clone(),
-                });
-
-                // Exchange peer list/sensor list.
-                let (recv_peer_list, recv_sensor_list) =
-                    request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
-                        &mut send,
-                        &mut recv,
-                        PeerCode::UpdatePeerList,
-                        (
-                            send_peer_list,
-                            PeerInfo {
-                                ingest_sensors: send_sensor_list,
-                                graphql_port,
-                                publish_port,
-                            },
-                        ),
-                    )
-                    .await?;
-
-                // Update to the list of received sensors.
-                update_to_new_sensor_list(
-                    recv_sensor_list,
-                    remote_addr.clone(),
-                    peer_conn_info.peers.clone(),
+                // From here on this handler owns entries under
+                // `remote_peer_dedup_key` and `remote_addr`, so every way out
+                // of the serve call below — cancellation, connection error, or
+                // a clean close — passes through the same removal before the
+                // handler returns or dials again.
+                let exit = serve_client_connection(
+                    &connection,
+                    &mut send,
+                    &mut recv,
+                    &peer_conn_info,
+                    &local_connect_name,
+                    &remote_addr,
+                    &remote_peer_dedup_key,
+                    (graphql_port, publish_port),
+                    &tracker,
+                    &token,
                 )
                 .await;
-
-                // Update to the list of received peers.
-                update_to_new_peer_list(
-                    recv_peer_list,
-                    peer_conn_info.local_address,
-                    peer_conn_info.peer_identities.clone(),
-                    peer_conn_info.peer_sender.clone(),
-                    peer_conn_info.config_doc.clone(),
-                    &peer_conn_info.config_path,
-                )
-                .await?;
-
-                // Share the received peer list with connected peers.
-                let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
-                let peer_identities =
-                    snapshot_peer_identities(&peer_conn_info.peer_identities).await;
-                for conn in connections {
-                    tokio::spawn(update_peer_info::<HashSet<PeerIdentity>>(
-                        conn,
-                        PeerCode::UpdatePeerList,
-                        peer_identities.clone(),
-                    ));
-                }
-
-                // Update my peer list
-                peer_conn_info
-                    .peer_conns
-                    .write()
-                    .await
-                    .insert(remote_peer_dedup_key.clone(), connection.clone());
-
-                loop {
-                    select! {
-                        stream = connection.accept_bi()  => {
-                            let stream = match stream {
-                                Err(e) => {
-                                    peer_conn_info.peer_conns.write().await.remove(&remote_peer_dedup_key);
-                                    peer_conn_info.peers.write().await.remove(&remote_addr);
-                                    if let quinn::ConnectionError::ApplicationClosed(_) = e {
-                                        info!("Data store peer({remote_peer_dedup_key}/{remote_addr}) closed");
-                                        return Ok(());
-                                    }
-                                    continue 'connection;
-                                }
-                                Ok(s) => s,
-                            };
-
-                            let peer_list = peer_conn_info.peer_identities.clone();
-                            let sender = peer_conn_info.peer_sender.clone();
-                            let remote_addr = remote_addr.clone();
-                            let peers = peer_conn_info.peers.clone();
-                            let doc = peer_conn_info.config_doc.clone();
-                            let path= peer_conn_info.config_path.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, &path).await {
-                                    error!("Failed: {e}");
-                                }
-                            });
-                        },
-                        () = peer_conn_info.notify_sensor.notified() => {
-                            let sensor_list = peer_conn_info.ingest_sensors.read().await.to_owned();
-                            let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
-                            for conn in connections {
-                                tokio::spawn(update_peer_info::<PeerInfo>(
-                                    conn,
-                                    PeerCode::UpdateSensorList,
-                                    PeerInfo {
-                                        ingest_sensors: sensor_list.clone(),
-                                        graphql_port,
-                                        publish_port,
-                                    }
-                                ));
-                            }
-                        },
-                        () = notify_shutdown.notified() => {
-                            // Wait time for channels to be ready for shutdown.
-                            sleep(Duration::from_millis(PEER_CONNECTION_DELAY)).await;
-                            connection.close(0_u32.into(), &[]);
-                            return Ok(())
-                        },
-                    }
+                remove_peer_state(&peer_conn_info, &remote_peer_dedup_key, &remote_addr).await;
+                match exit {
+                    Ok(ConnectionExit::Done) => return Ok(()),
+                    Err(e) => return Err(e),
+                    // The connection is gone but the peer is still worth
+                    // another dial: fall through to the next lap of the
+                    // reconnect loop, with this connection's shared state
+                    // already removed above.
+                    Ok(ConnectionExit::Retry) => {}
                 }
             }
             Err(e) => {
@@ -631,7 +790,20 @@ async fn client_connection(
                                 "Retrying connection to {} in {PEER_RETRY_INTERVAL} seconds",
                                 peer_info.addr,
                             );
-                            sleep(Duration::from_secs(PEER_RETRY_INTERVAL)).await;
+                            // The reconnect sleep is the other await no
+                            // closure reaches. Cancellation drops the wait and
+                            // gives up the reconnect; nothing is registered in
+                            // the shared peer state at this point, so the
+                            // handler can return as it is.
+                            if token
+                                .run_until_cancelled(sleep(Duration::from_secs(
+                                    PEER_RETRY_INTERVAL,
+                                )))
+                                .await
+                                .is_none()
+                            {
+                                return Ok(());
+                            }
                         }
                         _ => {}
                     }
@@ -643,12 +815,138 @@ async fn client_connection(
     }
 }
 
+/// Serves one established outbound peer connection: the init exchange, the
+/// peer-list fan-out it triggers, and then the request/sensor-update loop.
+///
+/// Split out of [`client_connection`] so that the caller has exactly one place
+/// to remove this connection's `peer_conns` and `peers` entries, whichever way
+/// the connection ends.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn serve_client_connection(
+    connection: &Connection,
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+    peer_conn_info: &PeerConns,
+    local_connect_name: &str,
+    remote_addr: &str,
+    remote_peer_dedup_key: &str,
+    (graphql_port, publish_port): (Option<u16>, Option<u16>),
+    tracker: &TaskTracker,
+    token: &CancellationToken,
+) -> Result<ConnectionExit> {
+    let send_sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
+
+    // Add my peer info to the peer list.
+    let mut send_peer_list = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
+    send_peer_list.insert(PeerIdentity {
+        addr: peer_conn_info.local_address,
+        hostname: local_connect_name.to_string(),
+    });
+
+    // Exchange peer list/sensor list. No token is threaded through the frame
+    // helpers: closing the connection or the client endpoint is what releases
+    // them, and a half-received init frame is discarded with the connection.
+    let (recv_peer_list, recv_sensor_list) =
+        request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+            send,
+            recv,
+            PeerCode::UpdatePeerList,
+            (
+                send_peer_list,
+                PeerInfo {
+                    ingest_sensors: send_sensor_list,
+                    graphql_port,
+                    publish_port,
+                },
+            ),
+        )
+        .await?;
+
+    // Update to the list of received sensors.
+    update_to_new_sensor_list(
+        recv_sensor_list,
+        remote_addr.to_string(),
+        peer_conn_info.peers.clone(),
+    )
+    .await;
+
+    // Update to the list of received peers.
+    update_to_new_peer_list(
+        recv_peer_list,
+        peer_conn_info.local_address,
+        peer_conn_info.peer_identities.clone(),
+        peer_conn_info.peer_sender.clone(),
+        peer_conn_info.config_doc.clone(),
+        &peer_conn_info.config_path,
+    )
+    .await?;
+
+    // Share the received peer list with connected peers.
+    let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
+    let peer_identities = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
+    for conn in connections {
+        spawn_peer_info_update::<HashSet<PeerIdentity>>(
+            tracker,
+            conn,
+            PeerCode::UpdatePeerList,
+            peer_identities.clone(),
+        );
+    }
+
+    // Update my peer list
+    peer_conn_info
+        .peer_conns
+        .write()
+        .await
+        .insert(remote_peer_dedup_key.to_string(), connection.clone());
+
+    loop {
+        select! {
+            biased;
+
+            // Cancellation branch. What is lost here is an inbound stream the
+            // remote had opened but this loop had not yet selected, and a
+            // sensor-update round the wake below would have started. Both are
+            // resent by the reconnect and the init handshake of the next
+            // generation. The caller removes this connection's `peer_conns`
+            // and `peers` entries as soon as this branch returns, before the
+            // handler itself returns.
+            () = token.cancelled() => {
+                connection.close(0_u32.into(), b"shutting down");
+                return Ok(ConnectionExit::Done);
+            },
+
+            stream = connection.accept_bi()  => {
+                let stream = match stream {
+                    Err(e) => {
+                        if let quinn::ConnectionError::ApplicationClosed(_) = e {
+                            info!("Data store peer({remote_peer_dedup_key}/{remote_addr}) closed");
+                            return Ok(ConnectionExit::Done);
+                        }
+                        return Ok(ConnectionExit::Retry);
+                    }
+                    Ok(s) => s,
+                };
+                spawn_request_handler(tracker, stream, peer_conn_info, remote_addr);
+            },
+            () = peer_conn_info.notify_sensor.notified() => {
+                fan_out_sensor_list(tracker, peer_conn_info, graphql_port, publish_port).await;
+            },
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 async fn server_connection(
     conn: quinn::Incoming,
     peer_conn_info: PeerConns,
-    notify_shutdown: Arc<Notify>,
+    tracker: TaskTracker,
+    token: CancellationToken,
 ) -> Result<()> {
+    // No token is threaded through the inbound handshake: `Incoming`,
+    // `server_handshake`, and the init exchange below all resolve when the
+    // entry task closes the server endpoint, so a remote that connects and
+    // then stalls cannot hold the drain.
     let connection = conn.await?;
 
     let (mut send, mut recv) = match server_handshake(&connection, PEER_VERSION_REQ).await {
@@ -672,6 +970,41 @@ async fn server_connection(
             }
         };
 
+    // From here on this handler owns entries under `remote_peer_dedup_key` and
+    // `remote_addr`, so every way out of the serve call below passes through
+    // the same removal before the handler returns.
+    let outcome = serve_server_connection(
+        &connection,
+        &mut send,
+        &mut recv,
+        &peer_conn_info,
+        &remote_addr,
+        &remote_peer_dedup_key,
+        &tracker,
+        &token,
+    )
+    .await;
+    remove_peer_state(&peer_conn_info, &remote_peer_dedup_key, &remote_addr).await;
+    outcome
+}
+
+/// Serves one established inbound peer connection: the init exchange, the
+/// peer-list fan-out it triggers, and then the request/sensor-update loop.
+///
+/// Split out of [`server_connection`] so that the caller has exactly one place
+/// to remove this connection's `peer_conns` and `peers` entries, whichever way
+/// the connection ends.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn serve_server_connection(
+    connection: &Connection,
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+    peer_conn_info: &PeerConns,
+    remote_addr: &str,
+    remote_peer_dedup_key: &str,
+    tracker: &TaskTracker,
+    token: &CancellationToken,
+) -> Result<()> {
     let sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
     let peer_identities = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
 
@@ -682,8 +1015,8 @@ async fn server_connection(
     };
     let (recv_peer_list, recv_sensor_list) =
         response_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
-            &mut send,
-            &mut recv,
+            send,
+            recv,
             PeerCode::UpdatePeerList,
             (
                 peer_identities,
@@ -699,7 +1032,7 @@ async fn server_connection(
     // Update to the list of received sensors.
     update_to_new_sensor_list(
         recv_sensor_list,
-        remote_addr.clone(),
+        remote_addr.to_string(),
         peer_conn_info.peers.clone(),
     )
     .await;
@@ -719,11 +1052,12 @@ async fn server_connection(
     let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
     let peer_identities = snapshot_peer_identities(&peer_conn_info.peer_identities).await;
     for conn in connections {
-        tokio::spawn(update_peer_info::<HashSet<PeerIdentity>>(
+        spawn_peer_info_update::<HashSet<PeerIdentity>>(
+            tracker,
             conn,
             PeerCode::UpdatePeerList,
             peer_identities.clone(),
-        ));
+        );
     }
 
     // Update my peer list
@@ -731,15 +1065,27 @@ async fn server_connection(
         .peer_conns
         .write()
         .await
-        .insert(remote_peer_dedup_key.clone(), connection.clone());
+        .insert(remote_peer_dedup_key.to_string(), connection.clone());
 
     loop {
         select! {
+            biased;
+
+            // Cancellation branch. What is lost here is an inbound stream the
+            // remote had opened but this loop had not yet selected, and a
+            // sensor-update round the wake below would have started. The peer
+            // reconnects to the next generation and the init handshake
+            // exchanges both lists again. The caller removes this connection's
+            // `peer_conns` and `peers` entries as soon as this branch returns,
+            // before the handler itself returns.
+            () = token.cancelled() => {
+                connection.close(0_u32.into(), b"shutting down");
+                return Ok(());
+            },
+
             stream = connection.accept_bi()  => {
                 let stream = match stream {
                     Err(e) => {
-                        peer_conn_info.peer_conns.write().await.remove(&remote_peer_dedup_key);
-                        peer_conn_info.peers.write().await.remove(&remote_addr);
                         if let quinn::ConnectionError::ApplicationClosed(_) = e {
                             info!("Data store peer({remote_peer_dedup_key}/{remote_addr}) closed");
                             return Ok(());
@@ -748,44 +1094,14 @@ async fn server_connection(
                     }
                     Ok(s) => s,
                 };
-
-                let peer_list = peer_conn_info.peer_identities.clone();
-                let sender = peer_conn_info.peer_sender.clone();
-                let remote_addr = remote_addr.clone();
-                let peers = peer_conn_info.peers.clone();
-                let doc = peer_conn_info.config_doc.clone();
-                let path = peer_conn_info.config_path.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_request(stream, peer_conn_info.local_address, remote_addr, peer_list, peers, sender, doc, &path).await {
-                        error!("Failed: {}", e);
-                    }
-                });
+                spawn_request_handler(tracker, stream, peer_conn_info, remote_addr);
             },
             () = peer_conn_info.notify_sensor.notified() => {
-                let sensor_list: HashSet<String> = peer_conn_info.ingest_sensors.read().await.to_owned();
-                let connections = snapshot_connections(&peer_conn_info.peer_conns).await;
-                for conn in connections {
-                    tokio::spawn(update_peer_info::<PeerInfo>(
-                        conn,
-                        PeerCode::UpdateSensorList,
-                        PeerInfo {
-                            ingest_sensors: sensor_list.clone(),
-                            graphql_port,
-                            publish_port
-                        }
-                    ));
-                }
-            },
-            () = notify_shutdown.notified() => {
-                // Wait time for channels to be ready for shutdown.
-                sleep(Duration::from_millis(PEER_CONNECTION_DELAY)).await;
-                connection.close(0_u32.into(), &[]);
-                return Ok(())
+                fan_out_sensor_list(tracker, peer_conn_info, graphql_port, publish_port).await;
             },
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn handle_request(
     (_, mut recv): (SendStream, RecvStream),
@@ -1056,21 +1372,21 @@ pub mod tests {
             time::Duration,
         };
 
-        use anyhow::{Result, bail};
+        use anyhow::Result;
         use giganto_client::connection::{client_handshake, server_handshake};
         use giganto_client::frame::{send_bytes, send_raw};
         use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream};
         use tempfile::TempDir;
         use tokio::sync::{Notify, RwLock, oneshot};
-        use tokio::{select, time::sleep};
+        use tokio::time::sleep;
         use toml_edit::DocumentMut;
 
         #[cfg(feature = "bootroot")]
         use super::super::request_init_info;
         use super::super::{
-            IngestSensors, PEER_ENDPOINT_DELAY, PEER_VERSION_REQ, Peer, PeerCode, PeerConns,
-            PeerIdentity, PeerIdents, PeerInfo, Peers, SharedClientConfig, client_connection,
-            client_run, read_toml_file, server_connection,
+            CancellationToken, IngestSensors, PEER_VERSION_REQ, Peer, PeerCode, PeerConns,
+            PeerIdentity, PeerIdents, PeerInfo, Peers, SharedClientConfig, TaskTracker,
+            server_connection,
         };
         use crate::comm::peer::{receive_peer_data, response_init_info};
         #[cfg(not(feature = "bootroot"))]
@@ -1223,6 +1539,22 @@ pub mod tests {
 
         pub(super) fn init_shared_client_config() -> super::SharedClientConfig {
             super::new_shared_client_config(client_config(), 0)
+        }
+
+        /// A client endpoint that advertises a small receive window, so a peer
+        /// writing more than that into a stream this side never reads parks on
+        /// flow control instead of running to completion.
+        pub(super) fn small_stream_window_client_endpoint() -> Endpoint {
+            let mut transport = quinn::TransportConfig::default();
+            transport.stream_receive_window(16_384_u32.into());
+            transport.receive_window(65_536_u32.into());
+            let mut config = client_config();
+            config.transport_config(Arc::new(transport));
+            let mut endpoint =
+                quinn::Endpoint::client("[::]:0".parse().expect("Failed to parse Endpoint addr"))
+                    .expect("Failed to create endpoint");
+            endpoint.set_default_client_config(config);
+            endpoint
         }
 
         /// Builds a paired `watch::Sender`/`TlsWatch` seeded with `certs`.
@@ -1633,14 +1965,23 @@ pub mod tests {
         pub(super) fn spawn_server_connection(
             server_endpoint: Endpoint,
             peer_conn_info: PeerConns,
-            notify_shutdown: Arc<Notify>,
+            tracker: TaskTracker,
+            token: CancellationToken,
         ) -> tokio::task::JoinHandle<Result<()>> {
             tokio::spawn(async move {
                 let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-                server_connection(incoming, peer_conn_info, notify_shutdown).await
+                server_connection(incoming, peer_conn_info, tracker, token).await
             })
         }
 
+        /// Runs the production peer entry task over a TLS watch the test does
+        /// not care about, reporting the bound server address once the entry
+        /// task has published it.
+        ///
+        /// The watch is seeded with the same material `peer_init` built the
+        /// `Peer` from and at the same generation, so the startup reload check
+        /// finds nothing to apply. Its sender is held for the lifetime of the
+        /// call so the reload branch is not disabled by a closed channel.
         #[allow(clippy::too_many_arguments)]
         pub(super) async fn run_peer_with_ready(
             peer: Peer,
@@ -1648,84 +1989,24 @@ pub mod tests {
             peers: Peers,
             peer_idents: PeerIdents,
             notify_sensor: Arc<Notify>,
-            notify_shutdown: Arc<Notify>,
             config_path: String,
-            ready: oneshot::Sender<SocketAddr>,
+            token: CancellationToken,
+            ready: oneshot::Sender<(SocketAddr, SharedClientConfig)>,
         ) -> Result<()> {
-            let local_connect_name = peer.local_connect_name.clone();
-            let server_endpoint =
-                Endpoint::server(peer.server_config, peer.local_address).expect("endpoint");
-            let local_addr = server_endpoint
-                .local_addr()
-                .expect("for local addr display");
-            let _ = ready.send(local_addr);
-
-            let client_socket = SocketAddr::new(peer.local_address.ip(), 0);
-            let client_endpoint = Endpoint::client(client_socket).expect("endpoint");
-            let shared_client_config: SharedClientConfig =
-                super::new_shared_client_config(peer.client_config, peer.initial_generation);
-
-            let (sender, mut receiver) = tokio::sync::mpsc::channel(100);
-            let Ok(config_doc) = read_toml_file(&config_path) else {
-                bail!("Failed to open/read config's toml file");
-            };
-
-            let peer_conn_info = PeerConns {
-                peer_conns: Arc::new(RwLock::new(HashMap::new())),
-                peer_identities: peer_idents,
-                peers,
+            let (_tls_tx, tls_watch) = test_tls_watch_from_certs(create_certs());
+            peer.run_with_ready(
                 ingest_sensors,
-                peer_sender: sender,
-                local_address: peer.local_address,
+                peers,
+                peer_idents,
                 notify_sensor,
-                config_doc: Arc::new(tokio::sync::Mutex::new(config_doc)),
                 config_path,
-            };
-
-            tokio::spawn(client_run(
-                client_endpoint.clone(),
-                shared_client_config.clone(),
-                peer_conn_info.clone(),
-                peer.local_connect_name.clone(),
-                notify_shutdown.clone(),
-            ));
-
-            loop {
-                select! {
-                    Some(conn) = server_endpoint.accept()  => {
-                        let peer_conn_info = peer_conn_info.clone();
-                        let notify_shutdown = notify_shutdown.clone();
-                        tokio::spawn(async move {
-                            let remote = conn.remote_address();
-                            if let Err(e) = server_connection(
-                                conn,
-                                peer_conn_info,
-                                notify_shutdown,
-                            )
-                            .await
-                            {
-                                tracing::error!("Connection to {remote} failed: {e}");
-                            }
-                        });
-                    },
-                    Some(peer) = receiver.recv()  => {
-                            tokio::spawn(client_connection(
-                                client_endpoint.clone(),
-                                shared_client_config.clone(),
-                                peer,
-                                peer_conn_info.clone(),
-                                local_connect_name.clone(),
-                                notify_shutdown.clone(),
-                            ));
-                    },
-                    () = notify_shutdown.notified() => {
-                        sleep(Duration::from_millis(PEER_ENDPOINT_DELAY)).await;
-                        server_endpoint.close(0_u32.into(), &[]);
-                        return Ok(());
-                    }
-                }
-            }
+                tls_watch,
+                token,
+                Some(ready),
+            )
+            .await
         }
+
         pub(super) fn spawn_request_init_info_response_server(
             server_endpoint: Endpoint,
             response_code: PeerCode,
@@ -1771,7 +2052,7 @@ pub mod tests {
         #[cfg(feature = "bootroot")]
         pub(crate) struct SensorListPeerHarness {
             client: TestClient,
-            notify_shutdown: Arc<Notify>,
+            token: CancellationToken,
             peer_handle: tokio::task::JoinHandle<Result<()>>,
             _config: TempConfig,
         }
@@ -1786,7 +2067,7 @@ pub mod tests {
                 let peers = Arc::new(RwLock::new(HashMap::new()));
                 let peer_idents = Arc::new(RwLock::new(HashSet::new()));
                 let config = TempConfig::from_str("peers = []");
-                let notify_shutdown = Arc::new(Notify::new());
+                let token = CancellationToken::new();
                 let (ready_tx, ready_rx) = oneshot::channel();
                 let peer_handle = tokio::spawn(run_peer_with_ready(
                     peer_init(),
@@ -1794,12 +2075,12 @@ pub mod tests {
                     peers,
                     peer_idents,
                     notify_sensor,
-                    notify_shutdown.clone(),
                     config.path().to_string(),
+                    token.clone(),
                     ready_tx,
                 ));
 
-                let server_addr = with_timeout("peer server ready timeout", ready_rx)
+                let (server_addr, _) = with_timeout("peer server ready timeout", ready_rx)
                     .await
                     .expect("peer server did not report its address");
                 let mut client = TestClient::new(server_addr).await;
@@ -1816,7 +2097,7 @@ pub mod tests {
                 (
                     Self {
                         client,
-                        notify_shutdown,
+                        token,
                         peer_handle,
                         _config: config,
                     },
@@ -1841,7 +2122,7 @@ pub mod tests {
             }
 
             pub(crate) async fn shutdown(self) {
-                self.notify_shutdown.notify_waiters();
+                self.token.cancel();
                 with_timeout("peer shutdown timeout", self.peer_handle)
                     .await
                     .expect("peer task join failed")
@@ -1927,8 +2208,7 @@ pub mod tests {
         let config = TempConfig::from_str("peers = []");
 
         // run peer
-        let notify_shutdown = Arc::new(Notify::new());
-        let notify_shutdown_handle = notify_shutdown.clone();
+        let token = CancellationToken::new();
         let (ready_tx, ready_rx) = oneshot::channel();
         let peer_handle = tokio::spawn(run_peer_with_ready(
             peer_init(),
@@ -1936,13 +2216,13 @@ pub mod tests {
             peers,
             peer_idents,
             notify_sensor.clone(),
-            notify_shutdown,
             config.path().to_string(),
+            token.clone(),
             ready_tx,
         ));
 
         // run peer client
-        let server_addr = with_timeout("peer server ready timeout", ready_rx)
+        let (server_addr, _) = with_timeout("peer server ready timeout", ready_rx)
             .await
             .expect("peer server did not report addr");
         let mut peer_client_one = TestClient::new(server_addr).await;
@@ -1987,7 +2267,7 @@ pub mod tests {
         assert!(update_sensor_list.ingest_sensors.contains(&sensor_name));
         assert!(update_sensor_list.ingest_sensors.contains(&sensor_name2));
 
-        notify_shutdown_handle.notify_waiters();
+        token.cancel();
         with_timeout("peer shutdown timeout", peer_handle)
             .await
             .expect("peer task failed")
@@ -2011,7 +2291,7 @@ pub mod tests {
         let peers_for_assert = peers.clone();
         let peer_idents = Arc::new(RwLock::new(HashSet::new()));
         let notify_sensor = Arc::new(Notify::new());
-        let notify_shutdown = Arc::new(Notify::new());
+        let token = CancellationToken::new();
 
         let config = TempConfig::from_str("peers = []");
 
@@ -2044,12 +2324,12 @@ pub mod tests {
             peers,
             peer_idents,
             notify_sensor,
-            notify_shutdown.clone(),
             config.path().to_string(),
+            token.clone(),
             ready_tx,
         ));
 
-        let run_addr = with_timeout("peer server ready timeout", ready_rx)
+        let (run_addr, _) = with_timeout("peer server ready timeout", ready_rx)
             .await
             .expect("peer server did not report addr");
         let mut client = TestClient::new(run_addr).await;
@@ -2084,7 +2364,7 @@ pub mod tests {
             .await
             .expect("other peer did not accept");
 
-        notify_shutdown.notify_waiters();
+        token.cancel();
         let _ = other_shutdown_tx.send(());
         with_timeout("run shutdown timeout", run_handle)
             .await
@@ -2166,7 +2446,8 @@ pub mod tests {
         };
 
         let client_endpoint = init_client();
-        let notify_shutdown = Arc::new(Notify::new());
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::with_token(token.clone());
         let peer_info = PeerIdentity {
             addr: server_addr,
             hostname: test_connect_name().to_string(),
@@ -2178,7 +2459,8 @@ pub mod tests {
             peer_info,
             peer_conn_info,
             "client-node".to_string(),
-            notify_shutdown.clone(),
+            tracker,
+            token.clone(),
         ));
 
         let (recv_peer_list, recv_sensor_list) =
@@ -2205,7 +2487,7 @@ pub mod tests {
         .await;
 
         let _ = server_shutdown_tx.send(());
-        notify_shutdown.notify_waiters();
+        token.cancel();
         let _ = with_timeout("client shutdown timeout", client_task).await;
 
         let _ = with_timeout("server shutdown timeout", server_task).await;
@@ -2245,11 +2527,12 @@ pub mod tests {
         peer_conn_info.peer_sender = sender;
         let peers = peer_conn_info.peers.clone();
 
-        let notify_shutdown = Arc::new(Notify::new());
-        let notify_shutdown_handle = notify_shutdown.clone();
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::with_token(token.clone());
+        let server_token = token.clone();
         let server_handle = tokio::spawn(async move {
             let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-            server_connection(incoming, peer_conn_info, notify_shutdown_handle)
+            server_connection(incoming, peer_conn_info, tracker, server_token)
                 .await
                 .unwrap();
         });
@@ -2295,7 +2578,7 @@ pub mod tests {
         })
         .await;
 
-        notify_shutdown.notify_waiters();
+        token.cancel();
         drop(client.conn);
         let server_result = with_timeout("server shutdown timeout", server_handle).await;
         server_result.expect("server task panicked");
@@ -2308,9 +2591,10 @@ pub mod tests {
         let (server_endpoint, server_addr) = setup_server_endpoint();
 
         let (peer_conn_info, _config) = build_peer_conn_info("127.0.0.1:3333".parse().unwrap());
-        let notify_shutdown = Arc::new(Notify::new());
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::with_token(token.clone());
         let server_handle =
-            spawn_server_connection(server_endpoint, peer_conn_info, notify_shutdown);
+            spawn_server_connection(server_endpoint, peer_conn_info, tracker, token);
 
         let client_endpoint = init_client();
         let client_conn = with_timeout(
@@ -2336,9 +2620,10 @@ pub mod tests {
         let (server_endpoint, server_addr) = setup_server_endpoint();
 
         let (peer_conn_info, _config) = build_peer_conn_info("127.0.0.1:3334".parse().unwrap());
-        let notify_shutdown = Arc::new(Notify::new());
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::with_token(token.clone());
         let server_handle =
-            spawn_server_connection(server_endpoint, peer_conn_info, notify_shutdown);
+            spawn_server_connection(server_endpoint, peer_conn_info, tracker, token);
 
         let client_endpoint = init_client();
         let client_conn = with_timeout(
@@ -3321,7 +3606,6 @@ pub mod tests {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let peer_idents = Arc::new(RwLock::new(HashSet::new()));
         let notify_sensor = Arc::new(Notify::new());
-        let notify_shutdown = Arc::new(Notify::new());
         let (_tls_tx, tls_watch) = test_tls_watch_from_certs(create_certs());
 
         let err = peer
@@ -3330,9 +3614,9 @@ pub mod tests {
                 peers,
                 peer_idents,
                 notify_sensor,
-                notify_shutdown,
                 "missing-config.toml".to_string(),
                 tls_watch,
+                CancellationToken::new(),
             )
             .await
             .unwrap_err();
@@ -3725,8 +4009,8 @@ pub mod tests {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let peer_idents = Arc::new(RwLock::new(HashSet::new()));
         let notify_sensor = Arc::new(Notify::new());
-        let notify_shutdown = Arc::new(Notify::new());
-        let notify_shutdown_handle = notify_shutdown.clone();
+        let token = CancellationToken::new();
+        let token_handle = token.clone();
         let (tls_tx, tls_watch) = test_tls_watch_from_certs(initial_certs.clone());
         let config = TempConfig::from_str("peers = []");
         let config_path = config.path().to_string();
@@ -3741,9 +4025,9 @@ pub mod tests {
                 peers_for_run,
                 peer_idents_for_run,
                 notify_sensor,
-                notify_shutdown,
                 config_path,
                 tls_watch,
+                token,
                 Some(ready_tx),
             )
             .await
@@ -3788,7 +4072,7 @@ pub mod tests {
             let probe_certs = extract_cert_from_conn(&conn).expect("peer certs probe");
             if leaf(&probe_certs) == leaf(&new_certs.certs) {
                 drop(conn);
-                notify_shutdown_handle.notify_waiters();
+                token_handle.cancel();
                 with_timeout("peer shutdown", peer_handle)
                     .await
                     .expect("peer task join")
@@ -3819,8 +4103,8 @@ pub mod tests {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let peer_idents = Arc::new(RwLock::new(HashSet::new()));
         let notify_sensor = Arc::new(Notify::new());
-        let notify_shutdown = Arc::new(Notify::new());
-        let notify_shutdown_handle = notify_shutdown.clone();
+        let token = CancellationToken::new();
+        let token_handle = token.clone();
         let (tls_tx, tls_watch) = test_tls_watch_from_certs(initial_certs.clone());
         let config = TempConfig::from_str("peers = []");
         let config_path = config.path().to_string();
@@ -3831,9 +4115,9 @@ pub mod tests {
             peers,
             peer_idents,
             notify_sensor,
-            notify_shutdown,
             config_path,
             tls_watch,
+            token,
             Some(ready_tx),
         ));
 
@@ -3882,7 +4166,7 @@ pub mod tests {
             drop(probe);
         }
 
-        notify_shutdown_handle.notify_waiters();
+        token_handle.cancel();
         with_timeout("peer shutdown", peer_handle)
             .await
             .expect("peer task join")
@@ -4113,7 +4397,8 @@ pub mod tests {
         let client_endpoint =
             quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
 
-        let notify_shutdown = Arc::new(Notify::new());
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::with_token(token.clone());
 
         let (first_quic_done_tx, first_quic_done_rx) = oneshot::channel::<()>();
         let (release_first_handshake_tx, release_first_handshake_rx) = oneshot::channel::<()>();
@@ -4152,7 +4437,7 @@ pub mod tests {
 
         let shared_for_client = Arc::clone(&shared);
         let client_task = tokio::spawn({
-            let notify = notify_shutdown.clone();
+            let token = token.clone();
             async move {
                 client_connection(
                     client_endpoint,
@@ -4160,7 +4445,8 @@ pub mod tests {
                     peer_info,
                     peer_conn_info,
                     test_connect_name().to_string(),
-                    notify,
+                    tracker,
+                    token,
                 )
                 .await
             }
@@ -4196,7 +4482,7 @@ pub mod tests {
             "retry must present the refreshed client leaf fingerprint",
         );
 
-        notify_shutdown.notify_waiters();
+        token.cancel();
         client_task.abort();
         let _ = client_task.await;
         server_task.abort();
@@ -4243,8 +4529,8 @@ pub mod tests {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let peer_idents = Arc::new(RwLock::new(HashSet::new()));
         let notify_sensor = Arc::new(Notify::new());
-        let notify_shutdown = Arc::new(Notify::new());
-        let notify_shutdown_handle = notify_shutdown.clone();
+        let token = CancellationToken::new();
+        let token_handle = token.clone();
         let config = TempConfig::from_str("peers = []");
         let config_path = config.path().to_string();
 
@@ -4254,9 +4540,9 @@ pub mod tests {
             peers,
             peer_idents,
             notify_sensor,
-            notify_shutdown,
             config_path,
             tls_watch,
+            token,
             Some(ready_tx),
         ));
 
@@ -4292,7 +4578,7 @@ pub mod tests {
              discarding it via mark_unchanged()",
         );
 
-        notify_shutdown_handle.notify_waiters();
+        token_handle.cancel();
         with_timeout("peer shutdown", peer_handle)
             .await
             .expect("peer task join")
@@ -4337,8 +4623,8 @@ pub mod tests {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let peer_idents = Arc::new(RwLock::new(HashSet::new()));
         let notify_sensor = Arc::new(Notify::new());
-        let notify_shutdown = Arc::new(Notify::new());
-        let notify_shutdown_handle = notify_shutdown.clone();
+        let token = CancellationToken::new();
+        let token_handle = token.clone();
         let config = TempConfig::from_str("peers = []");
         let config_path = config.path().to_string();
 
@@ -4348,9 +4634,9 @@ pub mod tests {
             peers,
             peer_idents,
             notify_sensor,
-            notify_shutdown,
             config_path,
             tls_watch,
+            token,
             Some(ready_tx),
         ));
 
@@ -4379,10 +4665,857 @@ pub mod tests {
             super::current_applied_generation(&shared_client_config),
         );
 
-        notify_shutdown_handle.notify_waiters();
+        token_handle.cancel();
         with_timeout("peer shutdown", peer_handle)
             .await
             .expect("peer task join")
             .expect("peer task result");
+    }
+
+    /// Cooperative shutdown: cancellation, admission control, and drain.
+    ///
+    /// Every test here drives shutdown through a [`CancellationToken`] and
+    /// asserts on task completion, log output, or shared peer state — never on
+    /// elapsed time. The bounded timeouts that do appear are there to fail a
+    /// hang fast, or to establish that something is genuinely blocked before
+    /// the step that is supposed to release it runs.
+    mod shutdown {
+        use std::{
+            collections::{HashMap, HashSet},
+            io::{self, Write},
+            net::SocketAddr,
+            sync::{Arc, Mutex as StdMutex},
+            time::Duration,
+        };
+
+        use anyhow::Result;
+        use giganto_client::connection::{client_handshake, server_handshake};
+        use giganto_client::frame::send_bytes;
+        use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
+        use tokio_util::sync::CancellationToken;
+        use toml_edit::DocumentMut;
+        use tracing_subscriber::fmt::MakeWriter;
+
+        use super::super::{
+            PEER_DRAIN_LABEL, PEER_VERSION_REQ, PeerCode, PeerConns, PeerIdentity, PeerInfo, Peers,
+            client_connection, receive_peer_data, request_init_info, response_init_info,
+            send_peer_data, server_connection, update_to_new_peer_list_with_writer,
+        };
+        use super::fixtures::{
+            PROTOCOL_VERSION, TEST_TIMEOUT, TempConfig, TestClient, accept_incoming,
+            build_peer_conn_info, build_peer_conn_info_with_sensors, create_certs,
+            create_node2_certs, init_client, init_crypto, init_shared_client_config, peer_identity,
+            peer_info, run_peer_with_ready, setup_server_endpoint,
+            setup_server_endpoint_with_certs, small_stream_window_client_endpoint,
+            test_connect_name, test_connect_name_node2, wait_for_peer_info, with_timeout,
+        };
+        use crate::cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report};
+        use crate::comm::peer::Peer;
+
+        /// A dial that shutdown has already made unservable must fail rather
+        /// than hang; this caps how long a test waits to find that out.
+        const REFUSED_DIAL_TIMEOUT: Duration = Duration::from_secs(2);
+        /// How long a test waits to establish that something is genuinely
+        /// blocked before it runs the step meant to release it.
+        const BLOCKED_PROBE: Duration = Duration::from_millis(200);
+
+        #[derive(Clone, Default)]
+        struct SharedLogBuffer(Arc<StdMutex<Vec<u8>>>);
+
+        impl SharedLogBuffer {
+            fn contents(&self) -> String {
+                let bytes = self.0.lock().expect("log buffer lock").clone();
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+
+            fn contains(&self, needle: &str) -> bool {
+                self.contents().contains(needle)
+            }
+        }
+
+        struct SharedLogWriter(Arc<StdMutex<Vec<u8>>>);
+
+        impl Write for SharedLogWriter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("log buffer lock")
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for SharedLogBuffer {
+            type Writer = SharedLogWriter;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                SharedLogWriter(Arc::clone(&self.0))
+            }
+        }
+
+        /// Installs a log-capturing subscriber for the current thread, the way
+        /// `src/cancellation.rs` does. A `#[tokio::test]` runs its tasks on
+        /// the calling thread, so the peer tasks spawned below are captured
+        /// too.
+        fn capture_logs() -> (SharedLogBuffer, tracing::subscriber::DefaultGuard) {
+            let logs = SharedLogBuffer::default();
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .without_time()
+                .with_target(false)
+                .with_writer(logs.clone())
+                .finish();
+            let guard = tracing::subscriber::set_default(subscriber);
+            (logs, guard)
+        }
+
+        /// Waits until `needle` shows up in the captured log.
+        async fn wait_for_log(logs: &SharedLogBuffer, needle: &str) {
+            let fut = async {
+                let mut interval = tokio::time::interval(Duration::from_millis(5));
+                loop {
+                    interval.tick().await;
+                    if logs.contains(needle) {
+                        return;
+                    }
+                }
+            };
+            assert!(
+                tokio::time::timeout(TEST_TIMEOUT, fut).await.is_ok(),
+                "log never contained {needle:?}; got: {}",
+                logs.contents()
+            );
+        }
+
+        /// Waits until `predicate` holds for the shared connection map.
+        async fn wait_for_conns<F>(label: &'static str, conns: &PeerConns, mut predicate: F)
+        where
+            F: FnMut(&HashMap<String, quinn::Connection>) -> bool,
+        {
+            let fut = async {
+                let mut interval = tokio::time::interval(Duration::from_millis(5));
+                loop {
+                    interval.tick().await;
+                    if predicate(&*conns.peer_conns.read().await) {
+                        return;
+                    }
+                }
+            };
+            assert!(
+                tokio::time::timeout(TEST_TIMEOUT, fut).await.is_ok(),
+                "{label}"
+            );
+        }
+
+        /// State the shared peer maps are keyed on and the tests read back.
+        fn local_address() -> SocketAddr {
+            "127.0.0.1:2222".parse().expect("local address")
+        }
+
+        /// Everything a running peer entry task exposes to a test.
+        struct PeerHarness {
+            addr: SocketAddr,
+            token: CancellationToken,
+            handle: tokio::task::JoinHandle<Result<()>>,
+            peers: Peers,
+            notify_sensor: Arc<Notify>,
+            _config: TempConfig,
+        }
+
+        impl PeerHarness {
+            /// Starts the production entry task over an `IPv4` loopback
+            /// listener, seeded with `sensors` and with `peer_idents` as the
+            /// bootstrap peer list.
+            async fn start(sensors: &[&str], peer_idents: HashSet<PeerIdentity>) -> Self {
+                init_crypto();
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("peer bind address"),
+                    &create_certs(),
+                    0,
+                )
+                .expect("peer");
+                let ingest_sensors: crate::comm::IngestSensors = Arc::new(RwLock::new(
+                    sensors.iter().map(|s| (*s).to_string()).collect(),
+                ));
+                let peers: Peers = Arc::new(RwLock::new(HashMap::new()));
+                let notify_sensor = Arc::new(Notify::new());
+                let config = TempConfig::from_str("peers = []");
+                let token = CancellationToken::new();
+                let (ready_tx, ready_rx) = oneshot::channel();
+                let handle = tokio::spawn(run_peer_with_ready(
+                    peer,
+                    ingest_sensors,
+                    peers.clone(),
+                    Arc::new(RwLock::new(peer_idents)),
+                    notify_sensor.clone(),
+                    config.path().to_string(),
+                    token.clone(),
+                    ready_tx,
+                ));
+                let (addr, _) = with_timeout("peer server ready timeout", ready_rx)
+                    .await
+                    .expect("peer server did not report its address");
+                Self {
+                    addr,
+                    token,
+                    handle,
+                    peers,
+                    notify_sensor,
+                    _config: config,
+                }
+            }
+
+            /// Cancels the token and waits for the entry task to return, which
+            /// it does only after its drain is empty.
+            async fn cancel_and_join(self) -> Peers {
+                self.token.cancel();
+                with_timeout("peer shutdown timeout", self.handle)
+                    .await
+                    .expect("peer entry task join")
+                    .expect("peer entry task result");
+                self.peers
+            }
+        }
+
+        /// Completes the init handshake a peer expects from an inbound client.
+        async fn exchange_init(client: &mut TestClient) -> (HashSet<PeerIdentity>, PeerInfo) {
+            request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+                &mut client.send,
+                &mut client.recv,
+                PeerCode::UpdatePeerList,
+                (HashSet::new(), PeerInfo::default()),
+            )
+            .await
+            .expect("initial peer information exchange failed")
+        }
+
+        /// Drives one inbound connection handler directly, so a test can own
+        /// the peer-local tracker and the shared peer state the handler
+        /// mutates.
+        struct ServerRoleHarness {
+            client: TestClient,
+            handle: tokio::task::JoinHandle<Result<()>>,
+            peer_conn_info: PeerConns,
+            tracker: TaskTracker,
+            token: CancellationToken,
+            _config: TempConfig,
+        }
+
+        impl ServerRoleHarness {
+            async fn start(sensors: &[&str], close_tracker: bool) -> Self {
+                init_crypto();
+                let (server_endpoint, server_addr) = setup_server_endpoint();
+                let (peer_conn_info, config) =
+                    build_peer_conn_info_with_sensors(local_address(), sensors);
+                let token = CancellationToken::new();
+                let tracker = TaskTracker::with_token(token.clone());
+                if close_tracker {
+                    tracker.close().expect("close the peer-local tracker");
+                }
+                let handle = tokio::spawn({
+                    let peer_conn_info = peer_conn_info.clone();
+                    let tracker = tracker.clone();
+                    let token = token.clone();
+                    async move {
+                        let incoming =
+                            accept_incoming(&server_endpoint, "server accept timeout").await;
+                        server_connection(incoming, peer_conn_info, tracker, token).await
+                    }
+                });
+                let mut client = TestClient::new(server_addr).await;
+                exchange_init(&mut client).await;
+                // The handler inserts its connection last, so this is what
+                // says it has reached its serve loop.
+                wait_for_conns(
+                    "the handler never registered its connection",
+                    &peer_conn_info,
+                    |conns| !conns.is_empty(),
+                )
+                .await;
+                Self {
+                    client,
+                    handle,
+                    peer_conn_info,
+                    tracker,
+                    token,
+                    _config: config,
+                }
+            }
+        }
+
+        /// The entry task returns on cancellation, and its server endpoint is
+        /// closed by the time it does.
+        #[tokio::test]
+        async fn cancellation_returns_the_entry_task_with_the_endpoints_closed() {
+            let harness = PeerHarness::start(&[], HashSet::new()).await;
+            let addr = harness.addr;
+            harness.cancel_and_join().await;
+
+            let client = init_client();
+            let dial = client
+                .connect(addr, test_connect_name())
+                .expect("dial setup should still succeed");
+            let refused = match tokio::time::timeout(REFUSED_DIAL_TIMEOUT, dial).await {
+                Ok(result) => result.is_err(),
+                // A closed endpoint answers nothing, so a dial that never
+                // resolves is refused just as surely as one that errors.
+                Err(_) => true,
+            };
+            assert!(refused, "a dial after shutdown must not be served");
+        }
+
+        /// A dial that arrives after the entry task closed the server endpoint
+        /// is refused by quinn before peer can attempt a registration, so it
+        /// creates no peer task and no `peers` entry — and logs no rejection,
+        /// because it never reaches one.
+        #[tokio::test]
+        async fn a_dial_after_the_endpoint_closed_creates_no_peer_task() {
+            let (logs, _guard) = capture_logs();
+            let harness = PeerHarness::start(&["late-sensor"], HashSet::new()).await;
+            let addr = harness.addr;
+            let peers = harness.cancel_and_join().await;
+
+            let client = init_client();
+            if let Ok(dial) = client.connect(addr, test_connect_name()) {
+                let _ = tokio::time::timeout(REFUSED_DIAL_TIMEOUT, dial).await;
+            }
+
+            assert!(
+                peers.read().await.is_empty(),
+                "a refused dial must not reach the peer state"
+            );
+            let output = logs.contents();
+            assert!(
+                !output.contains("Rejected peer connection from"),
+                "a dial quinn refused must not produce a spawn rejection, got: {output}"
+            );
+        }
+
+        /// With a peer connection in each role, cancellation closes both and
+        /// both handlers return before the entry task does.
+        #[tokio::test]
+        async fn cancellation_ends_connection_handlers_in_both_roles() {
+            init_crypto();
+            let other_certs = create_node2_certs();
+            let (other_endpoint, other_addr) = setup_server_endpoint_with_certs(&other_certs);
+            let (other_ready_tx, other_ready_rx) = oneshot::channel();
+            let other_task = tokio::spawn(async move {
+                let incoming = accept_incoming(&other_endpoint, "other peer accept timeout").await;
+                let connection = incoming.await.expect("other peer connection");
+                let (mut send, mut recv) = server_handshake(&connection, PEER_VERSION_REQ)
+                    .await
+                    .expect("other peer protocol handshake");
+                response_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+                    &mut send,
+                    &mut recv,
+                    PeerCode::UpdatePeerList,
+                    (HashSet::new(), PeerInfo::default()),
+                )
+                .await
+                .expect("other peer init exchange");
+                let _ = other_ready_tx.send(());
+                // Resolves only once the peer has closed the connection it
+                // dialed, which is what shutdown must do.
+                connection.closed().await
+            });
+
+            let harness = PeerHarness::start(
+                &["both-roles-sensor"],
+                HashSet::from([peer_identity(other_addr, test_connect_name_node2())]),
+            )
+            .await;
+
+            // Server role: an inbound peer that finished its init exchange.
+            let mut client = TestClient::new(harness.addr).await;
+            exchange_init(&mut client).await;
+            let inbound = client.conn.clone();
+
+            // Client role: the bootstrap dial reached the other peer.
+            with_timeout("other peer ready timeout", other_ready_rx)
+                .await
+                .expect("the bootstrap dial never completed its init exchange");
+
+            let peers = harness.cancel_and_join().await;
+
+            // Both remotes observe their connection closed ...
+            with_timeout("inbound connection close timeout", inbound.closed()).await;
+            with_timeout("outbound connection close timeout", other_task)
+                .await
+                .expect("other peer task join");
+
+            // ... and both handlers cleaned their shared state up on the way
+            // out.
+            assert!(
+                peers.read().await.is_empty(),
+                "both handlers should have removed their peers entries"
+            );
+        }
+
+        /// A request task still holding a half-delivered frame when
+        /// cancellation arrives is drained: its failure is already in the log
+        /// by the time the entry task returns.
+        #[tokio::test]
+        async fn a_request_task_in_flight_is_drained_before_the_entry_task_returns() {
+            let (logs, _guard) = capture_logs();
+            let harness = PeerHarness::start(&["run-sensor"], HashSet::new()).await;
+            let mut client = TestClient::new(harness.addr).await;
+            exchange_init(&mut client).await;
+
+            // The stream that stalls: only the peer code is ever delivered, so
+            // its handler parks in `recv_raw` waiting for a frame body.
+            let (mut stalled, _stalled_recv) = client
+                .conn
+                .open_bi()
+                .await
+                .expect("open the stalled stream");
+            let code: u32 = PeerCode::UpdatePeerList.into();
+            send_bytes(&mut stalled, &code.to_le_bytes())
+                .await
+                .expect("send the peer code");
+
+            // A second stream, opened after it and therefore accepted after
+            // it, carries a complete frame. Its effect landing is what proves
+            // the stalled stream was accepted and its handler spawned.
+            let (mut marker, _marker_recv) =
+                client.conn.open_bi().await.expect("open the marker stream");
+            send_peer_data(
+                &mut marker,
+                PeerCode::UpdateSensorList,
+                peer_info(&["marker-sensor"], Some(1), Some(2)),
+            )
+            .await
+            .expect("send the marker frame");
+            marker.finish().ok();
+            wait_for_peer_info("marker request timeout", &harness.peers, |read_peers| {
+                read_peers
+                    .values()
+                    .any(|info| info.ingest_sensors.contains("marker-sensor"))
+            })
+            .await;
+
+            let peers = harness.cancel_and_join().await;
+
+            let output = logs.contents();
+            assert!(
+                output.contains("Peer request from"),
+                "the stalled request task should have reported its failure \
+                 before the entry task returned, got: {output}"
+            );
+            assert!(
+                peers.read().await.is_empty(),
+                "the connection handler should have removed its peers entry"
+            );
+        }
+
+        /// A remote that completes the QUIC handshake and then never sends the
+        /// protocol handshake cannot keep the entry task from returning.
+        #[tokio::test]
+        async fn a_stalled_inbound_handshake_does_not_block_shutdown() {
+            let harness = PeerHarness::start(&[], HashSet::new()).await;
+
+            // The QUIC handshake only completes once the entry task has handed
+            // the `Incoming` to a tracked task, so this connection resolving is
+            // what says the handler is parked in `server_handshake`.
+            let client = init_client();
+            let _stalled = client
+                .connect(harness.addr, test_connect_name())
+                .expect("dial setup")
+                .await
+                .expect("QUIC handshake");
+
+            harness.cancel_and_join().await;
+        }
+
+        /// A sensor-update fan-out whose stream write cannot complete — the
+        /// remote accepts the stream and never reads it — is drained, and its
+        /// failure is reported.
+        #[tokio::test]
+        async fn a_stalled_sensor_update_fan_out_is_drained_and_reported() {
+            let (logs, _guard) = capture_logs();
+            // Large enough that it cannot fit in the receive window the client
+            // endpoint below advertises, so the write parks on flow control.
+            let bulky: Vec<String> = (0..4096).map(|i| format!("sensor-{i:0>60}")).collect();
+            let bulky_refs: Vec<&str> = bulky.iter().map(String::as_str).collect();
+            let harness = PeerHarness::start(&bulky_refs, HashSet::new()).await;
+
+            let client_endpoint = small_stream_window_client_endpoint();
+            let conn = client_endpoint
+                .connect(harness.addr, test_connect_name())
+                .expect("dial setup")
+                .await
+                .expect("QUIC handshake");
+            let (mut send, mut recv) = client_handshake(&conn, PROTOCOL_VERSION)
+                .await
+                .expect("protocol handshake");
+            request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+                &mut send,
+                &mut recv,
+                PeerCode::UpdatePeerList,
+                (HashSet::new(), PeerInfo::default()),
+            )
+            .await
+            .expect("init exchange");
+
+            harness.notify_sensor.notify_one();
+            // The fan-out has opened its stream and is writing into a window
+            // this side never drains.
+            let (_fan_send, _fan_recv) = with_timeout("fan-out stream timeout", conn.accept_bi())
+                .await
+                .expect("the fan-out should have opened a stream");
+
+            harness.cancel_and_join().await;
+
+            let output = logs.contents();
+            assert!(
+                output.contains("Failed to send UpdateSensorList to peer"),
+                "the fan-out task should have reported its outcome before the \
+                 entry task returned, got: {output}"
+            );
+        }
+
+        /// A peer-list update blocked on a full peer-identity channel returns
+        /// once the entry task closes the receive side, and reports the
+        /// enqueue failure rather than swallowing it.
+        #[tokio::test]
+        async fn a_blocked_peer_identity_send_returns_when_the_receive_side_closes() {
+            let (logs, _guard) = capture_logs();
+            let (sender, mut receiver) = mpsc::channel::<PeerIdentity>(1);
+            sender
+                .send(peer_identity(
+                    "127.0.0.1:7001".parse().expect("addr"),
+                    "already-queued",
+                ))
+                .await
+                .expect("fill the channel");
+
+            let doc = "peers = []".parse::<DocumentMut>().expect("doc");
+            let config = TempConfig::from_doc(&doc);
+            let path = config.path().to_string();
+            let peer_list = Arc::new(RwLock::new(HashSet::new()));
+            let recv_peer_list = HashSet::from([peer_identity(
+                "127.0.0.1:7002".parse().expect("addr"),
+                "discovered-during-shutdown",
+            )]);
+            let mut update = tokio::spawn(async move {
+                update_to_new_peer_list_with_writer(
+                    recv_peer_list,
+                    local_address(),
+                    peer_list,
+                    sender,
+                    Arc::new(Mutex::new(doc)),
+                    &path,
+                    |_doc, _path| Ok(()),
+                )
+                .await
+            });
+
+            // Nobody is receiving and the channel is full, so the update
+            // cannot get past its enqueue on its own.
+            assert!(
+                tokio::time::timeout(BLOCKED_PROBE, &mut update)
+                    .await
+                    .is_err(),
+                "the update should be blocked on the full channel"
+            );
+
+            // What the entry task does once it has observed cancellation.
+            receiver.close();
+
+            with_timeout("blocked update timeout", update)
+                .await
+                .expect("the blocked update should have returned")
+                .expect("a refused enqueue is reported, not returned as an error");
+            wait_for_log(&logs, "Failed to enqueue peer connection attempt").await;
+        }
+
+        /// A peer identity offered after the receive side is closed starts no
+        /// client connection and is reported through the existing path.
+        #[tokio::test]
+        async fn a_peer_identity_offered_after_the_receive_side_closed_is_reported() {
+            let (logs, _guard) = capture_logs();
+            let (sender, mut receiver) = mpsc::channel::<PeerIdentity>(100);
+            receiver.close();
+
+            let doc = "peers = []".parse::<DocumentMut>().expect("doc");
+            let config = TempConfig::from_doc(&doc);
+            let recv_peer_list = HashSet::from([peer_identity(
+                "127.0.0.1:7003".parse().expect("addr"),
+                "late-peer",
+            )]);
+            update_to_new_peer_list_with_writer(
+                recv_peer_list,
+                local_address(),
+                Arc::new(RwLock::new(HashSet::new())),
+                sender,
+                Arc::new(Mutex::new(doc)),
+                config.path(),
+                |_doc, _path| Ok(()),
+            )
+            .await
+            .expect("a refused enqueue is reported, not returned as an error");
+
+            assert!(
+                receiver.recv().await.is_none(),
+                "nothing should have been enqueued, so no client connection starts"
+            );
+            wait_for_log(&logs, "Failed to enqueue peer connection attempt").await;
+        }
+
+        /// A registration attempt that reaches an already closed tracker is
+        /// rejected with context and the work is dropped.
+        ///
+        /// The tracker is closed by the test before the handler ever runs, so
+        /// closure is established rather than inferred from cancellation —
+        /// closing does not cancel, and the handler keeps serving.
+        #[tokio::test]
+        async fn a_closed_tracker_refuses_requests_and_sensor_updates() {
+            let (logs, _guard) = capture_logs();
+            let harness = ServerRoleHarness::start(&["closed-tracker-sensor"], true).await;
+
+            // A sensor-change wake and an inbound stream, both of which would
+            // register a task on an open tracker.
+            harness.peer_conn_info.notify_sensor.notify_one();
+            let (mut send, _recv) = harness
+                .client
+                .conn
+                .open_bi()
+                .await
+                .expect("open a request stream");
+            let code: u32 = PeerCode::UpdateSensorList.into();
+            send_bytes(&mut send, &code.to_le_bytes())
+                .await
+                .expect("send the peer code");
+
+            wait_for_log(&logs, "Rejected peer request from").await;
+            wait_for_log(&logs, "Rejected UpdateSensorList to peer").await;
+
+            let output = logs.contents();
+            assert!(
+                output.contains("tracker is closed; cannot spawn new tasks"),
+                "the rejection should name the closed tracker, got: {output}"
+            );
+            assert_eq!(
+                harness.tracker.pending_count(),
+                0,
+                "refused work must not be spawned outside the tracker"
+            );
+            // And no update reached the remote.
+            assert!(
+                tokio::time::timeout(BLOCKED_PROBE, harness.client.conn.accept_bi())
+                    .await
+                    .is_err(),
+                "a refused fan-out must not send anything"
+            );
+
+            harness.token.cancel();
+            with_timeout("handler shutdown timeout", harness.handle)
+                .await
+                .expect("handler join")
+                .expect("handler result");
+        }
+
+        /// A connection handler that returns on cancellation has removed both
+        /// of its shared-state entries before it returns.
+        #[tokio::test]
+        async fn a_cancelled_connection_handler_removes_its_state() {
+            let harness = ServerRoleHarness::start(&["cleanup-sensor"], false).await;
+            assert!(
+                !harness.peer_conn_info.peers.read().await.is_empty(),
+                "the init exchange should have recorded the remote's peer info"
+            );
+
+            harness.token.cancel();
+            with_timeout("handler shutdown timeout", harness.handle)
+                .await
+                .expect("handler join")
+                .expect("handler result");
+
+            assert!(
+                harness.peer_conn_info.peer_conns.read().await.is_empty(),
+                "the handler should have removed its peer_conns entry"
+            );
+            assert!(
+                harness.peer_conn_info.peers.read().await.is_empty(),
+                "the handler should have removed its peers entry"
+            );
+        }
+
+        /// Every sensor-change wake sends the snapshot as it stands, not a
+        /// per-change delta, so a coalesced or dropped notification costs no
+        /// sensor state.
+        #[tokio::test]
+        async fn a_sensor_change_wake_sends_the_whole_snapshot() {
+            let harness = ServerRoleHarness::start(&["sensor-a"], false).await;
+
+            harness
+                .peer_conn_info
+                .ingest_sensors
+                .write()
+                .await
+                .insert("sensor-b".to_string());
+            harness.peer_conn_info.notify_sensor.notify_one();
+            let first = receive_update(&harness.client).await;
+            assert_eq!(
+                first,
+                HashSet::from(["sensor-a".to_string(), "sensor-b".to_string()])
+            );
+
+            harness
+                .peer_conn_info
+                .ingest_sensors
+                .write()
+                .await
+                .insert("sensor-c".to_string());
+            harness.peer_conn_info.notify_sensor.notify_one();
+            let second = receive_update(&harness.client).await;
+            assert_eq!(
+                second,
+                HashSet::from([
+                    "sensor-a".to_string(),
+                    "sensor-b".to_string(),
+                    "sensor-c".to_string()
+                ]),
+                "the second wake must carry the whole snapshot, not just what changed"
+            );
+
+            harness.token.cancel();
+            with_timeout("handler shutdown timeout", harness.handle)
+                .await
+                .expect("handler join")
+                .expect("handler result");
+        }
+
+        /// Reads one sensor-list update the peer opened a stream for.
+        async fn receive_update(client: &TestClient) -> HashSet<String> {
+            let (_, mut recv) =
+                with_timeout("sensor update stream timeout", client.conn.accept_bi())
+                    .await
+                    .expect("peer did not open a sensor-list update stream");
+            let (msg_type, payload) = receive_peer_data(&mut recv)
+                .await
+                .expect("failed to receive the sensor-list update");
+            assert_eq!(msg_type, PeerCode::UpdateSensorList);
+            bincode::deserialize::<PeerInfo>(&payload)
+                .expect("invalid sensor-list update")
+                .ingest_sensors
+        }
+
+        /// An outbound dial to an address that never answers returns on
+        /// cancellation instead of waiting the dial out.
+        #[tokio::test]
+        async fn a_dial_to_an_unreachable_address_returns_on_cancellation() {
+            init_crypto();
+            let (peer_conn_info, _config) = build_peer_conn_info(local_address());
+            let token = CancellationToken::new();
+            let tracker = TaskTracker::with_token(token.clone());
+            // TEST-NET-1: routable nowhere, so the dial waits out quinn's idle
+            // timeout, which is far longer than this test's budget.
+            let unreachable = peer_identity("192.0.2.1:9999".parse().expect("addr"), "unreachable");
+            let mut dial = tokio::spawn(client_connection(
+                init_client(),
+                init_shared_client_config(),
+                unreachable,
+                peer_conn_info,
+                "local-node".to_string(),
+                tracker,
+                token.clone(),
+            ));
+
+            assert!(
+                tokio::time::timeout(BLOCKED_PROBE, &mut dial)
+                    .await
+                    .is_err(),
+                "the dial should still be in flight"
+            );
+            token.cancel();
+            tokio::time::timeout(REFUSED_DIAL_TIMEOUT, dial)
+                .await
+                .expect("the dial should have been given up on cancellation")
+                .expect("dial task join")
+                .expect("a cancelled dial is not an error");
+        }
+
+        /// A connection parked in its reconnect sleep returns on cancellation
+        /// without waiting the interval out.
+        #[tokio::test]
+        async fn a_reconnect_sleep_returns_on_cancellation() {
+            let (logs, _guard) = capture_logs();
+            init_crypto();
+            let (server_endpoint, server_addr) = setup_server_endpoint();
+            let refuser = tokio::spawn(async move {
+                let incoming = accept_incoming(&server_endpoint, "refuser accept timeout").await;
+                incoming.refuse();
+                // Hold the endpoint so the port stays bound for the retry.
+                std::future::pending::<()>().await;
+            });
+
+            let (peer_conn_info, _config) = build_peer_conn_info(local_address());
+            let token = CancellationToken::new();
+            let tracker = TaskTracker::with_token(token.clone());
+            let reconnect = tokio::spawn(client_connection(
+                init_client(),
+                init_shared_client_config(),
+                peer_identity(server_addr, test_connect_name()),
+                peer_conn_info,
+                "local-node".to_string(),
+                tracker,
+                token.clone(),
+            ));
+
+            // The retry log is emitted immediately before the sleep, so this
+            // is what says the task is parked in it rather than still dialing.
+            wait_for_log(&logs, "Retrying connection to").await;
+            token.cancel();
+            tokio::time::timeout(
+                Duration::from_secs(super::super::PEER_RETRY_INTERVAL - 2),
+                reconnect,
+            )
+            .await
+            .expect("the reconnect sleep should have been cut short")
+            .expect("reconnect task join")
+            .expect("a cancelled reconnect is not an error");
+
+            refuser.abort();
+        }
+
+        /// A peer task that ends abnormally is named by the tracker's registry
+        /// guard, and the drain that follows still completes.
+        ///
+        /// No production peer path panics on demand, so the panic is raised in
+        /// a task registered the way peer registers its own — same tracker
+        /// shape, same name form — which is what the guard reports on.
+        #[tokio::test]
+        async fn a_panicking_peer_task_is_named_by_the_registry_guard() {
+            let (logs, _guard) = capture_logs();
+            let token = CancellationToken::new();
+            let tracker = TaskTracker::with_token(token.clone());
+            let handle = tracker
+                .spawn("peer-request-127.0.0.1", |_token| async {
+                    panic!("peer task panic");
+                })
+                .expect("register the peer task");
+            assert!(handle.await.is_err(), "the task should have panicked");
+
+            with_timeout(
+                "peer drain timeout",
+                drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL),
+            )
+            .await
+            .expect("the drain should complete even after a panic");
+
+            let output = logs.contents();
+            assert!(
+                output.contains("tracked task did not run to completion"),
+                "the registry guard should have reported the panic, got: {output}"
+            );
+            assert!(
+                output.contains("peer-request-127.0.0.1"),
+                "the report should name the peer task, got: {output}"
+            );
+        }
     }
 }
