@@ -33,6 +33,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed realtime Time Series Generator streams being sent with a
   semi-supervised frame when the generator id or request sensor name
   contained the substring `SemiSupervised`.
+- Fixed publish stream subscriptions leaving stale entries in the realtime
+  routing table. A subscription that failed while starting up, or whose client
+  disconnected while no matching record was arriving, kept its routing entry;
+  the next matching record then failed to route and tore down the ingest stream
+  that carried it. A subscription now runs in a single task that removes its own
+  entries before it returns, whichever way it ends, and it notices a client
+  disconnect immediately instead of waiting for the next matching record. An
+  entry a newer subscription has taken over is left in place, so a client that
+  reconnects and re-subscribes keeps receiving records.
 - Fixed peer self-check in release builds to compare full socket addresses
   (IP and port) instead of IP only, so peers on the same host with different
   ports are no longer silently dropped.

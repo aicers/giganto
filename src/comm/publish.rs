@@ -41,7 +41,10 @@ use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig, VarInt};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
     select,
-    sync::{Notify, mpsc::unbounded_channel},
+    sync::{
+        Notify,
+        mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    },
 };
 use tracing::{debug, error, info, warn};
 
@@ -50,6 +53,7 @@ use crate::comm::{
     IngestSensors, PcapSensors, StreamDirectChannels,
     ingest::{NetworkKey, implement::EventFilter},
     peer::{PeerIdents, Peers},
+    stream_channel_key::StreamChannelKey,
 };
 use crate::datetime::DateTime;
 use crate::graphql::TIMESTAMP_SIZE;
@@ -591,19 +595,49 @@ where
     let channel_keys = msg.channel_keys(sensor.as_deref(), record_type)?;
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
-    let channel_remove_keys = channel_keys.clone();
-    for c_key in channel_keys {
-        stream_direct_channels
-            .write()
-            .await
-            .insert(c_key, send.clone());
+    {
+        let mut channels = stream_direct_channels.write().await;
+        for c_key in &channel_keys {
+            channels.insert(c_key.clone(), send.clone());
+        }
     }
 
+    // The entries just registered belong to this task from here on, so every
+    // exit path below has to run through `remove_owned_channel_keys`. The
+    // removal cannot be left to a `Drop` implementation because it needs the
+    // async write guard.
+    let result: Result<()> = async {
+        let last_ts = start_stream(&mut sender, &store, &msg, record_type, kind).await?;
+        forward_realtime_records(&mut sender, &mut recv, &conn, &notify_shutdown, last_ts).await;
+        Ok(())
+    }
+    .await;
+
+    remove_owned_channel_keys(&stream_direct_channels, &channel_keys, &send).await;
+    result
+}
+
+/// Writes the subscription's stream start message and, for a time series
+/// generator, replays the stored records that precede the realtime stream.
+///
+/// Returns the timestamp of the last replayed record, or `0` when nothing was
+/// replayed.
+async fn start_stream<T, N>(
+    sender: &mut SendStream,
+    store: &RawEventStore<'_, T>,
+    msg: &N,
+    record_type: RequestStreamRecord,
+    kind: Option<String>,
+) -> Result<i64>
+where
+    T: EventFilter + Serialize + DeserializeOwned + Display,
+    N: RequestStreamMessage,
+{
     let mut last_ts = 0_i64;
 
     // send stored record raw data
     if msg.is_semi_supervised() {
-        send_semi_supervised_stream_start_message(&mut sender, record_type)
+        send_semi_supervised_stream_start_message(sender, record_type)
             .await
             .map_err(|e| {
                 anyhow!("Failed to write the semi-supervised engine start message: {e}")
@@ -614,7 +648,7 @@ where
         );
     } else if msg.is_time_series_generator() {
         let id = msg.id().expect("The time series generator always sends RequestTimeSeriesGeneratorStream with an id, so this value is guaranteed to exist.");
-        send_time_series_generator_stream_start_message(&mut sender, id)
+        send_time_series_generator_stream_start_message(sender, id)
             .await
             .map_err(|e| anyhow!("Failed to write the time series generator start message: {e}"))?;
         info!(
@@ -639,38 +673,73 @@ where
             };
             if msg.filter_ip(orig_addr, resp_addr) {
                 let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
-                send_time_series_generator_data(&mut sender, timestamp, val).await?;
+                send_time_series_generator_data(sender, timestamp, val).await?;
                 last_ts = timestamp;
             }
         }
     }
 
-    // send realtime record raw data
-    tokio::spawn(async move {
-        loop {
-            select! {
-                Some(buf) = recv.recv() => {
-                    let ts = i64::from_le_bytes(buf.get(..TIMESTAMP_SIZE).expect("timestamp_size").try_into().expect("timestamp"));
-                    if last_ts > ts {
-                        continue;
-                    }
-                    if frame::send_bytes(&mut sender, &buf).await.is_err(){
-                        for r_key in channel_remove_keys{
-                            stream_direct_channels
-                            .write()
-                            .await
-                            .remove(&r_key);
-                        }
-                        break;
-                    }
+    Ok(last_ts)
+}
+
+/// Forwards realtime record raw data to the subscribing client until the
+/// subscription ends.
+///
+/// The loop ends on the shutdown signal, on a failure to write to the client's
+/// QUIC stream, or on the client disconnecting. It deliberately does not end on
+/// the channel closing: the caller keeps the original `UnboundedSender` alive
+/// for the whole subscription, so `recv` stays pending even once the last map
+/// entry naming this subscription is gone.
+async fn forward_realtime_records(
+    sender: &mut SendStream,
+    recv: &mut UnboundedReceiver<Vec<u8>>,
+    conn: &Connection,
+    notify_shutdown: &Notify,
+    last_ts: i64,
+) {
+    loop {
+        select! {
+            Some(buf) = recv.recv() => {
+                let ts = i64::from_le_bytes(buf.get(..TIMESTAMP_SIZE).expect("timestamp_size").try_into().expect("timestamp"));
+                if last_ts > ts {
+                    continue;
                 }
-                () = notify_shutdown.notified() => {
+                if let Err(e) = frame::send_bytes(sender, &buf).await {
+                    debug!("Failed to send a realtime record to the subscribing client: {e}");
                     break;
                 }
             }
+            () = notify_shutdown.notified() => {
+                break;
+            }
+            _ = conn.closed() => {
+                break;
+            }
         }
-    });
-    Ok(())
+    }
+}
+
+/// Removes the `stream_direct_channels` entries a subscription still owns.
+///
+/// Registration is last-insert-wins and nothing in a `StreamChannelKey`
+/// identifies the subscription that registered it, so a key may since have been
+/// taken over by a newer subscription. Such a key is left alone; removing it
+/// would silently stop the newer subscription's client while
+/// `send_direct_stream` kept reporting success.
+async fn remove_owned_channel_keys(
+    stream_direct_channels: &StreamDirectChannels,
+    channel_keys: &[StreamChannelKey],
+    owned_sender: &UnboundedSender<Vec<u8>>,
+) {
+    let mut channels = stream_direct_channels.write().await;
+    for c_key in channel_keys {
+        if channels
+            .get(c_key)
+            .is_some_and(|sender| sender.same_channel(owned_sender))
+        {
+            channels.remove(c_key);
+        }
+    }
 }
 
 /// Sends the Time Series Generator stream start message from giganto's publish module.

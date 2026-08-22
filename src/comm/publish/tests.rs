@@ -54,7 +54,7 @@ use tempfile::TempDir;
 use tokio::sync::{Notify, RwLock, mpsc, oneshot, watch};
 use tracing_subscriber::fmt::MakeWriter;
 
-use super::Server;
+use super::{Server, process_stream};
 #[cfg(not(feature = "bootroot"))]
 use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
 #[cfg(feature = "bootroot")]
@@ -66,6 +66,7 @@ use crate::{
         new_pcap_sensors, new_peers_data, new_stream_direct_channels,
         peer::{PeerIdentity, PeerIdents, PeerInfo, Peers},
         publish::{implement::RequestStreamMessage, send_direct_stream},
+        stream_channel_key::StreamChannelKey,
     },
     server::{Certs, config_client, config_server},
     storage::{Database, DbOptions, RawEventStore},
@@ -230,7 +231,7 @@ mod fixtures {
         pub(super) stream_direct_channels: StreamDirectChannels,
         pub(super) pcap_sensors: PcapSensors,
         pub(super) server_handle: ServerHandle,
-        pub(super) _server_addr: SocketAddr,
+        pub(super) server_addr: SocketAddr,
     }
 
     pub(super) struct TestClient {
@@ -386,6 +387,108 @@ mod fixtures {
         f(&mut harness).await;
         harness.publish.close(b"publish_test_done").await;
         harness.shutdown().await;
+    }
+
+    /// Returns the target sensor of every key currently registered in
+    /// `stream_direct_channels`.
+    pub(super) async fn registered_target_sensors(channels: &StreamDirectChannels) -> Vec<String> {
+        let guard = channels.read().await;
+        let mut sensors = guard
+            .keys()
+            .map(|key| match key {
+                StreamChannelKey::SemiSupervised { target_sensor, .. }
+                | StreamChannelKey::TimeSeriesGenerator { target_sensor, .. } => {
+                    target_sensor.clone()
+                }
+            })
+            .collect::<Vec<String>>();
+        sensors.sort();
+        sensors
+    }
+
+    /// Polls `stream_direct_channels` until the registered target sensors
+    /// satisfy `predicate`, and panics once the bounded deadline passes.
+    pub(super) async fn wait_for_registered_sensors<F>(
+        channels: &StreamDirectChannels,
+        label: &str,
+        predicate: F,
+    ) where
+        F: Fn(&[String]) -> bool,
+    {
+        let deadline = Instant::now() + StdDuration::from_secs(5);
+        loop {
+            let sensors = registered_target_sensors(channels).await;
+            if predicate(&sensors) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{label}; registered target sensors: {sensors:?}"
+            );
+            tokio::time::sleep(StdDuration::from_millis(10)).await;
+        }
+    }
+
+    /// Opens a semi-supervised subscription for `sensors` on `client` and waits
+    /// for its stream start message.
+    pub(super) async fn start_semi_supervised_subscription(
+        client: &mut TestClient,
+        record_type: RequestStreamRecord,
+        sensors: &[&str],
+    ) -> RecvStream {
+        let request = RequestSemiSupervisedStream {
+            start: 0,
+            sensor: Some(sensors.iter().copied().map(str::to_string).collect()),
+        };
+        send_stream_request(
+            &mut client.send,
+            StreamRequestPayload::SemiSupervised {
+                record_type,
+                request,
+            },
+        )
+        .await
+        .expect("sending semi-supervised stream request failed");
+
+        let mut stream = client
+            .conn
+            .accept_uni()
+            .await
+            .expect("accepting uni stream");
+        let start_msg = receive_semi_supervised_stream_start_message(&mut stream)
+            .await
+            .expect("receiving semi-supervised stream start message");
+        assert_eq!(start_msg, record_type);
+        stream
+    }
+
+    /// Publishes one record for `sensor` and asserts the subscribing client
+    /// reads it back.
+    pub(super) async fn assert_receives_direct_record(
+        stream: &mut RecvStream,
+        channels: &StreamDirectChannels,
+        sensor: &str,
+        record_type: RequestStreamRecord,
+    ) {
+        let send_time = next_timestamp();
+        let payload = gen_conn_raw_event();
+        send_direct_stream(
+            &NetworkKey::new(sensor, record_type),
+            &payload,
+            send_time,
+            sensor,
+            channels.clone(),
+        )
+        .await
+        .expect("send_direct_stream failed");
+
+        let recv_data = receive_semi_supervised_data(stream)
+            .await
+            .expect("receiving semi-supervised data");
+        let (recv_timestamp, recv_sensor, recv_payload) = decode_semi_supervised_frame(&recv_data);
+        assert_eq!(recv_timestamp, send_time, "timestamp mismatch");
+        assert_eq!(recv_sensor, sensor, "sensor mismatch");
+        assert_eq!(recv_payload, payload, "payload mismatch");
     }
 
     pub(super) fn next_timestamp() -> i64 {
@@ -639,7 +742,7 @@ mod fixtures {
             stream_direct_channels,
             pcap_sensors,
             server_handle,
-            _server_addr: server_addr,
+            server_addr,
         }
     }
 
@@ -4864,7 +4967,7 @@ async fn send_direct_stream_time_series_generator_id_with_semi_supervised_substr
 
     let stream_direct_channels: StreamDirectChannels = new_stream_direct_channels();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let req_key = crate::comm::stream_channel_key::StreamChannelKey::TimeSeriesGenerator {
+    let req_key = StreamChannelKey::TimeSeriesGenerator {
         id: "SemiSupervised-policy".to_string(),
         target_sensor: sensor.to_string(),
         record_type: RequestStreamRecord::Conn,
@@ -4945,6 +5048,572 @@ async fn stream_direct_channels_cleared_after_client_disconnect() {
                 );
                 tokio::time::sleep(StdDuration::from_millis(10)).await;
             }
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn stream_channels_cleared_after_client_disconnect_without_records() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE, SENSOR_SEMI_SUPERVISED_TWO],
+            )
+            .await;
+
+            assert_eq!(
+                registered_target_sensors(&harness.stream_direct_channels).await,
+                vec![
+                    SENSOR_SEMI_SUPERVISED_ONE.to_string(),
+                    SENSOR_SEMI_SUPERVISED_TWO.to_string()
+                ],
+                "expected the subscription's channel keys to be registered"
+            );
+
+            drop(stream);
+            harness.publish.close(b"client_done").await;
+
+            // No record is published here: the subscription has to notice the
+            // disconnect on its own.
+            wait_for_registered_sensors(
+                &harness.stream_direct_channels,
+                "stream channels not cleared after disconnect",
+                <[String]>::is_empty,
+            )
+            .await;
+
+            // A dead sender left behind would tear down the ingest stream that
+            // hit it, so publishing a matching record has to keep succeeding.
+            send_direct_stream(
+                &NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn),
+                &gen_conn_raw_event(),
+                next_timestamp(),
+                SENSOR_SEMI_SUPERVISED_ONE,
+                harness.stream_direct_channels.clone(),
+            )
+            .await
+            .expect("send_direct_stream after disconnect failed");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn stream_channels_cleared_after_shutdown_signal() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let _stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+
+            assert_eq!(
+                registered_target_sensors(&harness.stream_direct_channels).await,
+                vec![SENSOR_SEMI_SUPERVISED_ONE.to_string()],
+                "expected the subscription's channel key to be registered"
+            );
+
+            harness.server_handle.notify.notify_waiters();
+
+            wait_for_registered_sensors(
+                &harness.stream_direct_channels,
+                "stream channels not cleared after shutdown",
+                <[String]>::is_empty,
+            )
+            .await;
+
+            send_direct_stream(
+                &NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn),
+                &gen_conn_raw_event(),
+                next_timestamp(),
+                SENSOR_SEMI_SUPERVISED_ONE,
+                harness.stream_direct_channels.clone(),
+            )
+            .await
+            .expect("send_direct_stream after shutdown failed");
+        })
+    })
+    .await;
+}
+
+/// Drives the forwarding loop's `notify_shutdown` branch on its own.
+///
+/// Every route that fires the shutdown signal in the server also closes the
+/// subscribing client's connection — the accept loop closes the endpoint and
+/// `handle_connection` closes the connection — so an end-to-end shutdown test
+/// cannot tell the shutdown branch apart from the disconnect branch. Driving
+/// `process_stream` over a bare connection, with a signal wired to nothing
+/// else, leaves the connection open so only the shutdown branch can end the
+/// subscription.
+#[tokio::test]
+async fn subscription_shutdown_branch_clears_channels_with_the_connection_open() {
+    init_crypto();
+
+    let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+    let db =
+        Database::open(temp_dir.path(), &DbOptions::default()).expect("open publish test database");
+    let channels = new_stream_direct_channels();
+    let certs = build_test_certs();
+
+    let server = Server::new(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0), &certs);
+    let endpoint = Endpoint::server(server.server_config, server.server_address)
+        .expect("subscription endpoint");
+    let server_addr = endpoint.local_addr().expect("subscription local addr");
+
+    let client_endpoint = init_client();
+    let connecting = client_endpoint
+        .connect(server_addr, NODE1.server_name())
+        .expect("connecting to the subscription endpoint");
+    let (server_conn, client_conn) = tokio::join!(
+        async {
+            endpoint
+                .accept()
+                .await
+                .expect("incoming connection")
+                .await
+                .expect("server side connection")
+        },
+        async { connecting.await.expect("client side connection") },
+    );
+
+    let notify_shutdown = Arc::new(Notify::new());
+    let subscription = tokio::spawn(process_stream(
+        db.clone(),
+        server_conn.clone(),
+        Some(SENSOR_SEMI_SUPERVISED_ONE.to_string()),
+        None,
+        RequestStreamRecord::Conn,
+        RequestSemiSupervisedStream {
+            start: 0,
+            sensor: Some(vec![SENSOR_SEMI_SUPERVISED_TWO.to_string()]),
+        },
+        channels.clone(),
+        notify_shutdown.clone(),
+    ));
+
+    wait_for_registered_sensors(
+        &channels,
+        "subscription did not register its channel key",
+        |sensors| sensors == [SENSOR_SEMI_SUPERVISED_TWO.to_string()],
+    )
+    .await;
+
+    // Nothing but the shutdown signal may end the subscription, so it has to
+    // still be running here — otherwise the cleared map below would prove
+    // nothing about the shutdown branch.
+    assert!(
+        !subscription.is_finished(),
+        "the subscription ended before the shutdown signal was sent"
+    );
+
+    // `notify_waiters` only wakes tasks already parked on the signal, so keep
+    // signalling until the subscription observes it.
+    let deadline = Instant::now() + StdDuration::from_secs(5);
+    while !subscription.is_finished() {
+        assert!(
+            Instant::now() < deadline,
+            "the subscription did not return on the shutdown signal"
+        );
+        notify_shutdown.notify_waiters();
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
+    subscription
+        .await
+        .expect("subscription task panicked")
+        .expect("subscription returned an error");
+
+    // Neither side of the connection closed, so the disconnect branch cannot be
+    // what ended the loop.
+    assert!(
+        server_conn.close_reason().is_none(),
+        "the connection closed, so this did not isolate the shutdown branch"
+    );
+    assert_eq!(
+        registered_target_sensors(&channels).await,
+        Vec::<String>::new(),
+        "expected the shutdown signal to clear the subscription's channel key"
+    );
+
+    // A dead sender left behind would tear down the ingest stream that hit it.
+    send_direct_stream(
+        &NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, RequestStreamRecord::Conn),
+        &gen_conn_raw_event(),
+        next_timestamp(),
+        SENSOR_SEMI_SUPERVISED_TWO,
+        channels.clone(),
+    )
+    .await
+    .expect("send_direct_stream after shutdown failed");
+
+    client_conn.close(0_u32.into(), b"shutdown_branch_done");
+    client_endpoint.wait_idle().await;
+}
+
+#[tokio::test]
+async fn stream_channels_cleared_after_quic_send_failure() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let mut stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE, SENSOR_SEMI_SUPERVISED_TWO],
+            )
+            .await;
+
+            assert_eq!(
+                registered_target_sensors(&harness.stream_direct_channels).await,
+                vec![
+                    SENSOR_SEMI_SUPERVISED_ONE.to_string(),
+                    SENSOR_SEMI_SUPERVISED_TWO.to_string()
+                ],
+                "expected the subscription's channel keys to be registered"
+            );
+
+            // Refusing the uni stream makes the subscription's next write to it
+            // fail while the connection itself stays open.
+            let _ = stream.stop(quinn::VarInt::from_u32(0));
+
+            // The write fails only once `STOP_SENDING` has reached the server,
+            // so keep publishing until the subscription notices, bounded by a
+            // deadline. Publishing stays successful either way: before the
+            // failure the subscription's senders are live, and afterwards its
+            // keys are gone.
+            let deadline = Instant::now() + StdDuration::from_secs(5);
+            loop {
+                let sensors = registered_target_sensors(&harness.stream_direct_channels).await;
+                if sensors.is_empty() {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "stream channels not cleared after a failed QUIC send; \
+                     registered target sensors: {sensors:?}"
+                );
+                send_direct_stream(
+                    &NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn),
+                    &gen_conn_raw_event(),
+                    next_timestamp(),
+                    SENSOR_SEMI_SUPERVISED_ONE,
+                    harness.stream_direct_channels.clone(),
+                )
+                .await
+                .expect("send_direct_stream failed");
+                tokio::time::sleep(StdDuration::from_millis(10)).await;
+            }
+
+            // The failed subscription leaves the connection and its request
+            // loop intact, so a fresh subscription is still dispatched on it.
+            let mut second_stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+            assert_receives_direct_record(
+                &mut second_stream,
+                &harness.stream_direct_channels,
+                SENSOR_SEMI_SUPERVISED_ONE,
+                RequestStreamRecord::Conn,
+            )
+            .await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stream_channels_cleared_when_time_series_replay_fails() {
+    with_log_capture(|log_capture| async move {
+        with_test_harness(|harness| {
+            Box::pin(async move {
+                // A log record carries no addresses, so replaying it fails
+                // after the subscription has registered its channel keys.
+                let log_store = harness.db.log_store().expect("log store");
+                insert_log_raw_event(
+                    &log_store,
+                    SENSOR_TIME_SERIES_GENERATOR_THREE,
+                    LOG_KIND,
+                    next_timestamp(),
+                );
+
+                let request = RequestTimeSeriesGeneratorStream {
+                    start: 0,
+                    id: POLICY_ID.to_string(),
+                    src_ip: None,
+                    dst_ip: None,
+                    sensor: Some(SENSOR_TIME_SERIES_GENERATOR_THREE.to_string()),
+                };
+                send_stream_request(
+                    &mut harness.publish.send,
+                    StreamRequestPayload::TimeSeriesGenerator {
+                        record_type: RequestStreamRecord::Log,
+                        request,
+                    },
+                )
+                .await
+                .expect("sending time series generator stream request failed");
+
+                assert_log_contains(
+                    &log_capture,
+                    "Failed to send network stream : Failed to deserialize database data",
+                )
+                .await;
+
+                // The failing subscription removes its keys before returning,
+                // so the error is logged only after cleanup has run.
+                assert_eq!(
+                    registered_target_sensors(&harness.stream_direct_channels).await,
+                    Vec::<String>::new(),
+                    "expected no channel keys to survive the failed replay"
+                );
+            })
+        })
+        .await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn time_series_generator_skips_realtime_record_older_than_replay() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let sensor = SENSOR_TIME_SERIES_GENERATOR_THREE;
+            let first_db_timestamp = next_timestamp();
+            let first_db_payload = insert_conn_stream(&harness.db, sensor, first_db_timestamp);
+            let db_timestamp = next_timestamp();
+            let db_payload = insert_conn_stream(&harness.db, sensor, db_timestamp);
+
+            send_stream_request(
+                &mut harness.publish.send,
+                StreamRequestPayload::TimeSeriesGenerator {
+                    record_type: RequestStreamRecord::Conn,
+                    request: build_network_time_series_generator_request(),
+                },
+            )
+            .await
+            .expect("sending time series generator stream request failed");
+
+            let mut stream = harness
+                .publish
+                .conn
+                .accept_uni()
+                .await
+                .expect("accepting uni stream");
+            let start_msg = receive_time_series_generator_stream_start_message(&mut stream)
+                .await
+                .expect("receiving time series generator start message");
+            assert_eq!(start_msg, POLICY_ID);
+
+            // Stored records are replayed in timestamp order ahead of the
+            // realtime stream.
+            let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
+                .await
+                .expect("receiving first replayed record");
+            assert_eq!(
+                recv_timestamp, first_db_timestamp,
+                "first replay timestamp mismatch"
+            );
+            assert_eq!(recv_data, first_db_payload, "first replay payload mismatch");
+
+            let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
+                .await
+                .expect("receiving second replayed record");
+            assert_eq!(
+                recv_timestamp, db_timestamp,
+                "second replay timestamp mismatch"
+            );
+            assert_eq!(recv_data, db_payload, "second replay payload mismatch");
+
+            let key = NetworkKey::new(sensor, RequestStreamRecord::Conn);
+            let stale_payload = gen_conn_raw_event();
+            send_direct_stream(
+                &key,
+                &stale_payload,
+                db_timestamp - 1,
+                sensor,
+                harness.stream_direct_channels.clone(),
+            )
+            .await
+            .expect("send_direct_stream with stale timestamp failed");
+
+            let fresh_timestamp = db_timestamp + 1;
+            let fresh_payload = gen_dns_raw_event();
+            send_direct_stream(
+                &key,
+                &fresh_payload,
+                fresh_timestamp,
+                sensor,
+                harness.stream_direct_channels.clone(),
+            )
+            .await
+            .expect("send_direct_stream failed");
+
+            // The stale buffer predates the last replayed record, so the client
+            // sees the fresh one next.
+            let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
+                .await
+                .expect("receiving realtime record");
+            assert_eq!(
+                recv_timestamp, fresh_timestamp,
+                "realtime timestamp mismatch"
+            );
+            assert_eq!(recv_data, fresh_payload, "realtime payload mismatch");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn cleanup_keeps_channel_key_taken_over_by_newer_subscription() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            // The first subscription registers both sensors.
+            let first_stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE, SENSOR_SEMI_SUPERVISED_TWO],
+            )
+            .await;
+
+            // The second one uses the same certificate, so its key for
+            // `SENSOR_SEMI_SUPERVISED_ONE` replaces the first one's entry.
+            let mut second_client = TestClient::new(harness.server_addr, NODE1.server_name()).await;
+            let mut second_stream = start_semi_supervised_subscription(
+                &mut second_client,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+
+            drop(first_stream);
+            harness.publish.close(b"first_subscription_done").await;
+
+            // The first subscription owns only the second sensor's entry by
+            // now, so that is the only one its cleanup may remove.
+            wait_for_registered_sensors(
+                &harness.stream_direct_channels,
+                "first subscription did not clean up its own channel key",
+                |sensors| sensors.len() == 1 && sensors[0] == SENSOR_SEMI_SUPERVISED_ONE,
+            )
+            .await;
+
+            assert_receives_direct_record(
+                &mut second_stream,
+                &harness.stream_direct_channels,
+                SENSOR_SEMI_SUPERVISED_ONE,
+                RequestStreamRecord::Conn,
+            )
+            .await;
+
+            second_client.close(b"second_subscription_done").await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn concurrent_subscriptions_remove_only_their_own_channel_keys() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let first_stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+
+            let mut second_client = TestClient::new(harness.server_addr, NODE1.server_name()).await;
+            let mut second_stream = start_semi_supervised_subscription(
+                &mut second_client,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_TWO],
+            )
+            .await;
+
+            assert_eq!(
+                registered_target_sensors(&harness.stream_direct_channels).await,
+                vec![
+                    SENSOR_SEMI_SUPERVISED_ONE.to_string(),
+                    SENSOR_SEMI_SUPERVISED_TWO.to_string()
+                ],
+                "expected both subscriptions to be registered"
+            );
+
+            drop(first_stream);
+            harness.publish.close(b"first_subscription_done").await;
+
+            wait_for_registered_sensors(
+                &harness.stream_direct_channels,
+                "first subscription did not clean up its own channel key",
+                |sensors| sensors.len() == 1 && sensors[0] == SENSOR_SEMI_SUPERVISED_TWO,
+            )
+            .await;
+
+            assert_receives_direct_record(
+                &mut second_stream,
+                &harness.stream_direct_channels,
+                SENSOR_SEMI_SUPERVISED_TWO,
+                RequestStreamRecord::Conn,
+            )
+            .await;
+
+            second_client.close(b"second_subscription_done").await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn request_stream_dispatches_while_a_subscription_is_running() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            // The first subscription now runs for its whole lifetime inside the
+            // task `request_stream` spawned for it, so the request loop has to
+            // stay free to dispatch the next request on the same connection.
+            let mut first_stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+
+            let mut second_stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_TWO],
+            )
+            .await;
+
+            assert_eq!(
+                registered_target_sensors(&harness.stream_direct_channels).await,
+                vec![
+                    SENSOR_SEMI_SUPERVISED_ONE.to_string(),
+                    SENSOR_SEMI_SUPERVISED_TWO.to_string()
+                ],
+                "expected both subscriptions on the connection to be registered"
+            );
+
+            // Both subscriptions are still live and each delivers to its own
+            // client stream.
+            assert_receives_direct_record(
+                &mut second_stream,
+                &harness.stream_direct_channels,
+                SENSOR_SEMI_SUPERVISED_TWO,
+                RequestStreamRecord::Conn,
+            )
+            .await;
+            assert_receives_direct_record(
+                &mut first_stream,
+                &harness.stream_direct_channels,
+                SENSOR_SEMI_SUPERVISED_ONE,
+                RequestStreamRecord::Conn,
+            )
+            .await;
         })
     })
     .await;
