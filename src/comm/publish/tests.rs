@@ -5265,6 +5265,136 @@ async fn subscription_cancellation_branch_clears_channels_with_the_connection_op
     client_endpoint.wait_idle().await;
 }
 
+/// A subscription parked in its QUIC write is released by cancellation.
+///
+/// The realtime forwarding loop races its write against the token, and this is
+/// the only thing that can end a subscription whose client has stopped reading:
+/// the loop's other cancellation branch is reached between records, and a
+/// subscription blocked mid-record never gets there. So the connection is left
+/// open, and the client's receive window is left too small for the records
+/// queued behind it, which parks the write with nothing but the token able to
+/// release it.
+#[tokio::test]
+async fn subscription_cancellation_releases_a_blocked_quic_send() {
+    /// All the client will ever accept on the subscription's stream: enough
+    /// for the stream start message, far short of one record. Reading the
+    /// window back below grants one more window's worth, which is still short
+    /// of a record, so the write stays parked once it is.
+    const STREAM_WINDOW: u32 = 64;
+    /// Queued behind the parked write, so the loop cannot reach the
+    /// cancellation branch at the top by running out of records.
+    const RECORDS: usize = 128;
+
+    init_crypto();
+
+    let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+    let db =
+        Database::open(temp_dir.path(), &DbOptions::default()).expect("open publish test database");
+    let channels = new_stream_direct_channels();
+    let certs = build_test_certs();
+
+    let server = Server::new(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0), &certs);
+    let endpoint = Endpoint::server(server.server_config, server.server_address)
+        .expect("blocked send endpoint");
+    let server_addr = endpoint.local_addr().expect("blocked send local addr");
+
+    let mut client_config = config_client(&certs).expect("publish test client config");
+    let mut transport = quinn::TransportConfig::default();
+    transport.stream_receive_window(quinn::VarInt::from_u32(STREAM_WINDOW));
+    transport.keep_alive_interval(Some(StdDuration::from_secs(5)));
+    client_config.transport_config(Arc::new(transport));
+    let mut client_endpoint =
+        Endpoint::client("[::]:0".parse().expect("failed to parse endpoint addr"))
+            .expect("failed to create endpoint");
+    client_endpoint.set_default_client_config(client_config);
+
+    let connecting = client_endpoint
+        .connect(server_addr, NODE1.server_name())
+        .expect("connecting to the blocked send endpoint");
+    let (server_conn, client_conn) = tokio::join!(
+        async {
+            endpoint
+                .accept()
+                .await
+                .expect("incoming connection")
+                .await
+                .expect("server side connection")
+        },
+        async { connecting.await.expect("client side connection") },
+    );
+
+    let token = CancellationToken::new();
+    let subscription = tokio::spawn(process_stream(
+        db.clone(),
+        server_conn.clone(),
+        Some(SENSOR_SEMI_SUPERVISED_ONE.to_string()),
+        None,
+        RequestStreamRecord::Conn,
+        RequestSemiSupervisedStream {
+            start: 0,
+            sensor: Some(vec![SENSOR_SEMI_SUPERVISED_TWO.to_string()]),
+        },
+        channels.clone(),
+        token.clone(),
+    ));
+
+    wait_for_registered_sensors(
+        &channels,
+        "subscription did not register its channel key",
+        |sensors| sensors == [SENSOR_SEMI_SUPERVISED_TWO.to_string()],
+    )
+    .await;
+
+    for _ in 0..RECORDS {
+        send_direct_stream(
+            &NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, RequestStreamRecord::Conn),
+            &gen_conn_raw_event(),
+            next_timestamp(),
+            SENSOR_SEMI_SUPERVISED_TWO,
+            channels.clone(),
+        )
+        .await
+        .expect("queue a realtime record");
+    }
+
+    // Reading the whole window back is what this test waits on rather than a
+    // sleep: the client can only be handed that many bytes if the subscription
+    // wrote until the window was out, which is the write it has to be parked
+    // in. The credit that read returns is one window against the records still
+    // queued, so it is parked there again by the time the token fires.
+    let mut stream = tokio::time::timeout(StdDuration::from_secs(5), client_conn.accept_uni())
+        .await
+        .expect("the subscription should have opened its stream")
+        .expect("accept the subscription's stream");
+    let mut window = vec![0_u8; STREAM_WINDOW as usize];
+    tokio::time::timeout(StdDuration::from_secs(5), stream.read_exact(&mut window))
+        .await
+        .expect("the subscription should have filled the client's receive window")
+        .expect("read the filled window");
+
+    token.cancel();
+    tokio::time::timeout(StdDuration::from_secs(5), subscription)
+        .await
+        .expect("a subscription blocked in a QUIC write did not return on cancellation")
+        .expect("subscription task panicked")
+        .expect("subscription returned an error");
+
+    // Neither side closed, so the disconnect branch cannot be what released
+    // the write.
+    assert!(
+        server_conn.close_reason().is_none(),
+        "the connection closed, so this did not isolate the cancellation branch"
+    );
+    assert_eq!(
+        registered_target_sensors(&channels).await,
+        Vec::<String>::new(),
+        "a subscription released from a blocked write still owes its cleanup"
+    );
+
+    client_conn.close(0_u32.into(), b"blocked_send_done");
+    client_endpoint.wait_idle().await;
+}
+
 #[tokio::test]
 async fn stream_channels_cleared_after_quic_send_failure() {
     with_test_harness(|harness| {
