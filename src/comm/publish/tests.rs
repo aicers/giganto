@@ -7444,8 +7444,8 @@ mod shutdown {
         spawn_server, start_log_capture, start_semi_supervised_subscription,
     };
     use super::{NODE1, NODE2, PROTOCOL_VERSION, SENSOR_SEMI_SUPERVISED_ONE};
-    use crate::cancellation::TaskTracker;
-    use crate::comm::publish::{PUBLISH_VERSION_REQ, Server};
+    use crate::cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report};
+    use crate::comm::publish::{PUBLISH_DRAIN_LABEL, PUBLISH_VERSION_REQ, Server};
     use crate::comm::{new_pcap_sensors, new_peers_data, new_stream_direct_channels};
     use crate::server::config_server;
     use crate::storage::{Database, DbOptions};
@@ -8425,5 +8425,75 @@ mod shutdown {
             captured(&logs)
         );
         drop(client);
+    }
+
+    /// A publish task that lingers past a drain interval produces a reported
+    /// pending round, and the drain attempt that follows reaches the task
+    /// rather than aborting it.
+    ///
+    /// No production publish path can be made to outlast the shared five
+    /// second report interval on demand, so the straggler is a task registered
+    /// the way publish registers its own — same tracker shape, same name form.
+    /// The interval is the constant the entry task passes, and virtual time is
+    /// what lets two rounds expire without a wall-clock wait, so the rounds
+    /// asserted below are the ones a real publish shutdown would emit.
+    #[tokio::test(start_paused = true)]
+    async fn the_drain_reports_a_straggler_and_waits_for_it() {
+        let (logs, _guard) = start_log_capture();
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::with_token(token);
+
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let straggler = tracker
+            .spawn("publish-request-straggler", |_token| async move {
+                // Deliberately deaf to its token: what is under test is the
+                // drain loop's tolerance of a task that is slow to return, not
+                // the task's own cooperation.
+                let _ = release_rx.await;
+            })
+            .expect("register the straggling publish task");
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PUBLISH_DRAIN_LABEL).await }
+        });
+
+        // Virtual time advances only while every task is idle, so this lets
+        // exactly two rounds expire and releases the straggler while the third
+        // is in flight. Nothing waits out a real interval.
+        tokio::time::sleep(DRAIN_REPORT_INTERVAL * 2 + DRAIN_REPORT_INTERVAL / 2).await;
+        release_tx
+            .send(())
+            .expect("the drain should still be waiting on the straggler");
+
+        drain
+            .await
+            .expect("the drain task should not panic")
+            .expect("the drain should finish once the straggler returns");
+
+        // The straggler returned on its own rather than being aborted, which
+        // is what the tracker's completion safety net would otherwise report.
+        straggler
+            .await
+            .expect("the straggler should not have been aborted");
+        assert_eq!(tracker.pending_count(), 0);
+
+        let output = captured(&logs);
+        assert!(
+            output.contains("publish drain round 1: 1 task(s) still pending"),
+            "the first pending round should be reported, got: {output}"
+        );
+        assert!(
+            output.contains("publish drain round 2: 1 task(s) still pending"),
+            "another drain attempt should follow the reported round, got: {output}"
+        );
+        assert!(
+            output.contains("publish-request-straggler"),
+            "the report should name the straggling task, got: {output}"
+        );
+        assert!(
+            !output.contains("tracked task did not run to completion"),
+            "a straggler the drain waits for is not aborted, got: {output}"
+        );
     }
 }
