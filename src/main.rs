@@ -2549,6 +2549,62 @@ mod tests {
             );
         }
 
+        /// A publish listener that cannot bind is reported where it happens,
+        /// and the generation keeps serving.
+        ///
+        /// This is the other half of the ingest case above. Publish is not
+        /// watched by a `GenerationEnd` variant, so nothing outside the entry
+        /// task ever reads its result back; if the task did not report the
+        /// failure itself, a node serving no publish traffic would run to the
+        /// end of the generation without a word about it. The terminate intent
+        /// is what ends this one, which is also the proof that the early exit
+        /// did not.
+        #[tokio::test]
+        async fn a_publish_listener_that_cannot_bind_is_reported() {
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+
+            // QUIC is UDP, so the port has to be held by a UDP socket for the
+            // publish listener to lose it.
+            let occupied = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .expect("occupy the publish port");
+            settings.config.visible.publish_srv_addr =
+                occupied.local_addr().expect("occupied addr");
+
+            let (logs, _guard) = capture_logs();
+            let (end, ()) = tokio::join!(
+                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &[
+                            "Ingest listening on",
+                            "Publish subsystem terminated unexpectedly",
+                        ],
+                    )
+                    .await;
+                    notify_terminate.notify_one();
+                }
+            );
+            let end = end
+                .expect("a terminate intent should end the generation")
+                .expect("a failed publish listener should not fail the generation");
+
+            assert_eq!(end, GenerationEnd::Terminate);
+
+            let output = captured(&logs);
+            assert!(
+                output.contains("failed to bind the publish listener"),
+                "the bind failure itself should be reported, got: {output}"
+            );
+            assert!(
+                !output.contains("tracked task did not run to completion"),
+                "the entry task returned, it did not vanish, got: {output}"
+            );
+        }
+
         /// A sensor ingests through a whole generation, and the generation
         /// releases it.
         ///

@@ -238,7 +238,7 @@ mod fixtures {
 
     pub(super) struct TestClient {
         pub(super) send: SendStream,
-        pub(super) _recv: RecvStream,
+        pub(super) recv: RecvStream,
         pub(super) conn: Connection,
         pub(super) endpoint: Endpoint,
     }
@@ -316,7 +316,7 @@ mod fixtures {
             let (send, recv) = client_handshake(&conn, PROTOCOL_VERSION).await.unwrap();
             Self {
                 send,
-                _recv: recv,
+                recv,
                 conn,
                 endpoint,
             }
@@ -1182,6 +1182,12 @@ mod fixtures {
                 } else {
                     let _ = send_ok(&mut send, &mut buf, ()).await;
                 }
+                // A dropped `SendStream` resets, which would discard the
+                // acknowledgement just written before a relay could read it.
+                // Finishing it, and then holding the connection until the
+                // relay lets go, is what a real peer does.
+                let _ = send.finish();
+                connection.closed().await;
             }
         });
 
@@ -4894,6 +4900,85 @@ async fn request_stream_time_series_generator_missing_sensor_logs_error() {
     .await;
 }
 
+/// A semi-supervised subscription that fails reports it under its own task
+/// name, the way the time series generator one above does.
+///
+/// A request that names no target sensor cannot be turned into channel keys,
+/// so the subscription task returns an error rather than registering
+/// anything. Nothing on the wire carries that failure — the client is never
+/// sent a start message — so the log is the only place it is accounted for,
+/// and the name it carries is what says which of a connection's live
+/// subscriptions ended.
+#[tokio::test(flavor = "current_thread")]
+async fn request_stream_semi_supervised_missing_sensor_logs_error() {
+    with_log_capture(|log_capture| async move {
+        with_test_harness(|harness| {
+            Box::pin(async move {
+                send_stream_request(
+                    &mut harness.publish.send,
+                    StreamRequestPayload::SemiSupervised {
+                        record_type: RequestStreamRecord::Conn,
+                        request: RequestSemiSupervisedStream {
+                            start: 0,
+                            sensor: None,
+                        },
+                    },
+                )
+                .await
+                .expect("sending semi-supervised stream request failed");
+
+                assert_log_contains(
+                    &log_capture,
+                    "-Conn failed: Failed to generate the Semi-supervised Engine channel key, \
+                     sensor is required.",
+                )
+                .await;
+
+                assert_eq!(
+                    registered_target_sensors(&harness.stream_direct_channels).await,
+                    Vec::<String>::new(),
+                    "a subscription that never built a channel key registers nothing"
+                );
+            })
+        })
+        .await;
+    })
+    .await;
+}
+
+/// A request that fails is reported under the name of the task that ran it.
+///
+/// One connection can have many request handlers in flight at once, and a
+/// handler answers on a stream of its own, so a bare failure line would leave
+/// a reader unable to tell which request produced it. The malformed body below
+/// fails before any response is written, which is exactly the case where the
+/// log is all there is.
+#[tokio::test(flavor = "current_thread")]
+async fn a_failed_request_is_reported_under_its_own_task_name() {
+    with_log_capture(|log_capture| async move {
+        with_test_harness(|harness| {
+            Box::pin(async move {
+                let (mut send, _recv) = harness
+                    .publish
+                    .conn
+                    .open_bi()
+                    .await
+                    .expect("open a request stream");
+                // A single byte is not a `RequestRange`, so the handler fails
+                // on the request rather than on anything it would have read.
+                send_range_data_request(&mut send, MessageCode::ReqRange, 0_u8)
+                    .await
+                    .expect("sending a malformed range request failed");
+
+                assert_log_contains(&log_capture, "failed: Failed to deserialize message").await;
+                assert_log_contains(&log_capture, "publish-request-").await;
+            })
+        })
+        .await;
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn send_direct_stream_time_series_generator_id_with_semi_supervised_substring() {
     let sensor = "src1";
@@ -7454,6 +7539,10 @@ mod shutdown {
     /// it does fails.
     const CANCEL_TIMEOUT: StdDuration = StdDuration::from_secs(5);
 
+    /// How long a caller is given to act on a peer's handshake answer before a
+    /// test that wants it parked on its next await cancels it.
+    const SETTLE_AFTER_HANDSHAKE: StdDuration = StdDuration::from_millis(300);
+
     fn captured(capture: &LogCapture) -> String {
         String::from_utf8_lossy(&capture.buffer.lock().expect("log capture lock poisoned"))
             .into_owned()
@@ -7836,6 +7925,34 @@ mod shutdown {
         assert!(
             registered_target_sensors(&channels).await.is_empty(),
             "a refused subscription must register no routing entries"
+        );
+
+        // The other kind of subscription is registered from its own branch, so
+        // it is refused separately and names itself from its own request
+        // rather than from the connection.
+        send_stream_request(
+            &mut client.send,
+            StreamRequestPayload::TimeSeriesGenerator {
+                record_type: RequestStreamRecord::Conn,
+                request: giganto_client::publish::stream::RequestTimeSeriesGeneratorStream {
+                    start: 0,
+                    id: "refused-id".to_string(),
+                    src_ip: None,
+                    dst_ip: None,
+                    sensor: Some("refused_tsg_sensor".to_string()),
+                },
+            },
+        )
+        .await
+        .expect("sending a time series generator stream request");
+        assert_log_contains(
+            &logs,
+            "Rejected publish-stream-refused_tsg_sensor-Conn-refused-id",
+        )
+        .await;
+        assert!(
+            registered_target_sensors(&channels).await.is_empty(),
+            "a refused time series generator subscription must register no routing entries"
         );
 
         let (mut send, _recv) = client.conn.open_bi().await.expect("open a request stream");
@@ -8495,5 +8612,599 @@ mod shutdown {
             !output.contains("tracked task did not run to completion"),
             "a straggler the drain waits for is not aborted, got: {output}"
         );
+    }
+
+    /// A relay cancelled before it looks at its first filter reports the whole
+    /// batch as given up rather than starting on it.
+    ///
+    /// The acknowledgement is written before the relay is registered, so a
+    /// cancellation landing in that gap leaves a client believing its request
+    /// was accepted and nothing anywhere saying it was not carried out. The
+    /// single-threaded runtime is what makes the gap addressable: the relay is
+    /// registered but unpolled until this test yields, so the cancellation
+    /// below is guaranteed to arrive before its first filter is read.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_relay_cancelled_before_it_starts_reports_the_filter_it_dropped() {
+        init_crypto();
+        const SENSOR: &str = "pcap_relay_cancelled_before_start";
+
+        let (pcap_sensors, mut filter_rx) = super::fixtures::setup_local_pcap_sensor(SENSOR).await;
+        let (peers, peer_idents) = new_peers_data(None);
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let (mut server_send, _ack_server, _ack_client) =
+            super::fixtures::build_ack_stream("ack.before.start").await;
+
+        let tracker = TaskTracker::new();
+        let token = tracker.root_token().clone();
+
+        let (logs, _guard) = start_log_capture();
+        crate::comm::publish::process_pcap_extract_filters(
+            vec![build_filter_for_sensor(SENSOR, 10, 20)],
+            pcap_sensors,
+            peers,
+            peer_idents,
+            tls_watch,
+            &mut server_send,
+            "publish-request-before-start",
+            &tracker,
+            &token,
+        )
+        .await
+        .expect("the request is acknowledged before the relay starts");
+
+        // Nothing has been awaited since the relay was registered, so it has
+        // not run yet and this lands on its first check.
+        tracker.cancel_children();
+
+        assert_log_contains(
+            &logs,
+            "publish-pcap-relay-publish-request-before-start gave up a pcap filter on shutdown",
+        )
+        .await;
+        assert!(
+            !matches!(
+                tokio::time::timeout(StdDuration::from_millis(200), filter_rx.recv()).await,
+                Ok(Some(_))
+            ),
+            "a relay that gave up before it started must not reach the sensor"
+        );
+
+        tokio::time::timeout(CANCEL_TIMEOUT, async {
+            drain_with_report(&tracker, StdDuration::from_millis(100), "publish-test").await
+        })
+        .await
+        .expect("a relay that gave up must let the drain finish")
+        .expect("draining the test tracker");
+    }
+
+    /// A relay cancelled while a sensor is holding its request reports what it
+    /// gave up instead of waiting the sensor out.
+    ///
+    /// The exchange with a sensor is the one relay step with no peer
+    /// connection behind it, so nothing is closed on the way out; the log is
+    /// all that accounts for the filter, and the drain behind the relay is
+    /// what a missing branch here would hold open.
+    #[tokio::test]
+    async fn a_relay_cancelled_mid_sensor_exchange_reports_what_it_gave_up() {
+        init_crypto();
+        const SENSOR: &str = "pcap_relay_quiet_sensor";
+
+        let (sensor_conn, mut requested_rx, _sensor_server, _sensor_client) =
+            silent_pcap_sensor().await;
+        let pcap_sensors = new_pcap_sensors();
+        pcap_sensors
+            .write()
+            .await
+            .insert(SENSOR.to_string(), vec![sensor_conn]);
+
+        let (peers, peer_idents) = new_peers_data(None);
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let (mut server_send, _ack_server, _ack_client) =
+            super::fixtures::build_ack_stream("ack.quiet.sensor").await;
+
+        let tracker = TaskTracker::new();
+        let token = tracker.root_token().clone();
+
+        let (logs, _guard) = start_log_capture();
+        crate::comm::publish::process_pcap_extract_filters(
+            vec![build_filter_for_sensor(SENSOR, 30, 40)],
+            pcap_sensors,
+            peers,
+            peer_idents,
+            tls_watch,
+            &mut server_send,
+            "publish-request-quiet-sensor",
+            &tracker,
+            &token,
+        )
+        .await
+        .expect("the request is acknowledged before the relay starts");
+
+        // The sensor has the request and is answering nothing, so the relay is
+        // parked on the acknowledgement when this fires.
+        recv_with_timeout(
+            &mut requested_rx,
+            "the sensor's pcap request",
+            CANCEL_TIMEOUT,
+        )
+        .await;
+        tracker.cancel_children();
+
+        assert_log_contains(
+            &logs,
+            "publish-pcap-relay-publish-request-quiet-sensor gave up relaying a pcap request to a \
+             sensor",
+        )
+        .await;
+
+        tokio::time::timeout(CANCEL_TIMEOUT, async {
+            drain_with_report(&tracker, StdDuration::from_millis(100), "publish-test").await
+        })
+        .await
+        .expect("a cancelled sensor exchange must let the drain finish")
+        .expect("draining the test tracker");
+    }
+
+    /// An uncancelled relay stays registered until the peer has acknowledged
+    /// the request it carried, so the drain covers the whole exchange.
+    ///
+    /// Every other relay assertion in this module ends on a cancellation, and
+    /// a relay that returned as soon as it had written the request would pass
+    /// all of them while leaving the acknowledgement to arrive after the
+    /// subsystem had gone. The drain here neither closes admission early nor
+    /// cancels, so the only thing that can end it is the relay finishing on
+    /// its own terms.
+    #[tokio::test]
+    async fn a_relay_stays_registered_until_the_peer_acknowledges() {
+        init_crypto();
+        const SENSOR: &str = "pcap_relay_peer_ack";
+
+        let peer_certs = NODE2.build_certs();
+        let super::fixtures::PeerPcapServer {
+            addr: peer_addr,
+            mut filter_rx,
+            ..
+        } = super::fixtures::setup_peer_pcap_server(peer_certs).await;
+
+        let peers = build_peers_for_sensor(SENSOR, peer_addr);
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let (mut server_send, _ack_server, _ack_client) =
+            super::fixtures::build_ack_stream("ack.peer.ack").await;
+
+        let tracker = TaskTracker::new();
+        let token = tracker.root_token().clone();
+
+        let filter = build_filter_for_sensor(SENSOR, 50, 60);
+        let (logs, _guard) = start_log_capture();
+        crate::comm::publish::process_pcap_extract_filters(
+            vec![filter.clone()],
+            new_pcap_sensors(),
+            peers,
+            peer_idents,
+            tls_watch,
+            &mut server_send,
+            "publish-request-peer-ack",
+            &tracker,
+            &token,
+        )
+        .await
+        .expect("the request is acknowledged before the relay starts");
+
+        // Closes admission and waits, but never cancels: the relay returns
+        // because it is done, not because it was told to stop.
+        let outcome = tokio::time::timeout(CANCEL_TIMEOUT, tracker.drain(CANCEL_TIMEOUT))
+            .await
+            .expect("the relay should return well inside the timeout")
+            .expect("draining the test tracker");
+        assert!(
+            matches!(outcome, crate::cancellation::DrainOutcome::Drained),
+            "an uncancelled relay should finish the exchange it started"
+        );
+
+        let relayed =
+            recv_with_timeout(&mut filter_rx, "the peer's pcap filter", CANCEL_TIMEOUT).await;
+        assert_eq!(relayed.start_time, filter.start_time);
+
+        let output = captured(&logs);
+        assert!(
+            !output.contains("gave up"),
+            "an acknowledged relay gives nothing up, got: {output}"
+        );
+        assert!(
+            !output.contains("Failed to receive ack response from peer"),
+            "the peer answered, got: {output}"
+        );
+    }
+
+    /// A relay cancelled while it waits for a peer's acknowledgement reports
+    /// the wait it abandoned and closes the connection behind it.
+    ///
+    /// The peer already has the request and may still act on it, so the loss
+    /// is only the confirmation; what must not happen is the relay holding the
+    /// drain open until a peer that has gone quiet answers.
+    #[tokio::test]
+    async fn a_relay_gives_up_waiting_for_a_peer_acknowledgement() {
+        init_crypto();
+        const SENSOR: &str = "pcap_relay_unacknowledging_peer";
+
+        let peer_certs = NODE2.build_certs();
+        let server_config = config_server(&peer_certs).expect("peer publish server config");
+        let endpoint = Endpoint::server(
+            server_config,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+        .expect("start the unacknowledging peer listener");
+        let peer_addr = endpoint.local_addr().expect("unacknowledging peer addr");
+
+        let (requested_tx, mut requested_rx) = mpsc::unbounded_channel();
+        let accept_endpoint = endpoint.clone();
+        let _accept = tokio::spawn(async move {
+            let Some(incoming) = accept_endpoint.accept().await else {
+                return;
+            };
+            let Ok(connection) = incoming.await else {
+                return;
+            };
+            if server_handshake(&connection, PUBLISH_VERSION_REQ)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let Ok((send, mut recv)) = connection.accept_bi().await else {
+                return;
+            };
+            if giganto_client::publish::receive_range_data_request(&mut recv)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = requested_tx.send(());
+            // Takes the request and acknowledges nothing.
+            std::future::pending::<()>().await;
+            drop(send);
+        });
+
+        let peers = build_peers_for_sensor(SENSOR, peer_addr);
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let (mut server_send, _ack_server, _ack_client) =
+            super::fixtures::build_ack_stream("ack.unacknowledging.peer").await;
+
+        let tracker = TaskTracker::new();
+        let token = tracker.root_token().clone();
+
+        let (logs, _guard) = start_log_capture();
+        crate::comm::publish::process_pcap_extract_filters(
+            vec![build_filter_for_sensor(SENSOR, 70, 80)],
+            new_pcap_sensors(),
+            peers,
+            peer_idents,
+            tls_watch,
+            &mut server_send,
+            "publish-request-unacknowledged",
+            &tracker,
+            &token,
+        )
+        .await
+        .expect("the request is acknowledged before the relay starts");
+
+        recv_with_timeout(&mut requested_rx, "the peer's pcap request", CANCEL_TIMEOUT).await;
+        tracker.cancel_children();
+
+        assert_log_contains(
+            &logs,
+            "publish-pcap-relay-publish-request-unacknowledged gave up waiting for peer",
+        )
+        .await;
+
+        tokio::time::timeout(CANCEL_TIMEOUT, async {
+            drain_with_report(&tracker, StdDuration::from_millis(100), "publish-test").await
+        })
+        .await
+        .expect("a relay that gave up on an acknowledgement must let the drain finish")
+        .expect("draining the test tracker");
+    }
+
+    /// The raw-data relay owes the same as the range one: a peer that takes
+    /// the request and goes quiet does not hold the receive loop, or the drain
+    /// behind it, open.
+    #[tokio::test]
+    async fn a_quiet_peer_releases_the_raw_data_receive_loop_on_cancellation() {
+        init_crypto();
+        const SENSOR: &str = "raw_quiet_peer";
+
+        let peer_certs = NODE2.build_certs();
+        let server_config = config_server(&peer_certs).expect("peer publish server config");
+        let endpoint = Endpoint::server(
+            server_config,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+        .expect("start the quiet peer listener");
+        let peer_addr = endpoint.local_addr().expect("quiet peer addr");
+
+        let (requested_tx, mut requested_rx) = mpsc::unbounded_channel();
+        let accept_endpoint = endpoint.clone();
+        let _accept = tokio::spawn(async move {
+            let Some(incoming) = accept_endpoint.accept().await else {
+                return;
+            };
+            let Ok(connection) = incoming.await else {
+                return;
+            };
+            if server_handshake(&connection, PUBLISH_VERSION_REQ)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let Ok((send, mut recv)) = connection.accept_bi().await else {
+                return;
+            };
+            if giganto_client::publish::receive_range_data_request(&mut recv)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = requested_tx.send(());
+            // Takes the request and answers nothing.
+            std::future::pending::<()>().await;
+            drop(send);
+        });
+
+        let peers = build_peers_for_sensor(SENSOR, peer_addr);
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let token = CancellationToken::new();
+        let (mut send, _client_conn) = open_range_stream("raw.quiet.peer").await;
+
+        let (relayed, ()) = tokio::join!(
+            crate::comm::publish::process_raw_event_in_peer_gigantos::<u8>(
+                &mut send,
+                "conn".to_string(),
+                &tls_watch,
+                peers,
+                peer_idents,
+                vec![(SENSOR.to_string(), vec![1])],
+                &token,
+            ),
+            async {
+                recv_with_timeout(
+                    &mut requested_rx,
+                    "quiet peer raw-data request",
+                    CANCEL_TIMEOUT,
+                )
+                .await;
+                token.cancel();
+            },
+        );
+        relayed.expect("a peer that goes quiet ends the relay cooperatively");
+    }
+
+    /// A request-stream task that fails is reported under the name of the
+    /// connection it belongs to.
+    ///
+    /// The task reads one client's control stream, so a bare failure line
+    /// would leave a reader unable to tell which of a node's connections went
+    /// down. Stopping the control stream's receive side is what makes the
+    /// acknowledgement below unwritable, and the round trip before it is what
+    /// puts the stop at the server before the request that trips over it.
+    #[tokio::test]
+    async fn a_failed_request_stream_is_reported_under_its_connection() {
+        init_crypto();
+        let tracker = TaskTracker::new();
+        let (mut client, _temp_dir) =
+            drive_handle_connection(&tracker, new_stream_direct_channels()).await;
+
+        // The server's half of the control stream is stopped, so the
+        // acknowledgement a packet-capture request is owed cannot be written.
+        client
+            .recv
+            .stop(quinn::VarInt::from_u32(0))
+            .expect("stop the control stream");
+
+        // A request answered on a stream of its own says the stop above has
+        // reached the server, so the packet-capture request below cannot slip
+        // in ahead of it.
+        let (mut send, mut recv) = client.conn.open_bi().await.expect("open a request stream");
+        send_range_data_request(
+            &mut send,
+            MessageCode::ReqRange,
+            build_range_request(SENSOR_SEMI_SUPERVISED_ONE, "conn"),
+        )
+        .await
+        .expect("send a range request");
+        giganto_client::publish::receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv)
+            .await
+            .expect("the request handler should answer");
+
+        let (logs, _guard) = start_log_capture();
+        send_stream_request(
+            &mut client.send,
+            StreamRequestPayload::PcapExtraction { filter: Vec::new() },
+        )
+        .await
+        .expect("sending a packet-capture request");
+
+        assert_log_contains(&logs, "publish-req-stream-").await;
+        assert_log_contains(&logs, "failed: Failed to send ok").await;
+
+        tracker.cancel_children();
+    }
+
+    /// A peer that completes the handshake and then grants no further stream
+    /// releases the request that was waiting for one.
+    ///
+    /// `a_stalled_outbound_handshake_releases_on_cancellation` covers the step
+    /// before this: there the connection is not up yet, here it is, and giving
+    /// up has to close it rather than let it die by drop. Nothing has been
+    /// requested at this point, so the loss is the request itself.
+    #[tokio::test]
+    async fn a_peer_that_grants_no_stream_releases_a_range_request() {
+        init_crypto();
+        let (peer_addr, mut blocked_rx, _endpoint, _accept) = stream_starved_peer().await;
+
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let token = CancellationToken::new();
+
+        let (relayed, ()) = tokio::join!(
+            crate::comm::publish::request_range_data_to_peer(
+                peer_addr,
+                NODE2.server_name(),
+                &tls_watch,
+                MessageCode::ReqRange,
+                build_range_request("range_starved_peer", "conn"),
+                &token,
+            ),
+            async {
+                recv_with_timeout(
+                    &mut blocked_rx,
+                    "the blocked stream request",
+                    CANCEL_TIMEOUT,
+                )
+                .await;
+                token.cancel();
+            },
+        );
+        assert!(
+            relayed
+                .expect("giving up on a stream is a normal return, not an error")
+                .is_none(),
+            "a cancelled request reports no peer streams"
+        );
+    }
+
+    /// The raw-data relay opens its own stream and owes the same.
+    #[tokio::test]
+    async fn a_peer_that_grants_no_stream_releases_a_raw_data_relay() {
+        init_crypto();
+        const SENSOR: &str = "raw_starved_peer";
+        let (peer_addr, mut blocked_rx, _endpoint, _accept) = stream_starved_peer().await;
+
+        let peers = build_peers_for_sensor(SENSOR, peer_addr);
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let token = CancellationToken::new();
+        let (mut send, _client_conn) = open_range_stream("raw.starved.peer").await;
+
+        let (relayed, ()) = tokio::join!(
+            crate::comm::publish::process_raw_event_in_peer_gigantos::<u8>(
+                &mut send,
+                "conn".to_string(),
+                &tls_watch,
+                peers,
+                peer_idents,
+                vec![(SENSOR.to_string(), vec![1])],
+                &token,
+            ),
+            async {
+                recv_with_timeout(
+                    &mut blocked_rx,
+                    "the blocked stream request",
+                    CANCEL_TIMEOUT,
+                )
+                .await;
+                token.cancel();
+            },
+        );
+        relayed.expect("giving up on a stream ends the relay cooperatively");
+    }
+
+    /// A peer that answers the version exchange and then lets no further
+    /// stream be opened.
+    ///
+    /// Its stream limit is the one the handshake itself consumes, and the
+    /// handshake's streams are held open so that credit is never returned, so
+    /// the caller's next `open_bi` waits for a stream that never comes.
+    ///
+    /// The receiver fires once the peer has answered the version exchange and
+    /// the caller has had time to act on the answer. Nothing observable is
+    /// emitted by a connection whose peer is parked on `open_bi` — quinn does
+    /// not send `STREAMS_BLOCKED` — so this is the closest a test can get to
+    /// waiting for that state. A cancellation that still lands early is a
+    /// cancelled handshake, which the assertions below accept just as
+    /// readily; what neither can be is a request that went through.
+    #[allow(clippy::unused_async)]
+    async fn stream_starved_peer() -> (
+        SocketAddr,
+        mpsc::UnboundedReceiver<()>,
+        Endpoint,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let peer_certs = NODE2.build_certs();
+        let mut server_config = config_server(&peer_certs).expect("peer publish server config");
+        std::sync::Arc::get_mut(&mut server_config.transport)
+            .expect("a freshly built server config owns its transport")
+            .max_concurrent_bidi_streams(1_u8.into());
+        let endpoint = Endpoint::server(
+            server_config,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        )
+        .expect("start the stream-starved peer listener");
+        let addr = endpoint.local_addr().expect("stream-starved peer addr");
+
+        let (blocked_tx, blocked_rx) = mpsc::unbounded_channel();
+        let accept_endpoint = endpoint.clone();
+        let accept = tokio::spawn(async move {
+            let Some(incoming) = accept_endpoint.accept().await else {
+                return;
+            };
+            let Ok(connection) = incoming.await else {
+                return;
+            };
+            // Holding the handshake's streams is what keeps the one stream
+            // this peer allows in use.
+            let Ok(handshake) = server_handshake(&connection, PUBLISH_VERSION_REQ).await else {
+                return;
+            };
+            tokio::time::sleep(SETTLE_AFTER_HANDSHAKE).await;
+            let _ = blocked_tx.send(());
+            std::future::pending::<()>().await;
+            drop(handshake);
+        });
+
+        (addr, blocked_rx, endpoint, accept)
+    }
+
+    /// A packet-capture sensor that takes the request and answers nothing.
+    ///
+    /// Returns the connection publish holds for it and a receiver that fires
+    /// once the request has arrived, so a test can cancel with the relay
+    /// parked on the acknowledgement rather than racing it.
+    async fn silent_pcap_sensor() -> (
+        quinn::Connection,
+        mpsc::UnboundedReceiver<()>,
+        Endpoint,
+        Endpoint,
+    ) {
+        let (sensor_server_conn, sensor_client_conn, sensor_server, sensor_client) =
+            super::fixtures::setup_quic_loopback(NODE1.server_name(), "silent-sensor").await;
+
+        let (requested_tx, requested_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let Ok((send, recv)) = sensor_server_conn.accept_bi().await else {
+                return;
+            };
+            let _ = requested_tx.send(());
+            std::future::pending::<()>().await;
+            drop((send, recv));
+        });
+
+        (
+            sensor_client_conn,
+            requested_rx,
+            sensor_server,
+            sensor_client,
+        )
     }
 }
