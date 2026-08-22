@@ -90,8 +90,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed a shutdown that could hang indefinitely when the signal arrived in the
   first moments after startup. A subsystem that had not yet begun listening
   missed the one-shot notification and then waited out its own interval before
-  noticing, so the node never exited. The signal is now repeated until every
-  subsystem has stopped.
+  noticing, so the node never exited. Every subsystem now takes its shutdown
+  signal from a cancellation that stays raised, so a subsystem that starts
+  listening late sees it the moment it looks instead of missing it.
 
 ### Changed
 

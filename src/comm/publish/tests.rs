@@ -8119,4 +8119,197 @@ mod shutdown {
         );
         drop(client);
     }
+
+    /// A peer relay that gives up on cancellation leaves the range response
+    /// unterminated.
+    ///
+    /// The client can only tell an incomplete response apart from an empty one
+    /// by the missing terminator, so a relay that returned early must not let
+    /// its caller write one. The token is cancelled before the call, so the
+    /// dial gives up on its first check and every step after it runs without
+    /// yielding — the same window a cancellation landing mid-poll opens.
+    #[tokio::test]
+    async fn a_cancelled_peer_range_relay_writes_no_terminator() {
+        init_crypto();
+        const SENSOR: &str = "range_cancelled_before_dial";
+
+        let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+        let db = Database::open(temp_dir.path(), &DbOptions::default())
+            .expect("open publish test database");
+        let store = db.conn_store().expect("open the conn store");
+
+        // Nothing listens here: if the relay dialled at all, it would retry
+        // until the token stopped it rather than return at once.
+        let peer_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1);
+        let peers = build_peers_for_sensor(SENSOR, peer_addr);
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let (mut send, client_conn) = open_range_stream("range.cancelled.relay").await;
+        crate::comm::publish::process_range_data::<giganto_client::ingest::network::Conn, u8>(
+            &mut send,
+            store,
+            RequestRange {
+                sensor: SENSOR.to_string(),
+                kind: "conn".to_string(),
+                start: 0,
+                end: i64::MAX,
+                count: 5,
+            },
+            super::fixtures::build_ingest_sensors_from_list(&[]),
+            peers,
+            peer_idents,
+            &tls_watch,
+            &token,
+            false,
+        )
+        .await
+        .expect("giving up a relay is a normal return, not an error");
+
+        assert_no_terminator(&client_conn, "range").await;
+    }
+
+    /// The raw-data path owes the client the same.
+    #[tokio::test]
+    async fn a_cancelled_peer_raw_data_relay_writes_no_terminator() {
+        init_crypto();
+        const SENSOR: &str = "raw_cancelled_before_dial";
+
+        let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+        let db = Database::open(temp_dir.path(), &DbOptions::default())
+            .expect("open publish test database");
+        let store = db.conn_store().expect("open the conn store");
+
+        let peer_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1);
+        let peers = build_peers_for_sensor(SENSOR, peer_addr);
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let (mut send, client_conn) = open_range_stream("raw.cancelled.relay").await;
+        crate::comm::publish::process_raw_events::<giganto_client::ingest::network::Conn, u8>(
+            &mut send,
+            store,
+            giganto_client::publish::range::RequestRawData {
+                kind: "conn".to_string(),
+                input: vec![(SENSOR.to_string(), vec![1])],
+            },
+            super::fixtures::build_ingest_sensors_from_list(&[]),
+            peers,
+            peer_idents,
+            &tls_watch,
+            &token,
+        )
+        .await
+        .expect("giving up a relay is a normal return, not an error");
+
+        assert_no_terminator(&client_conn, "raw-data").await;
+    }
+
+    /// Fails if the server wrote anything the client could read as a complete
+    /// response.
+    ///
+    /// A relay that gave up may have written nothing at all, so an unopened
+    /// stream counts as no terminator; what must not arrive is the `None` that
+    /// says the response is done.
+    async fn assert_no_terminator(client_conn: &quinn::Connection, label: &str) {
+        let Ok(Ok(mut recv)) =
+            tokio::time::timeout(StdDuration::from_secs(1), client_conn.accept_uni()).await
+        else {
+            return;
+        };
+        let received = tokio::time::timeout(
+            StdDuration::from_secs(1),
+            giganto_client::publish::receive_range_data::<Option<(i64, String, Vec<u8>)>>(
+                &mut recv,
+            ),
+        )
+        .await;
+        assert!(
+            !matches!(received, Ok(Ok(None))),
+            "a cancelled {label} relay must not tell the client the response is complete"
+        );
+    }
+
+    /// A relay that was already accepted and is cancelled while dialing
+    /// reports what it gave up rather than claiming it delivered.
+    ///
+    /// The acknowledgement written before the relay started promised
+    /// acceptance, not delivery, so the log is the only place the abandoned
+    /// filter is accounted for.
+    #[tokio::test]
+    async fn a_cancelled_pcap_relay_reports_what_it_gave_up() {
+        init_crypto();
+        const SENSOR: &str = "pcap_relay_cancelled_mid_dial";
+
+        // A UDP socket nobody reads, so the dial waits out its handshake
+        // timeout instead of being refused.
+        let black_hole = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind the black hole socket");
+        let peer_addr = black_hole.local_addr().expect("black hole addr");
+
+        let peers = build_peers_for_sensor(SENSOR, peer_addr);
+        let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+        let certs = build_test_certs();
+        let tls_watch = build_test_tls_watch(&certs);
+        let (mut server_send, _ack_server, _ack_client) =
+            super::fixtures::build_ack_stream("ack.cancelled.relay").await;
+
+        let tracker = TaskTracker::new();
+        let token = tracker.root_token().clone();
+
+        let (logs, _guard) = start_log_capture();
+        crate::comm::publish::process_pcap_extract_filters(
+            vec![super::fixtures::build_filter_for_sensor(SENSOR, 10, 20)],
+            new_pcap_sensors(),
+            peers,
+            peer_idents,
+            tls_watch,
+            &mut server_send,
+            "publish-request-cancelled",
+            &tracker,
+            &token,
+        )
+        .await
+        .expect("the request is acknowledged before the relay starts");
+
+        // The first datagram off the relay's endpoint says the dial is in
+        // flight, so the cancellation below lands on a real attempt.
+        let mut buf = [0_u8; 1];
+        tokio::time::timeout(CANCEL_TIMEOUT, black_hole.recv_from(&mut buf))
+            .await
+            .expect("the relay should have dialled the peer")
+            .expect("read the dial datagram");
+
+        tracker.cancel_children();
+        assert_log_contains(
+            &logs,
+            "publish-pcap-relay-publish-request-cancelled gave up relaying a pcap request to peer",
+        )
+        .await;
+
+        // The relay returns cooperatively, so the drain behind it empties.
+        tokio::time::timeout(CANCEL_TIMEOUT, async {
+            crate::cancellation::drain_with_report(
+                &tracker,
+                StdDuration::from_millis(100),
+                "publish-test",
+            )
+            .await
+        })
+        .await
+        .expect("a cancelled relay must let the drain finish")
+        .expect("draining the test tracker");
+        assert!(
+            !captured(&logs).contains("tracked task did not run to completion"),
+            "a cancelled relay returns cooperatively, got: {}",
+            captured(&logs)
+        );
+    }
 }

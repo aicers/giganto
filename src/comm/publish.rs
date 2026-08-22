@@ -2302,6 +2302,14 @@ where
             request_range.sensor
         )
     }
+    // A peer relay that gave up on cancellation returns normally with only
+    // part of the peer's response written, and the missing terminator is the
+    // only thing that tells the client the response is incomplete. Writing it
+    // here would say the opposite, so a cancelled request leaves the stream
+    // unterminated and the client retries against the next generation.
+    if token.is_cancelled() {
+        return Ok(());
+    }
     send_range_data::<T>(send, None).await?;
     send.finish()?;
     Ok(())
@@ -2498,6 +2506,12 @@ where
         .await?;
     }
 
+    // Same reason as the range path: a relay that stopped on cancellation
+    // owes the client an unterminated stream, not a terminator that claims a
+    // partial answer is the whole one.
+    if token.is_cancelled() {
+        return Ok(());
+    }
     send_range_data::<T>(send, None).await?;
     send.finish()?;
     Ok(())
