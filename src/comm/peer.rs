@@ -4727,6 +4727,9 @@ pub mod tests {
         /// The remote a directly driven request handler is registered
         /// under, so a test can name the task it expects to find pending.
         const BLOCKED_REMOTE: &str = "127.0.0.1:7100";
+        /// What the peer-identity enqueue path reports when the receive side
+        /// will not take an identity.
+        const REFUSED_ENQUEUE: &str = "Failed to enqueue peer connection attempt";
 
         #[derive(Clone, Default)]
         struct SharedLogBuffer(Arc<StdMutex<Vec<u8>>>);
@@ -4840,6 +4843,15 @@ pub mod tests {
                 tokio::time::timeout(TEST_TIMEOUT, fut).await.is_ok(),
                 "{label}"
             );
+        }
+
+        /// The captured log lines that report a refused peer-identity
+        /// enqueue, so a test can tie a refusal to the identity it dropped
+        /// rather than to any mention of that identity in the log.
+        fn refusals(output: &str) -> impl Iterator<Item = &str> {
+            output
+                .lines()
+                .filter(|line| line.contains(REFUSED_ENQUEUE))
         }
 
         /// State the shared peer maps are keyed on and the tests read back.
@@ -5295,39 +5307,118 @@ pub mod tests {
             )
             .await
             .expect("the drain should complete once the receive side is closed");
-            wait_for_log(&logs, "Failed to enqueue peer connection attempt").await;
+            wait_for_log(&logs, REFUSED_ENQUEUE).await;
         }
 
-        /// A peer identity offered on the entry task's own peer-identity
-        /// sender, after that task has returned, is refused: no client
-        /// connection is started and the refusal is reported rather than
-        /// swallowed or returned as an error.
+        /// The entry task's own `receiver.close()` releases a tracked send
+        /// parked on the peer-identity channel while shutdown is in progress,
+        /// and an identity offered once that task has returned is refused
+        /// rather than swallowed or returned as an error.
         ///
-        /// The sender comes out of the running entry task through the `ready`
-        /// payload, so the refusal is the real channel's, not a stand-in the
-        /// test closed itself. The entry task's `peer_conns` map is its own,
-        /// and it is dropped with the task; what a dial would have left behind
-        /// is a `peers` entry and a connection attempt in the log, so those are
-        /// what the test reads back. Joining the entry task also drops the
-        /// receiver, which closes the channel by itself, so what this pins is
-        /// that the post-return refusal reaches the reporting path — the
-        /// release of a send already parked on a full channel is what the
-        /// preceding test pins on `receiver.close()` alone.
+        /// Both halves run against the real channel: the sender comes out of
+        /// the running entry task through the `ready` payload, so the refusal
+        /// is that channel's own and not a stand-in the test closed itself.
+        ///
+        /// The first half is what pins the production close. Joining the entry
+        /// task drops its receiver, so a post-return refusal on its own would
+        /// still hold if the explicit `receiver.close()` were deleted. A
+        /// tracked task parked on a send while the entry task is still
+        /// draining tells the two apart: the receiver is alive there but
+        /// nobody polls it, so only the explicit close can let that send fail,
+        /// and without it the drain — and so the join below — never completes.
+        ///
+        /// The park is arranged without a sleep. The test owns the shared
+        /// `peers` map the harness runs on, so holding its write lock stops
+        /// the inbound connection handler in `update_to_new_sensor_list` —
+        /// after it has taken the peer list off the init exchange and before
+        /// it enqueues anything from it. With the handler held there the test
+        /// fills the channel through the entry task's sender and cancels the
+        /// token, neither of which awaits, so the entry task cannot drain a
+        /// slot back before it observes cancellation; releasing the lock then
+        /// walks the handler straight into a send that cannot complete on its
+        /// own.
         #[tokio::test]
-        async fn a_peer_identity_offered_after_the_entry_task_returned_is_refused() {
+        async fn a_send_parked_during_shutdown_is_released_and_a_later_one_refused() {
             let (logs, _guard) = capture_logs();
             let harness = PeerHarness::start(&[], HashSet::new()).await;
             let peer_sender = harness.peer_sender.clone();
-            let late_peer = peer_identity("127.0.0.1:7003".parse().expect("addr"), "late-peer");
+            let shared_peers = harness.peers.clone();
+            let blocked_peer = peer_identity(
+                "127.0.0.1:7004".parse().expect("addr"),
+                "blocked-during-shutdown",
+            );
 
-            // Joining the entry task is what says its `receiver.close()` has
-            // run: it closes the receive side on its way out of the loop.
+            // An inbound connection, so that the handler serving it is a task
+            // in the entry task's own tracker and the drain has to wait for
+            // it. Everything the handler needs from the network it has before
+            // the cancellation below, so closing the connection cannot stand
+            // in for the release the test is after.
+            let client_endpoint = init_client();
+            let conn = client_endpoint
+                .connect(harness.addr, test_connect_name())
+                .expect("dial setup")
+                .await
+                .expect("QUIC handshake");
+            let (mut send, mut recv) = client_handshake(&conn, PROTOCOL_VERSION)
+                .await
+                .expect("protocol handshake");
+
+            // Taken before the init exchange, so the handler cannot get past
+            // the sensor-list update ahead of it.
+            let peers_guard = shared_peers.write().await;
+            request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+                &mut send,
+                &mut recv,
+                PeerCode::UpdatePeerList,
+                (HashSet::from([blocked_peer.clone()]), PeerInfo::default()),
+            )
+            .await
+            .expect("init exchange");
+            // The handler answers only after it has read that peer list, so it
+            // is now parked on the write lock above with the list in hand.
+
+            // Nothing awaits between here and the cancel: the entry task
+            // cannot run, so it can neither hand a slot back nor drain one
+            // after the token is set.
+            let mut filled = 0;
+            while peer_sender
+                .try_send(peer_identity(
+                    format!("127.0.0.1:{}", 20000 + filled)
+                        .parse()
+                        .expect("addr"),
+                    "channel-filler",
+                ))
+                .is_ok()
+            {
+                filled += 1;
+            }
+            assert!(filled > 0, "the peer-identity channel should start empty");
+            assert_eq!(
+                peer_sender.capacity(),
+                0,
+                "the handler's next send must have nowhere to go"
+            );
+            harness.token.cancel();
+            drop(peers_guard);
+
+            // The handler now walks into a send on a full channel the entry
+            // task has stopped receiving from. Without `receiver.close()` the
+            // drain waits on it forever and this join times out.
             let peers = harness.cancel_and_join().await;
             assert!(
                 peer_sender.is_closed(),
                 "the entry task should have closed the peer-identity receive side"
             );
+            assert!(
+                refusals(&logs.contents()).any(|line| line.contains(&blocked_peer.hostname)),
+                "the parked send should have been refused and reported, got: {}",
+                logs.contents()
+            );
 
+            // Second half: the same sender, now that the entry task has
+            // returned. A caller that still holds it gets a refusal it reports
+            // rather than an error it propagates, and nothing is dialed.
+            let late_peer = peer_identity("127.0.0.1:7003".parse().expect("addr"), "late-peer");
             let doc = "peers = []".parse::<DocumentMut>().expect("doc");
             let config = TempConfig::from_doc(&doc);
             update_to_new_peer_list_with_writer(
@@ -5342,8 +5433,11 @@ pub mod tests {
             .await
             .expect("a refused enqueue is reported, not returned as an error");
 
-            wait_for_log(&logs, "Failed to enqueue peer connection attempt").await;
             let output = logs.contents();
+            assert!(
+                refusals(&output).any(|line| line.contains(&late_peer.hostname)),
+                "the post-return refusal should name the identity it dropped, got: {output}"
+            );
             let addr = late_peer.addr;
             assert!(
                 !output.contains(&format!("Peer connection to {addr}"))
@@ -5352,7 +5446,7 @@ pub mod tests {
             );
             assert!(
                 peers.read().await.is_empty(),
-                "a refused identity must not reach the peer state"
+                "the connection handler should have removed its peers entry"
             );
         }
 
