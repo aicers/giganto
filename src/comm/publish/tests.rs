@@ -5203,6 +5203,14 @@ async fn subscription_shutdown_branch_clears_channels_with_the_connection_open()
     )
     .await;
 
+    // Nothing but the shutdown signal may end the subscription, so it has to
+    // still be running here — otherwise the cleared map below would prove
+    // nothing about the shutdown branch.
+    assert!(
+        !subscription.is_finished(),
+        "the subscription ended before the shutdown signal was sent"
+    );
+
     // `notify_waiters` only wakes tasks already parked on the signal, so keep
     // signalling until the subscription observes it.
     let deadline = Instant::now() + StdDuration::from_secs(5);
