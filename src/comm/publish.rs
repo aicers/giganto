@@ -704,7 +704,8 @@ async fn forward_realtime_records(
                 if last_ts > ts {
                     continue;
                 }
-                if frame::send_bytes(sender, &buf).await.is_err() {
+                if let Err(e) = frame::send_bytes(sender, &buf).await {
+                    debug!("Failed to send a realtime record to the subscribing client: {e}");
                     break;
                 }
             }

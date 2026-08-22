@@ -5456,6 +5456,57 @@ async fn concurrent_subscriptions_remove_only_their_own_channel_keys() {
 }
 
 #[tokio::test]
+async fn request_stream_dispatches_while_a_subscription_is_running() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            // The first subscription now runs for its whole lifetime inside the
+            // task `request_stream` spawned for it, so the request loop has to
+            // stay free to dispatch the next request on the same connection.
+            let mut first_stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+
+            let mut second_stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_TWO],
+            )
+            .await;
+
+            assert_eq!(
+                registered_target_sensors(&harness.stream_direct_channels).await,
+                vec![
+                    SENSOR_SEMI_SUPERVISED_ONE.to_string(),
+                    SENSOR_SEMI_SUPERVISED_TWO.to_string()
+                ],
+                "expected both subscriptions on the connection to be registered"
+            );
+
+            // Both subscriptions are still live and each delivers to its own
+            // client stream.
+            assert_receives_direct_record(
+                &mut second_stream,
+                &harness.stream_direct_channels,
+                SENSOR_SEMI_SUPERVISED_TWO,
+                RequestStreamRecord::Conn,
+            )
+            .await;
+            assert_receives_direct_record(
+                &mut first_stream,
+                &harness.stream_direct_channels,
+                SENSOR_SEMI_SUPERVISED_ONE,
+                RequestStreamRecord::Conn,
+            )
+            .await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn request_raw_events() {
     const SENSOR: &str = "src 1";
 
