@@ -61,6 +61,11 @@ const WAIT_SHUTDOWN: u64 = 15;
 /// on the top level.
 const TOP_LEVEL_DRAIN_LABEL: &str = "shutdown";
 
+/// Drain label for the web-owned PCAP reaper tracker, distinct from the
+/// top-level label so a shutdown waiting on a `tcpdump` reaper is told apart
+/// from one waiting on a tracked subsystem.
+const WEB_REAPER_DRAIN_LABEL: &str = "web PCAP reaper";
+
 /// Creates a reqwest client configured for mTLS GraphQL communication.
 ///
 /// # Arguments
@@ -351,6 +356,15 @@ async fn run_generation(
     // below.
     let top_level_tracker = TaskTracker::new();
 
+    // A separate, web-owned tracker for the PCAP resolver's `tcpdump`-reaping
+    // tasks. It is drained as part of web shutdown (right after `shutdown_web`
+    // below), before the top-level tracker is cancelled and drained, so a PCAP
+    // request cut off by the web graceful-shutdown timeout has its child killed
+    // and reaped before subsystem cancellation begins. Kept out of the top-level
+    // tracker precisely because that one is cancelled and drained *after* web
+    // shutdown; a reaper registered there would be waited too late.
+    let web_reaper_tracker = TaskTracker::new();
+
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
     let certs = Arc::clone(&tls.certs);
 
@@ -373,15 +387,19 @@ async fn run_generation(
         notify_power_off.clone(),
         process.notify_terminate.clone(),
         settings.clone(),
+        top_level_tracker.clone(),
+        web_reaper_tracker.clone(),
     );
 
     let web_addr = settings.config.visible.graphql_srv_addr;
+    let web_shutdown_timeout = settings.config.web_shutdown_timeout;
     let mut web_controller: Option<WebController> = match web::serve(
         schema.clone(),
         web_addr,
         tls.cert_pem.clone(),
         tls.key_pem.clone(),
         tls.ca_pem.clone(),
+        web_shutdown_timeout,
     )
     .await
     {
@@ -542,6 +560,7 @@ async fn run_generation(
         &mut web_controller,
         &schema,
         web_addr,
+        web_shutdown_timeout,
     )
     .await;
 
@@ -549,6 +568,13 @@ async fn run_generation(
     // sequence runs once here instead of once per arm. The order is the one
     // each arm had.
     shutdown_web(web_controller.take()).await;
+    // Web shutdown is not complete until the `tcpdump` children of any PCAP
+    // requests the graceful-shutdown timeout cut off have been reaped. Draining
+    // the web-owned reaper tracker here waits for them before subsystem
+    // cancellation and drain begin, so a timed-out PCAP child is killed and
+    // reaped ahead of the drain rather than as detached work that could outlive
+    // web shutdown.
+    drain_web_reaper_tracker_or_log(&web_reaper_tracker).await;
     // Publish was the last subsystem listening on `notify_shutdown`, and it
     // now takes its signal from the token like the rest. The signal is still
     // raised because retiring the `Notify` belongs to the process-level
@@ -607,6 +633,7 @@ struct GenerationIntents {
 /// Shutting the generation's own machinery down is the caller's, not this
 /// function's: every arm that ends a generation is torn down the same way, so
 /// the sequence runs once at the call site instead of once per arm.
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_generation_end<S>(
     settings: &mut Settings,
     process: &ProcessContext,
@@ -615,6 +642,7 @@ async fn wait_for_generation_end<S>(
     web_controller: &mut Option<WebController>,
     schema: &S,
     web_addr: std::net::SocketAddr,
+    web_shutdown_timeout: Duration,
 ) -> GenerationEnd
 where
     S: async_graphql::Executor + Clone,
@@ -652,6 +680,7 @@ where
                     web_controller,
                     schema,
                     web_addr,
+                    web_shutdown_timeout,
                 ).await;
             }
         }
@@ -863,6 +892,7 @@ async fn reload_https_server<S>(
     web_controller: &mut Option<WebController>,
     schema: &S,
     web_addr: std::net::SocketAddr,
+    web_shutdown_timeout: Duration,
 ) where
     S: async_graphql::Executor + Clone,
 {
@@ -900,6 +930,7 @@ async fn reload_https_server<S>(
         current.cert_pem.clone(),
         current.key_pem.clone(),
         current.ca_pem.clone(),
+        web_shutdown_timeout,
     )
     .await
     {
@@ -953,6 +984,26 @@ fn report_early_ingest_exit(outcome: &std::result::Result<Result<()>, task::Join
 async fn drain_top_level_tracker_or_log(tracker: &TaskTracker) {
     if let Err(e) = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, TOP_LEVEL_DRAIN_LABEL).await {
         error!("shutdown drain could not read the top-level tracker: {e}");
+    }
+}
+
+/// Drains the web-owned PCAP reaper tracker as the final step of web shutdown,
+/// before the top-level tracker is cancelled and drained.
+///
+/// Waiting here is what turns the PCAP endpoint's "kill *and* await" contract
+/// into an ordering guarantee: a request cut off by the web graceful-shutdown
+/// timeout registers its `tcpdump` child's kill-and-reap on this tracker, and
+/// draining it now makes that reaping complete before subsystem cancellation
+/// begins rather than racing it as detached work. The reaper ignores its
+/// cancellation token — `drain_with_report` cancels the tracker's children, but
+/// a `SIGKILL` followed by `wait()` must not be abandoned mid-reap — so the
+/// drain waits for the reap itself, bounded only by how long the kernel takes to
+/// reap a `SIGKILL`ed child. A poisoned lock is logged rather than propagated,
+/// the same policy as the top-level drain, so the rest of shutdown still runs.
+async fn drain_web_reaper_tracker_or_log(tracker: &TaskTracker) {
+    if let Err(e) = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, WEB_REAPER_DRAIN_LABEL).await
+    {
+        error!("shutdown drain could not read the web PCAP reaper tracker: {e}");
     }
 }
 
@@ -1273,6 +1324,7 @@ mod tests {
                 initial.cert_pem.clone(),
                 initial.key_pem.clone(),
                 initial.ca_pem.clone(),
+                Duration::from_secs(30),
             )
             .await
             .expect("initial serve");
@@ -1294,6 +1346,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 addr,
+                Duration::from_secs(30),
             )
             .await;
             assert!(
@@ -1353,6 +1406,7 @@ mod tests {
                 initial.cert_pem.clone(),
                 initial.key_pem.clone(),
                 initial.ca_pem.clone(),
+                Duration::from_secs(30),
             )
             .await
             .expect("initial serve");
@@ -1375,6 +1429,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 addr,
+                Duration::from_secs(30),
             )
             .await;
 
@@ -1423,6 +1478,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 addr,
+                Duration::from_secs(30),
             )
             .await;
 
@@ -1461,6 +1517,7 @@ mod tests {
                 initial.cert_pem.clone(),
                 initial.key_pem.clone(),
                 initial.ca_pem.clone(),
+                Duration::from_secs(30),
             )
             .await
             .expect("initial serve");
@@ -1481,6 +1538,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 addr,
+                Duration::from_secs(30),
             )
             .await;
 
@@ -1531,6 +1589,7 @@ mod tests {
                 initial.cert_pem.clone(),
                 initial.key_pem.clone(),
                 initial.ca_pem.clone(),
+                Duration::from_secs(30),
             )
             .await
             .expect("initial serve");
@@ -1563,6 +1622,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 busy_addr,
+                Duration::from_secs(30),
             )
             .await;
 
@@ -1778,6 +1838,7 @@ mod tests {
                         ack_transmission: 1024,
                     },
                     compression: false,
+                    web_shutdown_timeout: Duration::from_secs(30),
                 },
                 cfg_path: path_string(&dir.join("config.toml")),
             }
@@ -1908,6 +1969,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 ephemeral_addr(),
+                Duration::from_secs(30),
             )
             .await
         }
@@ -2078,6 +2140,7 @@ mod tests {
                     &mut web_controller,
                     &schema,
                     web_addr,
+                    Duration::from_secs(30),
                 ),
                 async {
                     notify_tls_reload.notify_one();

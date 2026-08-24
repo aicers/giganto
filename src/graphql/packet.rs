@@ -10,8 +10,8 @@ use graphql_client::GraphQLQuery;
 use tracing::info;
 
 use super::{
-    Direction, FromKeyValue, RawEventFilter, TIMESTAMP_SIZE, TimeRange, collect_records,
-    get_time_from_key, handle_paged_events, write_run_tcpdump,
+    Direction, FromKeyValue, PcapReaperTracker, RawEventFilter, TIMESTAMP_SIZE, TimeRange,
+    collect_records, get_time_from_key, handle_paged_events, write_run_tcpdump,
 };
 use crate::datetime::DateTime;
 #[cfg(feature = "cluster")]
@@ -129,7 +129,7 @@ async fn handle_packets(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
+async fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
     let db = ctx.data::<Database>()?;
     let store = db.packet_store()?;
 
@@ -150,7 +150,11 @@ fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
 
     let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();
 
-    let pcap = write_run_tcpdump(&packet_vector)?;
+    // The web-owned reaper tracker: if the web graceful-shutdown timeout drops
+    // this request future mid-`tcpdump`, the child's kill-and-reap runs on this
+    // tracker, which the generation drains as part of web shutdown.
+    let reaper_tracker = ctx.data::<PcapReaperTracker>()?.0.clone();
+    let pcap = write_run_tcpdump(&packet_vector, reaper_tracker).await?;
 
     Ok(Pcap {
         request_time: filter.request_time,
@@ -195,6 +199,7 @@ impl PacketQuery {
         let handler = handle_pcap;
 
         events_in_cluster!(
+            async_handler
             ctx,
             filter,
             filter.sensor,

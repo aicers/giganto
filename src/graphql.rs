@@ -16,7 +16,7 @@ pub mod status;
 mod sysmon;
 mod timeseries;
 
-use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, process::Command, sync::Arc};
+use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, process::Stdio, sync::Arc};
 
 use anyhow::anyhow;
 use async_graphql::{
@@ -30,6 +30,7 @@ use libc::timeval;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::{Serialize, de::DeserializeOwned};
 use tempfile::NamedTempFile;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{Notify, mpsc::Sender};
 use tracing::error;
 
@@ -45,6 +46,7 @@ pub(crate) use crate::graphql::standalone::{
     events_in_cluster, events_vec_in_cluster, paged_events_in_cluster,
 };
 use crate::{
+    cancellation::TaskTracker,
     comm::{IngestSensors, PcapSensors, ingest::implement::EventFilter, peer::Peers},
     settings::{ConfigVisible, Settings},
     storage::{
@@ -192,6 +194,20 @@ pub struct RebootNotify(Arc<Notify>); // reboot
 pub struct PowerOffNotify(Arc<Notify>); // shutdown
 pub struct TerminateNotify(Arc<Notify>); // stop
 
+/// A web-owned [`TaskTracker`] the PCAP resolver registers `tcpdump`-reaping
+/// tasks on when a request future is dropped (e.g. by the web graceful-shutdown
+/// timeout).
+///
+/// It is a distinct newtype rather than the plain [`TaskTracker`] already in the
+/// context so `ctx.data::<TaskTracker>()` keeps returning the top-level tracker
+/// export registers on: async-graphql keys context data by type, so two bare
+/// `TaskTracker` values would collide. Unlike that top-level tracker — cancelled
+/// and drained *after* web shutdown — this one is drained by the generation as
+/// part of web shutdown, before subsystem cancellation begins, so a timed-out
+/// PCAP child is killed and reaped before the drain rather than as detached
+/// best-effort work that can outlive web shutdown.
+pub struct PcapReaperTracker(pub TaskTracker);
+
 #[allow(clippy::too_many_arguments)]
 pub fn schema(
     node_name: NodeName,
@@ -209,6 +225,19 @@ pub fn schema(
     notify_power_off: Arc<Notify>,
     notify_terminate: Arc<Notify>,
     settings: Settings,
+    // The generation's top-level tracker, plumbed into the GraphQL context so a
+    // detached export task can register itself in the same registry the
+    // shutdown drain waits on. Registering it there is what makes an accepted
+    // export finish before `database.shutdown()`; web-first shutdown is what
+    // stops new export requests from arriving, so no separate refusal path is
+    // added here.
+    top_level_tracker: TaskTracker,
+    // A separate web-owned tracker the PCAP resolver registers `tcpdump`-reaping
+    // tasks on. The generation drains it as part of web shutdown, before it
+    // cancels and drains the top-level tracker, so a request cut off by the web
+    // graceful-shutdown timeout has its `tcpdump` child killed and reaped before
+    // subsystem cancellation begins rather than left as detached work.
+    pcap_reaper_tracker: TaskTracker,
 ) -> Schema {
     let schema = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -222,7 +251,9 @@ pub fn schema(
         .data(TerminateNotify(notify_terminate))
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
-        .data(settings);
+        .data(settings)
+        .data(top_level_tracker)
+        .data(PcapReaperTracker(pcap_reaper_tracker));
     #[cfg(feature = "bootroot")]
     let schema = schema
         .data(runtime_ingest_sensors)
@@ -823,7 +854,74 @@ where
     Ok((iter, cursor, size))
 }
 
-fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
+/// Owns a running `tcpdump` child so a dropped request future both kills and
+/// reaps it, with the reaping observable to web shutdown.
+///
+/// `kill_on_drop(true)` only *signals* the child when the handle drops; Tokio
+/// documents that the follow-up reaping is best-effort, so a bare drop can leave
+/// a zombie. This issue requires that a timed-out PCAP request kill *and* await
+/// `tcpdump`, and that web shutdown be complete before subsystem cancellation
+/// and drain. So this guard's `Drop` registers the `kill().await` on a
+/// web-owned [`TaskTracker`] rather than a bare `tokio::spawn`: the generation
+/// drains that tracker as part of web shutdown, before it cancels the tracked
+/// subsystems, so the child is killed and reaped before the drain instead of by
+/// detached work that could outlive `WebController::shutdown`. The normal path
+/// disarms the guard (`child` set to `None`) after awaiting the child itself, so
+/// `Drop` only reaps on cancellation.
+///
+/// `kill_on_drop(true)` is kept on the child as a last-resort backstop: if the
+/// tracker is already closed (which web-first shutdown makes unreachable while a
+/// PCAP request is in flight), registration fails, the reaping future is dropped
+/// unpolled, and the signal-only drop is all that remains — no worse than the
+/// pre-existing behavior.
+struct ChildReaper {
+    child: Option<tokio::process::Child>,
+    tracker: TaskTracker,
+}
+
+impl Drop for ChildReaper {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let spawned = self
+                .tracker
+                .spawn("pcap-tcpdump-reaper", |_token| async move {
+                    // `kill()` sends `SIGKILL` and then `wait()`s, reaping the child
+                    // rather than merely signalling it. The token is ignored on
+                    // purpose: cancellation must not abandon the child mid-reap.
+                    if let Err(e) = child.kill().await {
+                        tracing::warn!(
+                            "failed to reap tcpdump child after a PCAP request was cancelled: {e}"
+                        );
+                    }
+                });
+            if let Err(e) = spawned {
+                tracing::warn!(
+                    "could not register tcpdump reaper on the web tracker ({e}); \
+                     the child is left to `kill_on_drop`'s best-effort signalling"
+                );
+            }
+        }
+    }
+}
+
+/// Writes `packets` to a temporary pcap file and returns `tcpdump`'s parsed
+/// output for it.
+///
+/// Cancellation and cleanup contract: the `NamedTempFile` is owned by this
+/// future for its whole life, so it is removed on normal completion, on error,
+/// and on cancellation — including when the web graceful-shutdown timeout drops
+/// the in-flight PCAP request future at one of the `.await`s below. The
+/// `tcpdump` child is held by a [`ChildReaper`] guard until it exits, so a
+/// dropped future kills and *awaits* the child (reaping it, not merely
+/// signalling it) rather than leaking a process. The reaping is registered on
+/// `reaper_tracker`, a web-owned tracker the generation drains as part of web
+/// shutdown, so the child is reaped before subsystem cancellation and drain.
+/// Permitted loss: a cancelled PCAP request yields no pcap output, and nothing
+/// durable is owed for it.
+async fn write_run_tcpdump(
+    packets: &Vec<pk>,
+    reaper_tracker: TaskTracker,
+) -> Result<String, anyhow::Error> {
     let temp_file = NamedTempFile::new()?;
     let file_path = temp_file.path();
     let new_pcap = Capture::dead_with_precision(Linktype::ETHERNET, pcap::Precision::Nano)?;
@@ -860,16 +958,56 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     let cmd = "tcpdump";
     let args = ["-n", "-X", "-tttt", "-v", "-r", file_path_str];
 
-    let output = Command::new(cmd)
+    // `tokio::process::Command` keeps the parse off the runtime worker thread.
+    // The child is spawned with its stdout piped so it can be read here, and is
+    // moved into a `ChildReaper` guard so that if this future is dropped (e.g.
+    // the web graceful-shutdown timeout cuts off the request), the child is
+    // killed *and* awaited rather than surviving as an orphan or zombie.
+    let mut child = tokio::process::Command::new(cmd)
         .env("PATH", "/usr/sbin:/usr/bin")
         .args(args)
-        .output()?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
 
-    if !output.status.success() {
+    // Take the stdout pipe before the child moves into the reaper.
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture tcpdump stdout"))?;
+    let mut reaper = ChildReaper {
+        child: Some(child),
+        tracker: reaper_tracker,
+    };
+
+    // Read tcpdump's output to EOF, then wait for it to exit. Both awaits are
+    // cancellation points; until they return the reaper owns the child, so a
+    // dropped future kills and reaps it. (stderr is discarded via `Stdio::null`,
+    // so it cannot fill a pipe and stall the read.)
+    let mut stdout_buf = Vec::new();
+    stdout.read_to_end(&mut stdout_buf).await?;
+    let status = reaper
+        .child
+        .as_mut()
+        .expect("set at construction and cleared only after this wait returns")
+        .wait()
+        .await?;
+
+    // `tcpdump` has exited and been reaped on the normal path; disarm the reaper
+    // so its `Drop` does not try to kill an already-finished child.
+    reaper.child = None;
+
+    // Keep the temporary input file alive until after `tcpdump` has finished
+    // reading it; dropping it here (rather than relying on end-of-scope) makes
+    // the ownership across the awaits explicit.
+    drop(temp_file);
+
+    if !status.success() {
         return Err(anyhow!("failed to run tcpdump"));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout_buf).into_owned())
 }
 
 fn check_address(filter_addr: Option<&IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {
@@ -1018,9 +1156,9 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::{
-        NodeName, Result, SearchFilter, StringNumberI64, StringNumberU32, StringNumberU64,
-        StringNumberUsize, TIMESTAMP_SIZE, TimeRange, check_address, check_agent_id,
-        check_contents, check_port, collect_exist_times, get_time_from_key,
+        ChildReaper, NodeName, Result, SearchFilter, StringNumberI64, StringNumberU32,
+        StringNumberU64, StringNumberUsize, TIMESTAMP_SIZE, TimeRange, check_address,
+        check_agent_id, check_contents, check_port, collect_exist_times, get_time_from_key,
         get_time_from_key_prefix, min_max_time, pk, reset_search_candidate_deserialize_count,
         schema, search_candidate_deserialize_count, time_range, write_run_tcpdump,
     };
@@ -1116,6 +1254,8 @@ mod tests {
                 notify_power_off,
                 notify_terminate,
                 settings,
+                crate::cancellation::TaskTracker::new(),
+                crate::cancellation::TaskTracker::new(),
             );
 
             Self {
@@ -1521,8 +1661,8 @@ mod tests {
         assert_eq!(err.to_string(), "invalid database key length");
     }
 
-    #[test]
-    fn test_write_run_tcpdump() {
+    #[tokio::test]
+    async fn test_write_run_tcpdump() {
         let packet = |timestamp, len| pk {
             packet_timestamp: timestamp,
             packet: vec![0u8; len],
@@ -1531,15 +1671,79 @@ mod tests {
             packet(1_700_049_600_123_456_789_i64, 60),
             packet(1_700_049_601_987_654_321_i64, 64),
         ];
-        let output = write_run_tcpdump(&packets).unwrap();
+        let tracker = crate::cancellation::TaskTracker::new();
+        let output = write_run_tcpdump(&packets, tracker.clone()).await.unwrap();
         assert!(!output.is_empty());
         assert!(output.contains("2023-11-15"));
         assert!(output.contains("123456"));
         assert!(output.contains("987654"));
         assert!(output.contains("0x0000"));
 
-        let out_empty = write_run_tcpdump(&vec![]).unwrap();
+        let out_empty = write_run_tcpdump(&vec![], tracker).await.unwrap();
         assert!(out_empty.is_empty());
+    }
+
+    /// A dropped `ChildReaper` must register its child's kill-and-reap on the
+    /// web tracker, and *draining that tracker must await the reaping* — the
+    /// exact lifecycle a timed-out PCAP request drives: the web graceful-shutdown
+    /// timeout drops the request future, and the generation then drains this
+    /// web-owned tracker as part of web shutdown before it cancels and drains the
+    /// tracked subsystems. A long-lived `sleep` stands in for a `tcpdump` that
+    /// has not finished, so the reaping is observed deterministically instead of
+    /// racing the millisecond-scale `tcpdump` runs the happy-path test uses.
+    ///
+    /// The assertion after the drain uses no polling: because `drain` awaits the
+    /// reaper task, which `wait()`s on the child, the pid must already be gone
+    /// once `drain` returns. A child that was only signalled (not awaited) would
+    /// linger as a zombie, for which `kill(pid, 0)` still returns `0`.
+    #[tokio::test]
+    async fn child_reaper_reaping_is_awaited_by_tracker_drain() {
+        use std::time::Duration;
+
+        use crate::cancellation::TaskTracker;
+
+        let tracker = TaskTracker::new();
+
+        let child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = i32::try_from(child.id().expect("child pid")).expect("pid fits in pid_t");
+
+        // The child is running: `kill(pid, 0)` probes for its existence.
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the child should be running before the reaper drops"
+        );
+
+        // Dropping the reaper registers the kill-and-reap on the tracker, exactly
+        // as the dropped PCAP request future does at the graceful-shutdown
+        // timeout.
+        drop(ChildReaper {
+            child: Some(child),
+            tracker: tracker.clone(),
+        });
+
+        // Drain the tracker the way the generation drains the web reaper tracker
+        // during web shutdown. Draining awaits the reaper, so once it returns the
+        // child has been killed and reaped.
+        tracker.close().expect("close the reaper tracker");
+        let outcome = tracker
+            .drain(Duration::from_secs(10))
+            .await
+            .expect("drain the reaper tracker");
+        assert!(
+            matches!(outcome, crate::cancellation::DrainOutcome::Drained),
+            "the reaper must finish within the drain, got {outcome:?}"
+        );
+
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "after the tracker drain the child must be killed and reaped, leaving no zombie"
+        );
     }
 
     #[test]

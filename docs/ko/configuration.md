@@ -14,6 +14,9 @@
 - `num_of_thread`: DB 백그라운드 스레드 수, 기본값 `8`
 - `max_subcompactions`: sub-compaction 수, 기본값 `2`
 - `compression`: RocksDB 압축 사용 여부, 기본값 `false`
+- `web_shutdown_timeout`: HTTPS GraphQL 서버의 정상 종료 대기 시간. 종료가
+  시작되면 서버는 새 요청 수신을 멈추고, 이미 수락된 요청이 끝날 때까지 이
+  시간만큼 기다린 뒤 여전히 진행 중인 요청을 종료합니다. 기본값 `30s`
 - `peer_srv_addr`: 노드 간 통신 수신 주소, 기본값 없음
 - `peers`: (클러스터) 연동 노드 목록, 기본값 없음
 
@@ -35,6 +38,7 @@ max_subcompactions = 2
 ack_transmission = 1024
 
 compression = false
+web_shutdown_timeout = "30s"
 ```
 
 ## 클러스터 설정 예시

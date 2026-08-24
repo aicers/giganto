@@ -25,6 +25,7 @@ const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
 const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 const DEFAULT_NUM_OF_THREAD: i32 = 8;
 const DEFAULT_MAX_SUBCOMPACTIONS: u32 = 2;
+const DEFAULT_WEB_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -79,6 +80,23 @@ pub struct Config {
     // RocksDB compression
     #[serde(default)]
     pub compression: bool,
+
+    // Graceful-shutdown budget for the HTTPS/GraphQL web server. It caps how
+    // long an already-accepted in-flight HTTP/GraphQL request may keep running
+    // after web shutdown begins, so a stuck request cannot hold up subsystem
+    // cancellation and drain. It is a request cutoff, not a process-level
+    // give-up policy: endpoint-specific ownership (export registration, PCAP
+    // child cleanup) still holds. Kept out of `visible` because it is process
+    // lifecycle configuration read once when a generation starts its web
+    // server, not a runtime-reloadable data setting.
+    #[serde(with = "humantime_serde", default = "default_web_shutdown_timeout")]
+    pub web_shutdown_timeout: Duration,
+}
+
+/// The default web graceful-shutdown timeout used when the configuration file
+/// omits `web_shutdown_timeout`.
+fn default_web_shutdown_timeout() -> Duration {
+    DEFAULT_WEB_SHUTDOWN_TIMEOUT
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -162,6 +180,7 @@ impl Settings {
             peers: self.config.peers.clone(),
             visible: new_config.clone(),
             compression: self.config.compression,
+            web_shutdown_timeout: self.config.web_shutdown_timeout,
         };
 
         let toml_str = toml::to_string(&temp_config)?;
@@ -479,6 +498,36 @@ export_dir = "{}"
         assert!(
             !settings.config.compression,
             "compression should default to false"
+        );
+        assert_eq!(
+            settings.config.web_shutdown_timeout,
+            Duration::from_secs(30),
+            "web_shutdown_timeout should default to 30 seconds"
+        );
+    }
+
+    #[test]
+    fn test_load_settings_honors_configured_web_shutdown_timeout() {
+        let data_dir = tempfile::tempdir().expect("Failed to create test_data dir");
+        let export_dir = tempfile::tempdir().expect("Failed to create test_export dir");
+        let config_content = format!(
+            r#"
+data_dir = "{}"
+export_dir = "{}"
+web_shutdown_timeout = "45s"
+"#,
+            data_dir.path().display(),
+            export_dir.path().display()
+        );
+
+        let (_dir, config_path) = create_config_file(&config_content);
+        let settings = Settings::load_or_restore(config_path.to_str().unwrap())
+            .expect("Failed to load settings");
+
+        assert_eq!(
+            settings.config.web_shutdown_timeout,
+            Duration::from_secs(45),
+            "a configured web_shutdown_timeout must override the 30s default"
         );
     }
 
@@ -816,6 +865,7 @@ export_dir = "{}"
             peers: None,
             visible: config_visible,
             compression: false,
+            web_shutdown_timeout: DEFAULT_WEB_SHUTDOWN_TIMEOUT,
         };
 
         // Case 1: Valid data directory

@@ -1299,3 +1299,101 @@ async fn export_icmp() {
     let res = schema.execute(query).await;
     assert_export_response(&schema, &res, "icmp", "json").await;
 }
+
+/// The detached export task must be registered in the top-level tracker so the
+/// generation's drain waits for an accepted export to finish before
+/// `database.shutdown()`. This drives `export_by_protocol` directly with a
+/// tracker, then drains it and asserts the export's output file exists once the
+/// drain has returned — the drain could only have observed it by waiting for
+/// the registered task.
+#[tokio::test]
+async fn export_task_is_registered_and_drained() {
+    use std::time::Duration;
+
+    use crate::cancellation::{DrainOutcome, TaskTracker};
+
+    let db_dir = tempdir().expect("db dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
+    let store = db.conn_store().expect("conn store");
+    let ts = test_event_timestamp_nanos();
+    insert_conn_raw_event(&store, "src1", ts, ts);
+
+    let export_dir = tempdir().expect("export dir");
+    let done_path = export_dir.path().join("conn_export.csv");
+    let progress_path = export_dir.path().join("conn_export.csv.dump");
+
+    let tracker = TaskTracker::new();
+    let mut filter = export_filter_base("conn");
+    filter.time = Some(TimeRange {
+        start: Some(DateTime::from_timestamp_nanos(ts - 1)),
+        end: Some(DateTime::from_timestamp_nanos(ts + 1)),
+    });
+
+    super::export_by_protocol(
+        &tracker,
+        db.clone(),
+        &filter,
+        "csv".to_string(),
+        done_path.clone(),
+        progress_path.clone(),
+    )
+    .expect("export should be accepted while the tracker is open");
+
+    let outcome = tracker
+        .cancel_and_drain(Duration::from_secs(30))
+        .await
+        .expect("drain should not hit a poisoned lock");
+    assert_eq!(
+        outcome,
+        DrainOutcome::Drained,
+        "the export task should finish within the drain timeout"
+    );
+    assert!(
+        done_path.exists(),
+        "the drain must have waited for the registered export to finalize its output file"
+    );
+}
+
+/// Once the tracker is closed, `export_by_protocol` cannot register new work.
+/// This is the narrow shutdown-window edge: web-first shutdown normally keeps
+/// new export requests from arriving at all, so nothing is spawned and no
+/// output is produced, but the request itself is not turned into a hard error.
+#[tokio::test]
+async fn export_after_tracker_closed_registers_nothing() {
+    use std::time::Duration;
+
+    use crate::cancellation::TaskTracker;
+
+    let db_dir = tempdir().expect("db dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open db");
+    let store = db.conn_store().expect("conn store");
+    let ts = test_event_timestamp_nanos();
+    insert_conn_raw_event(&store, "src1", ts, ts);
+
+    let export_dir = tempdir().expect("export dir");
+    let done_path = export_dir.path().join("conn_export.csv");
+    let progress_path = export_dir.path().join("conn_export.csv.dump");
+
+    let tracker = TaskTracker::new();
+    // Drain it empty so it is closed, standing in for a shutdown already begun.
+    tracker
+        .cancel_and_drain(Duration::from_secs(5))
+        .await
+        .expect("empty drain");
+
+    let filter = export_filter_base("conn");
+    super::export_by_protocol(
+        &tracker,
+        db.clone(),
+        &filter,
+        "csv".to_string(),
+        done_path.clone(),
+        progress_path.clone(),
+    )
+    .expect("a closed tracker is reported, not surfaced as a request error");
+
+    assert!(
+        !done_path.exists(),
+        "no export task should run once the tracker is closed"
+    );
+}

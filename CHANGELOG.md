@@ -113,6 +113,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   already in use, for instance — or one that ends unexpectedly now shuts the
   node down through the normal sequence and exits with a failure status
   instead of leaving it serving everything but ingest.
+- The HTTPS GraphQL (web) server now shuts down on a configurable budget. When
+  shutdown begins it stops accepting new connections and requests and lets
+  already-accepted requests finish, but a request still in flight is now cut
+  off after a graceful-shutdown timeout so it cannot hold the rest of shutdown
+  open indefinitely. The timeout is set with the new `web_shutdown_timeout`
+  configuration option and defaults to 30 seconds. A file export accepted just
+  before shutdown is waited for so it completes before the database closes, and
+  a PCAP request cut off by the timeout has its `tcpdump` child killed and
+  reaped and its temporary files removed rather than left behind.
 - Simplified the `cancellation` module down to `TaskTracker`. Its
   `CancellationToken` wrapper, along with `check_cancelled` and
   `CancelledError`, is gone in favor of `tokio_util::sync::CancellationToken`,

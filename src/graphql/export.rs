@@ -49,6 +49,7 @@ use crate::graphql::client::{
     derives::{Export as Exports, export as exports},
 };
 use crate::{
+    cancellation::TaskTracker,
     comm::ingest::implement::EventFilter,
     graphql::events_in_cluster,
     storage::{
@@ -1988,6 +1989,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
     let db = ctx.data::<Database>()?;
     let path = ctx.data::<PathBuf>()?;
     let node_name = ctx.data::<NodeName>()?;
+    let tracker = ctx.data::<TaskTracker>()?;
 
     // set export filename & file path
     if !path.exists() {
@@ -2012,6 +2014,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
     let download_path = format!("{}@{}", export_done_path.display(), node_name.0);
 
     export_by_protocol(
+        tracker,
         db.clone(),
         filter,
         export_type,
@@ -2093,7 +2096,26 @@ impl ExportQuery {
     }
 }
 
+/// Spawns the export as a detached task registered in the generation's
+/// top-level [`TaskTracker`].
+///
+/// The export work never lives in the GraphQL request future: the `export`
+/// mutation returns the download path without awaiting it, so a dropped request
+/// future — the web graceful-shutdown timeout included — has nothing of the
+/// job's to cancel. Registering the task in the tracker is what ties its
+/// lifetime to shutdown: the drain in `shutdown_generation` waits for it before
+/// `database.shutdown()`, so an export accepted before shutdown finishes
+/// reading RocksDB and writing its file rather than being cut off.
+///
+/// Permitted loss and cleanup: the task ignores its cancellation token on
+/// purpose — an accepted export runs to completion and is only ever waited on,
+/// never cancelled, so no partial-file cleanup branch is owed here. New exports
+/// stop arriving because web-first shutdown stops the web server accepting
+/// requests, not because this path refuses them; a `SpawnError` here therefore
+/// only happens in the narrow window where the tracker is already closed, and
+/// it is reported through the same logging path as an export failure.
 fn export_by_protocol(
+    tracker: &TaskTracker,
     db: Database,
     filter: &ExportFilter,
     export_type: String,
@@ -2105,7 +2127,9 @@ fn export_by_protocol(
 
     macro_rules! spawn_export {
         ($store_method:ident, $process_fn:ident) => {
-            tokio::spawn(async move {
+            // The token is ignored: an accepted export is waited on by the
+            // drain, never cancelled, so it runs to completion.
+            tracker.spawn("export", move |_cancel| async move {
                 if let Ok(store) = db.$store_method() {
                     match $process_fn(
                         &store,
@@ -2124,7 +2148,7 @@ fn export_by_protocol(
         };
     }
 
-    match protocol {
+    let spawn_result = match protocol {
         "conn" => spawn_export!(conn_store, process_export),
         "dns" => spawn_export!(dns_store, process_export),
         "malformed_dns" => spawn_export!(malformed_dns_store, process_export),
@@ -2168,6 +2192,14 @@ fn export_by_protocol(
         "secu log" => spawn_export!(secu_log_store, process_export),
         none => return Err(anyhow!("{none}: Unknown protocol").into()),
     };
+
+    if let Err(e) = spawn_result {
+        // The tracker is already closed, which only happens once shutdown has
+        // begun. Report it through the same path as an export failure rather
+        // than adding a separate refusal path; web-first shutdown is what keeps
+        // new export requests from reaching here in the first place.
+        error!("Failed to register export task for draining: {e}");
+    }
 
     Ok(())
 }
