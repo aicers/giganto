@@ -415,22 +415,13 @@ mod tests {
         let shutdown = tokio::spawn(controller.shutdown());
         sleep(Duration::from_millis(250)).await;
 
-        // A new request on the client that already completed `{ hello }` above
-        // must also be refused: the requirement is to stop new *requests*, not
-        // only new connections. `client` holds a pooled keep-alive connection
-        // from its pre-shutdown request, so this exercises the reused-connection
-        // path — whether the server closed the idle connection on graceful
-        // shutdown or (for a multiplexed h2 connection) refuses a new stream via
-        // GOAWAY, the request must not be served. If reqwest instead falls back
-        // to a fresh connection, the closed acceptor refuses it just the same.
-        let reused = run_query(&client, addr, "{ hello }").await;
-        assert!(
-            reused.is_err(),
-            "a new request on an already-established connection must be rejected once web shutdown has begun"
-        );
-
-        // A brand-new connection must likewise be refused now that shutdown has
-        // begun and the acceptor is closed.
+        // A brand-new connection must be refused now that shutdown has begun and
+        // the acceptor is closed. Rejection on an *already-established*
+        // keep-alive connection — the harder half of "stop new requests, not
+        // just new connections" — is proved deterministically over a raw TLS
+        // socket in `established_keepalive_connection_rejects_new_request`; a
+        // pooled `reqwest::Client` cannot establish that here because it may
+        // silently open a fresh connection instead of reusing its idle one.
         let new_client = build_mtls_client(&cert, &key, &ca);
         let rejected = run_query(&new_client, addr, "{ hello }").await;
         assert!(
@@ -555,5 +546,217 @@ mod tests {
             reports >= 1,
             "expected at least one pending-shutdown report while waiting, logs: {logs}"
         );
+    }
+
+    /// Opens a raw mTLS TLS connection to `addr`, presenting the client identity
+    /// and trusting the given CA. The connection speaks HTTP/1.1 by hand (no
+    /// ALPN is offered, so the server keeps HTTP/1.1), which lets a test drive a
+    /// single, known keep-alive connection and send a second request over it
+    /// after shutdown — something a pooled `reqwest::Client` cannot guarantee.
+    async fn raw_mtls_connection(
+        addr: SocketAddr,
+        cert_pem: &[u8],
+        key_pem: &[u8],
+        ca_pem: &[u8],
+    ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+        use std::sync::Arc;
+
+        use tokio_rustls::rustls::{
+            ClientConfig, RootCertStore,
+            pki_types::{CertificateDer, PrivateKeyDer, ServerName},
+        };
+
+        let mut roots = RootCertStore::empty();
+        for cert in rustls_pemfile::certs(&mut &ca_pem[..]) {
+            roots
+                .add(cert.expect("parse CA cert"))
+                .expect("add CA cert");
+        }
+        let client_certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut &cert_pem[..])
+            .map(|c| c.expect("parse client cert"))
+            .collect();
+        let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut &key_pem[..])
+            .expect("parse client key")
+            .expect("client key present");
+        let config = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_client_auth_cert(client_certs, key)
+            .expect("build client TLS config");
+
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        let tcp = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("TCP connect");
+        // The server certificate's SAN is `localhost`; connecting by IP would
+        // fail hostname verification, so hand rustls the name it certifies.
+        let server_name = ServerName::try_from("localhost").expect("server name");
+        connector
+            .connect(server_name, tcp)
+            .await
+            .expect("TLS handshake")
+    }
+
+    /// Sends one HTTP/1.1 `{ hello }` request over `stream` and reads the first
+    /// chunk of the response. Returns the raw response text, or an error if the
+    /// connection is closed (write fails, or the read returns EOF) — which is how
+    /// the server refuses a new request on a surviving keep-alive connection.
+    async fn http1_hello_over(
+        stream: &mut tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+    ) -> std::io::Result<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = r#"{"query":"{ hello }"}"#;
+        let request = format!(
+            "POST /graphql HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(request.as_bytes()).await?;
+        stream.flush().await?;
+
+        let mut buf = vec![0u8; 4096];
+        let n = stream.read(&mut buf).await?;
+        if n == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
+    }
+
+    /// A second request on an *already-established* keep-alive connection must be
+    /// refused once web shutdown has begun — the requirement is to stop new
+    /// *requests*, not only new connections. This drives a raw TLS socket so the
+    /// second request is demonstrably sent over the same connection the first
+    /// succeeded on, closing the gap a pooled HTTP client leaves open.
+    #[tokio::test]
+    async fn established_keepalive_connection_rejects_new_request() {
+        install_crypto_provider();
+        let dir = tempdir().expect("tempdir");
+        let (cert, key, ca) = write_pki(dir.path());
+        let addr = free_addr();
+
+        let controller = serve(
+            test_schema(),
+            addr,
+            cert.clone(),
+            key.clone(),
+            ca.clone(),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("serve should start");
+        sleep(Duration::from_millis(50)).await;
+
+        // Establish one keep-alive connection and confirm it serves a request
+        // before shutdown begins.
+        let mut conn = raw_mtls_connection(addr, &cert, &key, &ca).await;
+        let first = http1_hello_over(&mut conn)
+            .await
+            .expect("pre-shutdown request over the established connection");
+        assert!(
+            first.contains("200") && first.contains("world"),
+            "the established connection should serve a request before shutdown, got: {first}"
+        );
+
+        // Keep the server alive with a separate in-flight request so shutdown is
+        // still in progress when the second request goes out on `conn`.
+        let hold_client = build_mtls_client(&cert, &key, &ca);
+        let hold =
+            tokio::spawn(
+                async move { run_query(&hold_client, addr, "{ slow(millis: 1500) }").await },
+            );
+        sleep(Duration::from_millis(150)).await;
+
+        let shutdown = tokio::spawn(controller.shutdown());
+        sleep(Duration::from_millis(250)).await;
+
+        // The second request is sent over the *same* connection the first
+        // succeeded on. Graceful shutdown closes the idle keep-alive connection,
+        // so this must not be served: either the write/read fails outright, or no
+        // `200` response comes back.
+        let second = http1_hello_over(&mut conn).await;
+        let refused = match second {
+            Err(_) => true,
+            Ok(resp) => !resp.contains("200"),
+        };
+        assert!(
+            refused,
+            "a new request on an already-established keep-alive connection must be rejected \
+             once web shutdown has begun"
+        );
+
+        let _ = hold.await.expect("join the holding request");
+        shutdown
+            .await
+            .expect("join shutdown")
+            .expect("graceful shutdown");
+    }
+
+    /// The web graceful-shutdown timeout the server runs with must be the one the
+    /// configuration resolves — including the 30s default when the field is
+    /// omitted — not just a value the deserializer produces. This starts the web
+    /// lifecycle from settings with `web_shutdown_timeout` omitted and drives an
+    /// ordinary request and a graceful shutdown under the resolved default,
+    /// proving the default budget is what reaches `serve`. (The cutoff *timing*
+    /// of a stuck request is value-independent and is covered with a short
+    /// configured timeout by `request_exceeding_timeout_does_not_block_drain`, so
+    /// this need not wait the full 30s to exercise the default.)
+    #[tokio::test]
+    async fn default_timeout_from_settings_is_applied_to_web_lifecycle() {
+        use crate::settings::Settings;
+
+        install_crypto_provider();
+        let dir = tempdir().expect("tempdir");
+        let (cert, key, ca) = write_pki(dir.path());
+        let addr = free_addr();
+
+        // A config that omits `web_shutdown_timeout`, loaded through the real
+        // settings path so the field resolves to its serde default.
+        let data_dir = tempdir().expect("data dir");
+        let export_dir = tempdir().expect("export dir");
+        let config_contents = format!(
+            "data_dir = \"{}\"\nexport_dir = \"{}\"\n",
+            data_dir.path().display(),
+            export_dir.path().display()
+        );
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, config_contents).expect("write config");
+        let settings =
+            Settings::load(config_path.to_str().expect("config path utf8")).expect("load settings");
+
+        let resolved_timeout = settings.config.web_shutdown_timeout;
+        assert_eq!(
+            resolved_timeout,
+            Duration::from_secs(30),
+            "omitting web_shutdown_timeout must resolve to the 30s default"
+        );
+
+        // Run the web lifecycle under the resolved default and confirm an
+        // ordinary request completes and graceful shutdown returns.
+        let controller = serve(
+            test_schema(),
+            addr,
+            cert.clone(),
+            key.clone(),
+            ca.clone(),
+            resolved_timeout,
+        )
+        .await
+        .expect("serve should start under the default timeout");
+        sleep(Duration::from_millis(50)).await;
+
+        let client = build_mtls_client(&cert, &key, &ca);
+        let body = run_query(&client, addr, "{ hello }")
+            .await
+            .expect("request under the default timeout should succeed");
+        assert!(
+            body.contains("world"),
+            "the request should complete normally under the default budget, got: {body}"
+        );
+
+        controller
+            .shutdown()
+            .await
+            .expect("graceful shutdown under the default timeout");
     }
 }

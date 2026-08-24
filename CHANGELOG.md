@@ -119,7 +119,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   off after a graceful-shutdown timeout so it cannot hold the rest of shutdown
   open indefinitely. The timeout is set with the new `web_shutdown_timeout`
   configuration option and defaults to 30 seconds. A file export accepted just
-  before shutdown is waited for so it completes before the database closes.
+  before shutdown is waited for so it completes before the database closes, and
+  a PCAP request cut off by the timeout has its `tcpdump` child killed and
+  reaped and its temporary files removed rather than left behind.
 - Simplified the `cancellation` module down to `TaskTracker`. Its
   `CancellationToken` wrapper, along with `check_cancelled` and
   `CancelledError`, is gone in favor of `tokio_util::sync::CancellationToken`,
