@@ -16,7 +16,7 @@ pub mod status;
 mod sysmon;
 mod timeseries;
 
-use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, process::Command, sync::Arc};
+use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, sync::Arc};
 
 use anyhow::anyhow;
 use async_graphql::{
@@ -45,6 +45,7 @@ pub(crate) use crate::graphql::standalone::{
     events_in_cluster, events_vec_in_cluster, paged_events_in_cluster,
 };
 use crate::{
+    cancellation::TaskTracker,
     comm::{IngestSensors, PcapSensors, ingest::implement::EventFilter, peer::Peers},
     settings::{ConfigVisible, Settings},
     storage::{
@@ -209,6 +210,13 @@ pub fn schema(
     notify_power_off: Arc<Notify>,
     notify_terminate: Arc<Notify>,
     settings: Settings,
+    // The generation's top-level tracker, plumbed into the GraphQL context so a
+    // detached export task can register itself in the same registry the
+    // shutdown drain waits on. Registering it there is what makes an accepted
+    // export finish before `database.shutdown()`; web-first shutdown is what
+    // stops new export requests from arriving, so no separate refusal path is
+    // added here.
+    top_level_tracker: TaskTracker,
 ) -> Schema {
     let schema = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -222,7 +230,8 @@ pub fn schema(
         .data(TerminateNotify(notify_terminate))
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
-        .data(settings);
+        .data(settings)
+        .data(top_level_tracker);
     #[cfg(feature = "bootroot")]
     let schema = schema
         .data(runtime_ingest_sensors)
@@ -823,7 +832,19 @@ where
     Ok((iter, cursor, size))
 }
 
-fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
+/// Writes `packets` to a temporary pcap file and returns `tcpdump`'s parsed
+/// output for it.
+///
+/// Cancellation and cleanup contract: the `NamedTempFile` is owned by this
+/// future for its whole life, so it is removed on normal completion, on error,
+/// and on cancellation — including when the web graceful-shutdown timeout drops
+/// the in-flight PCAP request future at the `.await` below. The `tcpdump` child
+/// is spawned with `kill_on_drop(true)`, so dropping the future kills the child
+/// and lets the runtime reap it rather than leaking a process; on the normal
+/// path `wait_with_output` kills nothing and simply collects the child's
+/// output. Permitted loss: a cancelled PCAP request yields no pcap output, and
+/// nothing durable is owed for it.
+async fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     let temp_file = NamedTempFile::new()?;
     let file_path = temp_file.path();
     let new_pcap = Capture::dead_with_precision(Linktype::ETHERNET, pcap::Precision::Nano)?;
@@ -860,10 +881,22 @@ fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     let cmd = "tcpdump";
     let args = ["-n", "-X", "-tttt", "-v", "-r", file_path_str];
 
-    let output = Command::new(cmd)
+    // `tokio::process::Command` keeps the parse off the runtime worker thread
+    // and, with `kill_on_drop`, makes the child cancellation-safe: if this
+    // future is dropped (e.g. the web graceful-shutdown timeout cuts off the
+    // request), the child is killed and reaped instead of surviving as an
+    // orphan.
+    let output = tokio::process::Command::new(cmd)
         .env("PATH", "/usr/sbin:/usr/bin")
         .args(args)
-        .output()?;
+        .kill_on_drop(true)
+        .output()
+        .await?;
+
+    // Keep the temporary input file alive until after `tcpdump` has finished
+    // reading it; dropping it here (rather than relying on end-of-scope) makes
+    // the ownership across the await explicit.
+    drop(temp_file);
 
     if !output.status.success() {
         return Err(anyhow!("failed to run tcpdump"));
@@ -1116,6 +1149,7 @@ mod tests {
                 notify_power_off,
                 notify_terminate,
                 settings,
+                crate::cancellation::TaskTracker::new(),
             );
 
             Self {
@@ -1521,8 +1555,8 @@ mod tests {
         assert_eq!(err.to_string(), "invalid database key length");
     }
 
-    #[test]
-    fn test_write_run_tcpdump() {
+    #[tokio::test]
+    async fn test_write_run_tcpdump() {
         let packet = |timestamp, len| pk {
             packet_timestamp: timestamp,
             packet: vec![0u8; len],
@@ -1531,14 +1565,14 @@ mod tests {
             packet(1_700_049_600_123_456_789_i64, 60),
             packet(1_700_049_601_987_654_321_i64, 64),
         ];
-        let output = write_run_tcpdump(&packets).unwrap();
+        let output = write_run_tcpdump(&packets).await.unwrap();
         assert!(!output.is_empty());
         assert!(output.contains("2023-11-15"));
         assert!(output.contains("123456"));
         assert!(output.contains("987654"));
         assert!(output.contains("0x0000"));
 
-        let out_empty = write_run_tcpdump(&vec![]).unwrap();
+        let out_empty = write_run_tcpdump(&vec![]).await.unwrap();
         assert!(out_empty.is_empty());
     }
 

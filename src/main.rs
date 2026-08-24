@@ -373,15 +373,18 @@ async fn run_generation(
         notify_power_off.clone(),
         process.notify_terminate.clone(),
         settings.clone(),
+        top_level_tracker.clone(),
     );
 
     let web_addr = settings.config.visible.graphql_srv_addr;
+    let web_shutdown_timeout = settings.config.web_shutdown_timeout;
     let mut web_controller: Option<WebController> = match web::serve(
         schema.clone(),
         web_addr,
         tls.cert_pem.clone(),
         tls.key_pem.clone(),
         tls.ca_pem.clone(),
+        web_shutdown_timeout,
     )
     .await
     {
@@ -542,6 +545,7 @@ async fn run_generation(
         &mut web_controller,
         &schema,
         web_addr,
+        web_shutdown_timeout,
     )
     .await;
 
@@ -607,6 +611,7 @@ struct GenerationIntents {
 /// Shutting the generation's own machinery down is the caller's, not this
 /// function's: every arm that ends a generation is torn down the same way, so
 /// the sequence runs once at the call site instead of once per arm.
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_generation_end<S>(
     settings: &mut Settings,
     process: &ProcessContext,
@@ -615,6 +620,7 @@ async fn wait_for_generation_end<S>(
     web_controller: &mut Option<WebController>,
     schema: &S,
     web_addr: std::net::SocketAddr,
+    web_shutdown_timeout: Duration,
 ) -> GenerationEnd
 where
     S: async_graphql::Executor + Clone,
@@ -652,6 +658,7 @@ where
                     web_controller,
                     schema,
                     web_addr,
+                    web_shutdown_timeout,
                 ).await;
             }
         }
@@ -863,6 +870,7 @@ async fn reload_https_server<S>(
     web_controller: &mut Option<WebController>,
     schema: &S,
     web_addr: std::net::SocketAddr,
+    web_shutdown_timeout: Duration,
 ) where
     S: async_graphql::Executor + Clone,
 {
@@ -900,6 +908,7 @@ async fn reload_https_server<S>(
         current.cert_pem.clone(),
         current.key_pem.clone(),
         current.ca_pem.clone(),
+        web_shutdown_timeout,
     )
     .await
     {
@@ -1273,6 +1282,7 @@ mod tests {
                 initial.cert_pem.clone(),
                 initial.key_pem.clone(),
                 initial.ca_pem.clone(),
+                Duration::from_secs(30),
             )
             .await
             .expect("initial serve");
@@ -1294,6 +1304,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 addr,
+                Duration::from_secs(30),
             )
             .await;
             assert!(
@@ -1353,6 +1364,7 @@ mod tests {
                 initial.cert_pem.clone(),
                 initial.key_pem.clone(),
                 initial.ca_pem.clone(),
+                Duration::from_secs(30),
             )
             .await
             .expect("initial serve");
@@ -1375,6 +1387,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 addr,
+                Duration::from_secs(30),
             )
             .await;
 
@@ -1423,6 +1436,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 addr,
+                Duration::from_secs(30),
             )
             .await;
 
@@ -1461,6 +1475,7 @@ mod tests {
                 initial.cert_pem.clone(),
                 initial.key_pem.clone(),
                 initial.ca_pem.clone(),
+                Duration::from_secs(30),
             )
             .await
             .expect("initial serve");
@@ -1481,6 +1496,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 addr,
+                Duration::from_secs(30),
             )
             .await;
 
@@ -1531,6 +1547,7 @@ mod tests {
                 initial.cert_pem.clone(),
                 initial.key_pem.clone(),
                 initial.ca_pem.clone(),
+                Duration::from_secs(30),
             )
             .await
             .expect("initial serve");
@@ -1563,6 +1580,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 busy_addr,
+                Duration::from_secs(30),
             )
             .await;
 
@@ -1778,6 +1796,7 @@ mod tests {
                         ack_transmission: 1024,
                     },
                     compression: false,
+                    web_shutdown_timeout: Duration::from_secs(30),
                 },
                 cfg_path: path_string(&dir.join("config.toml")),
             }
@@ -1908,6 +1927,7 @@ mod tests {
                 &mut web_controller,
                 &schema,
                 ephemeral_addr(),
+                Duration::from_secs(30),
             )
             .await
         }
@@ -2078,6 +2098,7 @@ mod tests {
                     &mut web_controller,
                     &schema,
                     web_addr,
+                    Duration::from_secs(30),
                 ),
                 async {
                     notify_tls_reload.notify_one();

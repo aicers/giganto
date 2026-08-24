@@ -13,6 +13,25 @@ macro_rules! events_in_cluster {
         crate::graphql::ready($handler($ctx, &$filter, $($($handler_arg)*)*)).await
     }};
 
+    // Same as the primary variant, but for an `async` handler: it is awaited
+    // directly rather than wrapped in a ready future. Used by resolvers whose
+    // local work has a real yield point that must stay cancellation-aware
+    // (e.g. `pcap`, which awaits a child process).
+    (async_handler
+     $ctx:expr,
+     $filter:expr,
+     $sensor:expr,
+     $handler:ident,
+     $graphql_query_type:ident,
+     $variables_type:ty,
+     $response_data_type:path,
+     $field_name:ident,
+     $result_type:tt
+     $(, with_extra_handler_args ($($handler_arg:expr ),* ))?
+     $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
+        $handler($ctx, &$filter, $($($handler_arg)*)*).await
+    }};
+
     // This variant of the macro is for the case where API request comes with
     // multiple sensors. In this case, current giganto will figure out which
     // gigantos are in charge of requested `sensors`, including itself. If

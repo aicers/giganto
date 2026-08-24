@@ -14,6 +14,10 @@
 - `num_of_thread`: DB background thread count, default `8`
 - `max_subcompactions`: Number of sub-compactions, default `2`
 - `compression`: Enable RocksDB compression, default `false`
+- `web_shutdown_timeout`: Graceful-shutdown budget for the HTTPS GraphQL server.
+  When shutdown begins the server stops accepting new requests and waits up to
+  this duration for already-accepted requests to finish before terminating any
+  still in flight, default `30s`
 - `peer_srv_addr`: Node-to-node communication address, no default
 - `peers`: Connected cluster nodes, no default
 
@@ -35,6 +39,7 @@ max_subcompactions = 2
 ack_transmission = 1024
 
 compression = false
+web_shutdown_timeout = "30s"
 ```
 
 ## Cluster Configuration Example

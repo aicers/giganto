@@ -129,7 +129,7 @@ async fn handle_packets(
     handle_paged_events(store, filter, after, before, first, last).await
 }
 
-fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
+async fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
     let db = ctx.data::<Database>()?;
     let store = db.packet_store()?;
 
@@ -150,7 +150,7 @@ fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
 
     let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();
 
-    let pcap = write_run_tcpdump(&packet_vector)?;
+    let pcap = write_run_tcpdump(&packet_vector).await?;
 
     Ok(Pcap {
         request_time: filter.request_time,
@@ -195,6 +195,7 @@ impl PacketQuery {
         let handler = handle_pcap;
 
         events_in_cluster!(
+            async_handler
             ctx,
             filter,
             filter.sensor,

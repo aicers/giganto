@@ -307,6 +307,53 @@ macro_rules! events_in_cluster {
         }
     }};
 
+    // Same as the primary variant, but for an `async` handler: the local branch
+    // awaits it directly. Used by resolvers whose local work has a real yield
+    // point that must stay cancellation-aware (e.g. `pcap`, which awaits a
+    // child process). Peer forwarding is unchanged.
+    (async_handler
+     $ctx:expr,
+     $filter:expr,
+     $sensor:expr,
+     $handler:ident,
+     $graphql_query_type:ident,
+     $variables_type:ty,
+     $response_data_type:path,
+     $field_name:ident,
+     $result_type:tt
+     $(, with_extra_handler_args ($($handler_arg:expr ),* ))?
+     $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
+        type QueryVariables = $variables_type;
+        if crate::graphql::client::cluster::is_current_giganto_in_charge($ctx, &$sensor).await {
+            $handler($ctx, &$filter, $($($handler_arg)*)*).await
+        } else {
+            let peer_addr = crate::graphql::client::cluster::peer_in_charge_graphql_addr($ctx, &$sensor).await;
+
+            match peer_addr {
+                Some(peer_addr) => {
+                    #[allow(clippy::redundant_field_names)]
+                    let request_body = $graphql_query_type::build_query(QueryVariables {
+                        filter: $filter.into(),
+                        $($($query_arg: $query_arg_from),*)*
+                    });
+                    let response_to_result_converter = |resp_data: Option<$response_data_type>| {
+                        resp_data.map_or_else($result_type::new, |resp_data| {
+                            resp_data.$field_name.into()
+                        })
+                    };
+                    crate::graphql::client::cluster::request_peer(
+                        $ctx,
+                        peer_addr,
+                        request_body,
+                        response_to_result_converter,
+                    )
+                    .await
+                }
+                None => Ok($result_type::new()),
+            }
+        }
+    }};
+
     // This variant of the macro is for the case where API request comes with
     // multiple sensors. In this case, current giganto will figure out which
     // gigantos are in charge of requested `sensors`, including itself. If
