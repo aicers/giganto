@@ -187,7 +187,7 @@ mod tests {
         time::Duration,
     };
 
-    use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+    use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema};
     use tempfile::tempdir;
     use tokio::{net::TcpListener as TokioTcpListener, time::sleep};
 
@@ -201,6 +201,13 @@ mod tests {
         });
     }
 
+    /// Fires once, the first time the `slow` resolver is entered, so a test can
+    /// prove an in-flight request actually reached the resolver before it begins
+    /// shutdown — rather than relying on a wall-clock sleep that a slow connect
+    /// could outrun.
+    #[derive(Clone)]
+    struct SlowEntered(std::sync::Arc<tokio::sync::Notify>);
+
     struct Query;
 
     #[Object]
@@ -211,7 +218,14 @@ mod tests {
 
         /// Sleeps `millis` before answering, standing in for an in-flight
         /// request that is still running when web shutdown begins.
-        async fn slow(&self, millis: i32) -> &'static str {
+        ///
+        /// If a [`SlowEntered`] signal is present in the schema data, it is
+        /// notified on entry so the caller can synchronize on the request
+        /// reaching this resolver.
+        async fn slow(&self, ctx: &Context<'_>, millis: i32) -> &'static str {
+            if let Ok(entered) = ctx.data::<SlowEntered>() {
+                entered.0.notify_one();
+            }
             let millis = u64::try_from(millis).unwrap_or(0);
             sleep(Duration::from_millis(millis)).await;
             "slept"
@@ -220,6 +234,15 @@ mod tests {
 
     fn test_schema() -> Schema<Query, EmptyMutation, EmptySubscription> {
         Schema::build(Query, EmptyMutation, EmptySubscription).finish()
+    }
+
+    /// A schema whose `slow` resolver notifies `entered` on entry.
+    fn test_schema_signaling_entry(
+        entered: std::sync::Arc<tokio::sync::Notify>,
+    ) -> Schema<Query, EmptyMutation, EmptySubscription> {
+        Schema::build(Query, EmptyMutation, EmptySubscription)
+            .data(SlowEntered(entered))
+            .finish()
     }
 
     /// Builds an mTLS-capable reqwest client that presents the given client
@@ -445,9 +468,12 @@ mod tests {
         let (cert, key, ca) = write_pki(dir.path());
         let addr = free_addr();
 
-        // A short timeout so a stuck request is cut off quickly.
+        // A short timeout so a stuck request is cut off quickly. The schema
+        // notifies `entered` when the slow request reaches its resolver, so the
+        // test can begin shutdown only once the request is genuinely in-flight.
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
         let controller = serve(
-            test_schema(),
+            test_schema_signaling_entry(std::sync::Arc::clone(&entered)),
             addr,
             cert.clone(),
             key.clone(),
@@ -470,13 +496,20 @@ mod tests {
             })
             .expect("spawn should succeed");
 
-        // An in-flight request that would run far past the timeout.
+        // An in-flight request that would run far past the timeout. Wait for the
+        // resolver to signal entry — with a bound — before starting shutdown, so
+        // the cutoff is exercised against a request that was truly accepted and
+        // running. A wall-clock sleep here could let shutdown begin before the
+        // request connects, in which case the controller would return on an empty
+        // server and the drain would pass even if the cutoff were broken.
         let hold_client = build_mtls_client(&cert, &key, &ca);
         let hold =
             tokio::spawn(
                 async move { run_query(&hold_client, addr, "{ slow(millis: 10000) }").await },
             );
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::timeout(Duration::from_secs(5), entered.notified())
+            .await
+            .expect("the slow request must reach the resolver before shutdown begins");
 
         // The production tail — web shutdown, then the top-level drain — must
         // finish within a bounded window. Web shutdown returns once the 300ms
