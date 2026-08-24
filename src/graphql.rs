@@ -990,7 +990,7 @@ async fn write_run_tcpdump(
     let status = reaper
         .child
         .as_mut()
-        .expect("child owned by reaper")
+        .expect("set at construction and cleared only after this wait returns")
         .wait()
         .await?;
 
