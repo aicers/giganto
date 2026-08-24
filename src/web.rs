@@ -289,15 +289,7 @@ mod tests {
             .expect("hold port");
         let addr = blocker.local_addr().expect("addr");
 
-        let result = serve(
-            test_schema(),
-            addr,
-            cert,
-            key,
-            ca,
-            Duration::from_secs(30),
-        )
-        .await;
+        let result = serve(test_schema(), addr, cert, key, ca, Duration::from_secs(30)).await;
         assert!(result.is_err(), "bind on occupied port should fail");
     }
 
@@ -368,9 +360,7 @@ mod tests {
         // Start an in-flight request, then let it run into the shutdown window.
         let client = build_mtls_client(&cert, &key, &ca);
         let inflight =
-            tokio::spawn(
-                async move { run_query(&client, addr, "{ slow(millis: 800) }").await },
-            );
+            tokio::spawn(async move { run_query(&client, addr, "{ slow(millis: 800) }").await });
         sleep(Duration::from_millis(150)).await;
 
         // Shutdown waits for the accepted request rather than cutting it off.
@@ -414,9 +404,10 @@ mod tests {
         // Hold the server open with an in-flight request so shutdown is still
         // in progress while we try a new one.
         let hold_client = build_mtls_client(&cert, &key, &ca);
-        let hold = tokio::spawn(async move {
-            run_query(&hold_client, addr, "{ slow(millis: 1500) }").await
-        });
+        let hold =
+            tokio::spawn(
+                async move { run_query(&hold_client, addr, "{ slow(millis: 1500) }").await },
+            );
         sleep(Duration::from_millis(150)).await;
 
         // Begin shutdown; the acceptor stops taking new connections.
@@ -462,9 +453,10 @@ mod tests {
 
         // An in-flight request that would run far past the timeout.
         let hold_client = build_mtls_client(&cert, &key, &ca);
-        let hold = tokio::spawn(async move {
-            run_query(&hold_client, addr, "{ slow(millis: 10000) }").await
-        });
+        let hold =
+            tokio::spawn(
+                async move { run_query(&hold_client, addr, "{ slow(millis: 10000) }").await },
+            );
         sleep(Duration::from_millis(150)).await;
 
         // Shutdown must return once the timeout elapses, not after the stuck
