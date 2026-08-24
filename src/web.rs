@@ -410,16 +410,32 @@ mod tests {
             );
         sleep(Duration::from_millis(150)).await;
 
-        // Begin shutdown; the acceptor stops taking new connections.
+        // Begin shutdown; the acceptor stops taking new connections and the
+        // server stops admitting new requests.
         let shutdown = tokio::spawn(controller.shutdown());
         sleep(Duration::from_millis(250)).await;
 
-        // A brand-new connection must be refused now that shutdown has begun.
+        // A new request on the client that already completed `{ hello }` above
+        // must also be refused: the requirement is to stop new *requests*, not
+        // only new connections. `client` holds a pooled keep-alive connection
+        // from its pre-shutdown request, so this exercises the reused-connection
+        // path — whether the server closed the idle connection on graceful
+        // shutdown or (for a multiplexed h2 connection) refuses a new stream via
+        // GOAWAY, the request must not be served. If reqwest instead falls back
+        // to a fresh connection, the closed acceptor refuses it just the same.
+        let reused = run_query(&client, addr, "{ hello }").await;
+        assert!(
+            reused.is_err(),
+            "a new request on an already-established connection must be rejected once web shutdown has begun"
+        );
+
+        // A brand-new connection must likewise be refused now that shutdown has
+        // begun and the acceptor is closed.
         let new_client = build_mtls_client(&cert, &key, &ca);
         let rejected = run_query(&new_client, addr, "{ hello }").await;
         assert!(
             rejected.is_err(),
-            "a new request must be rejected once web shutdown has begun"
+            "a new request on a fresh connection must be rejected once web shutdown has begun"
         );
 
         let _ = hold.await.expect("join the holding request");

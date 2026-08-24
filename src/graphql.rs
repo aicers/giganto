@@ -16,7 +16,7 @@ pub mod status;
 mod sysmon;
 mod timeseries;
 
-use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, process::Stdio, sync::Arc};
 
 use anyhow::anyhow;
 use async_graphql::{
@@ -30,6 +30,7 @@ use libc::timeval;
 use pcap::{Capture, Linktype, Packet, PacketHeader};
 use serde::{Serialize, de::DeserializeOwned};
 use tempfile::NamedTempFile;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{Notify, mpsc::Sender};
 use tracing::error;
 
@@ -832,18 +833,39 @@ where
     Ok((iter, cursor, size))
 }
 
+/// Owns a running `tcpdump` child so a dropped request future both kills and
+/// reaps it.
+///
+/// `kill_on_drop(true)` only *signals* the child when the handle drops; Tokio
+/// documents that the follow-up reaping is best-effort, so a bare drop can leave
+/// a zombie. This issue requires that a timed-out PCAP request kill *and* await
+/// `tcpdump`, so this guard's `Drop` spawns a detached task that runs
+/// `kill().await` — sending `SIGKILL` and then waiting for the child to be
+/// reaped. The normal path disarms the guard (`self.0 = None`) after awaiting
+/// the child itself, so `Drop` only reaps on cancellation.
+struct ChildReaper(Option<tokio::process::Child>);
+
+impl Drop for ChildReaper {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            tokio::spawn(async move {
+                let _ = child.kill().await;
+            });
+        }
+    }
+}
+
 /// Writes `packets` to a temporary pcap file and returns `tcpdump`'s parsed
 /// output for it.
 ///
 /// Cancellation and cleanup contract: the `NamedTempFile` is owned by this
 /// future for its whole life, so it is removed on normal completion, on error,
 /// and on cancellation — including when the web graceful-shutdown timeout drops
-/// the in-flight PCAP request future at the `.await` below. The `tcpdump` child
-/// is spawned with `kill_on_drop(true)`, so dropping the future kills the child
-/// and lets the runtime reap it rather than leaking a process; on the normal
-/// path `wait_with_output` kills nothing and simply collects the child's
-/// output. Permitted loss: a cancelled PCAP request yields no pcap output, and
-/// nothing durable is owed for it.
+/// the in-flight PCAP request future at one of the `.await`s below. The
+/// `tcpdump` child is held by a [`ChildReaper`] guard until it exits, so a
+/// dropped future kills and *awaits* the child (reaping it, not merely
+/// signalling it) rather than leaking a process. Permitted loss: a cancelled
+/// PCAP request yields no pcap output, and nothing durable is owed for it.
 async fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     let temp_file = NamedTempFile::new()?;
     let file_path = temp_file.path();
@@ -881,28 +903,53 @@ async fn write_run_tcpdump(packets: &Vec<pk>) -> Result<String, anyhow::Error> {
     let cmd = "tcpdump";
     let args = ["-n", "-X", "-tttt", "-v", "-r", file_path_str];
 
-    // `tokio::process::Command` keeps the parse off the runtime worker thread
-    // and, with `kill_on_drop`, makes the child cancellation-safe: if this
-    // future is dropped (e.g. the web graceful-shutdown timeout cuts off the
-    // request), the child is killed and reaped instead of surviving as an
-    // orphan.
-    let output = tokio::process::Command::new(cmd)
+    // `tokio::process::Command` keeps the parse off the runtime worker thread.
+    // The child is spawned with its stdout piped so it can be read here, and is
+    // moved into a `ChildReaper` guard so that if this future is dropped (e.g.
+    // the web graceful-shutdown timeout cuts off the request), the child is
+    // killed *and* awaited rather than surviving as an orphan or zombie.
+    let mut child = tokio::process::Command::new(cmd)
         .env("PATH", "/usr/sbin:/usr/bin")
         .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .kill_on_drop(true)
-        .output()
+        .spawn()?;
+
+    // Take the stdout pipe before the child moves into the reaper.
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture tcpdump stdout"))?;
+    let mut reaper = ChildReaper(Some(child));
+
+    // Read tcpdump's output to EOF, then wait for it to exit. Both awaits are
+    // cancellation points; until they return the reaper owns the child, so a
+    // dropped future kills and reaps it. (stderr is discarded via `Stdio::null`,
+    // so it cannot fill a pipe and stall the read.)
+    let mut stdout_buf = Vec::new();
+    stdout.read_to_end(&mut stdout_buf).await?;
+    let status = reaper
+        .0
+        .as_mut()
+        .expect("child owned by reaper")
+        .wait()
         .await?;
+
+    // `tcpdump` has exited and been reaped on the normal path; disarm the reaper
+    // so its `Drop` does not try to kill an already-finished child.
+    reaper.0 = None;
 
     // Keep the temporary input file alive until after `tcpdump` has finished
     // reading it; dropping it here (rather than relying on end-of-scope) makes
-    // the ownership across the await explicit.
+    // the ownership across the awaits explicit.
     drop(temp_file);
 
-    if !output.status.success() {
+    if !status.success() {
         return Err(anyhow!("failed to run tcpdump"));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout_buf).into_owned())
 }
 
 fn check_address(filter_addr: Option<&IpRange>, target_addr: Option<IpAddr>) -> Result<bool> {
@@ -1051,9 +1098,9 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::{
-        NodeName, Result, SearchFilter, StringNumberI64, StringNumberU32, StringNumberU64,
-        StringNumberUsize, TIMESTAMP_SIZE, TimeRange, check_address, check_agent_id,
-        check_contents, check_port, collect_exist_times, get_time_from_key,
+        ChildReaper, NodeName, Result, SearchFilter, StringNumberI64, StringNumberU32,
+        StringNumberU64, StringNumberUsize, TIMESTAMP_SIZE, TimeRange, check_address,
+        check_agent_id, check_contents, check_port, collect_exist_times, get_time_from_key,
         get_time_from_key_prefix, min_max_time, pk, reset_search_candidate_deserialize_count,
         schema, search_candidate_deserialize_count, time_range, write_run_tcpdump,
     };
@@ -1574,6 +1621,52 @@ mod tests {
 
         let out_empty = write_run_tcpdump(&vec![]).await.unwrap();
         assert!(out_empty.is_empty());
+    }
+
+    /// A dropped `ChildReaper` must kill *and* reap its child, not merely signal
+    /// it. This is the cancellation path a web graceful-shutdown timeout takes
+    /// through `write_run_tcpdump`: the request future is dropped while `tcpdump`
+    /// still runs. A long-lived `sleep` stands in for a `tcpdump` that has not
+    /// finished, so the drop is observed deterministically instead of racing the
+    /// millisecond-scale `tcpdump` runs the happy-path test uses.
+    #[tokio::test]
+    async fn child_reaper_kills_and_awaits_on_drop() {
+        use std::time::Duration;
+
+        let child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = i32::try_from(child.id().expect("child pid")).expect("pid fits in pid_t");
+
+        // The child is running: `kill(pid, 0)` probes for its existence.
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the child should be running before the reaper drops"
+        );
+
+        // Dropping the reaper spawns the detached kill-and-await task.
+        drop(ChildReaper(Some(child)));
+
+        // Once the child is both killed and *reaped*, its pid leaves the process
+        // table and `kill(pid, 0)` fails with `ESRCH`. A child that was only
+        // signalled (not awaited) would linger as a zombie, for which
+        // `kill(pid, 0)` still returns `0`; polling for the `ESRCH` transition is
+        // therefore what distinguishes reaping from bare signalling.
+        let mut reaped = false;
+        for _ in 0..500 {
+            if unsafe { libc::kill(pid, 0) } == -1 {
+                reaped = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            reaped,
+            "dropping the reaper must kill and reap the child, leaving no zombie"
+        );
     }
 
     #[test]
