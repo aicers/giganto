@@ -187,7 +187,7 @@ mod tests {
         time::Duration,
     };
 
-    use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+    use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema};
     use tempfile::tempdir;
     use tokio::{net::TcpListener as TokioTcpListener, time::sleep};
 
@@ -201,6 +201,13 @@ mod tests {
         });
     }
 
+    /// Fires once, the first time the `slow` resolver is entered, so a test can
+    /// prove an in-flight request actually reached the resolver before it begins
+    /// shutdown — rather than relying on a wall-clock sleep that a slow connect
+    /// could outrun.
+    #[derive(Clone)]
+    struct SlowEntered(std::sync::Arc<tokio::sync::Notify>);
+
     struct Query;
 
     #[Object]
@@ -211,7 +218,14 @@ mod tests {
 
         /// Sleeps `millis` before answering, standing in for an in-flight
         /// request that is still running when web shutdown begins.
-        async fn slow(&self, millis: i32) -> &'static str {
+        ///
+        /// If a [`SlowEntered`] signal is present in the schema data, it is
+        /// notified on entry so the caller can synchronize on the request
+        /// reaching this resolver.
+        async fn slow(&self, ctx: &Context<'_>, millis: i32) -> &'static str {
+            if let Ok(entered) = ctx.data::<SlowEntered>() {
+                entered.0.notify_one();
+            }
             let millis = u64::try_from(millis).unwrap_or(0);
             sleep(Duration::from_millis(millis)).await;
             "slept"
@@ -220,6 +234,15 @@ mod tests {
 
     fn test_schema() -> Schema<Query, EmptyMutation, EmptySubscription> {
         Schema::build(Query, EmptyMutation, EmptySubscription).finish()
+    }
+
+    /// A schema whose `slow` resolver notifies `entered` on entry.
+    fn test_schema_signaling_entry(
+        entered: std::sync::Arc<tokio::sync::Notify>,
+    ) -> Schema<Query, EmptyMutation, EmptySubscription> {
+        Schema::build(Query, EmptyMutation, EmptySubscription)
+            .data(SlowEntered(entered))
+            .finish()
     }
 
     /// Builds an mTLS-capable reqwest client that presents the given client
@@ -437,17 +460,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_exceeding_timeout_does_not_block_drain() {
-        use std::time::Instant;
+    async fn stuck_web_request_cutoff_lets_the_top_level_drain_reach_drained() {
+        use crate::cancellation::{DrainOutcome, TaskTracker};
 
         install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_pki(dir.path());
         let addr = free_addr();
 
-        // A short timeout so a stuck request is cut off quickly.
+        // A short timeout so a stuck request is cut off quickly. The schema
+        // notifies `entered` when the slow request reaches its resolver, so the
+        // test can begin shutdown only once the request is genuinely in-flight.
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
         let controller = serve(
-            test_schema(),
+            test_schema_signaling_entry(std::sync::Arc::clone(&entered)),
             addr,
             cert.clone(),
             key.clone(),
@@ -458,23 +484,53 @@ mod tests {
         .expect("serve should start");
         sleep(Duration::from_millis(50)).await;
 
-        // An in-flight request that would run far past the timeout.
+        // A populated top-level tracker standing in for the per-generation
+        // tasks whose drain runs after web shutdown returns, exactly as
+        // `shutdown_generation` orders it. Its lone task parks until cancelled,
+        // so the drain reaches `Drained` only once it actually runs — which it
+        // cannot until web shutdown has stopped blocking on the stuck request.
+        let tracker = TaskTracker::new();
+        tracker
+            .spawn("synthetic-top", |token| async move {
+                token.cancelled().await;
+            })
+            .expect("spawn should succeed");
+
+        // An in-flight request that would run far past the timeout. Wait for the
+        // resolver to signal entry — with a bound — before starting shutdown, so
+        // the cutoff is exercised against a request that was truly accepted and
+        // running. A wall-clock sleep here could let shutdown begin before the
+        // request connects, in which case the controller would return on an empty
+        // server and the drain would pass even if the cutoff were broken.
         let hold_client = build_mtls_client(&cert, &key, &ca);
         let hold =
             tokio::spawn(
                 async move { run_query(&hold_client, addr, "{ slow(millis: 10000) }").await },
             );
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::timeout(Duration::from_secs(5), entered.notified())
+            .await
+            .expect("the slow request must reach the resolver before shutdown begins");
 
-        // Shutdown must return once the timeout elapses, not after the stuck
-        // request would have finished — otherwise it could block subsystem
-        // cancellation and drain forever.
-        let started = Instant::now();
-        controller.shutdown().await.expect("graceful shutdown");
-        let elapsed = started.elapsed();
-        assert!(
-            elapsed < Duration::from_secs(5),
-            "shutdown must not wait for the stuck request; it took {elapsed:?}"
+        // The production tail — web shutdown, then the top-level drain — must
+        // finish within a bounded window. Web shutdown returns once the 300ms
+        // timeout cuts the request off, not after the 10s request would have
+        // finished; only then does the populated tracker drain. If the web
+        // graceful-shutdown timeout no longer cut off the stuck request, web
+        // shutdown would block for the full 10s and this bounded window would
+        // expire, failing the test rather than letting the drain run.
+        let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+            controller.shutdown().await.expect("graceful shutdown");
+            tracker
+                .cancel_and_drain(Duration::from_secs(5))
+                .await
+                .expect("drain should not report a poisoned lock")
+        })
+        .await
+        .expect("web shutdown and the top-level drain must finish within the bounded window");
+        assert_eq!(
+            outcome,
+            DrainOutcome::Drained,
+            "the top-level drain must complete once web shutdown has returned"
         );
 
         // The stuck request was cut off rather than served to completion.
@@ -485,14 +541,17 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn shutdown_reports_pending_without_aborting_the_web_task() {
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_reports_each_pending_round_without_aborting_the_web_task() {
         use std::sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
         };
 
+        use tokio::sync::oneshot;
         use tracing_subscriber::fmt::MakeWriter;
+
+        const REPORT_INTERVAL: Duration = Duration::from_millis(25);
 
         #[derive(Clone)]
         struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
@@ -523,17 +582,38 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        // A stand-in web task that finishes on its own after several report
-        // intervals, proving the loop reports repeatedly and never aborts it.
+        // A stand-in web task that stays pending until released, then finishes
+        // on its own. Deferring completion past several report intervals is what
+        // lets this prove the loop reports each round and never aborts the task:
+        // the release flag is set only if the task runs to its end, so an
+        // aborted task would leave it `false`.
         let completed = Arc::new(AtomicBool::new(false));
         let completed_task = Arc::clone(&completed);
+        let (release_tx, release_rx) = oneshot::channel();
         let handle = tokio::spawn(async move {
-            sleep(Duration::from_millis(120)).await;
+            let _ = release_rx.await;
             completed_task.store(true, Ordering::SeqCst);
         });
 
-        await_with_pending_reports(handle, Duration::from_millis(25))
+        let await_task = tokio::spawn(await_with_pending_reports(handle, REPORT_INTERVAL));
+
+        // Virtual time only advances while every task is idle, so this lets
+        // exactly two report rounds expire while the web task remains pending,
+        // with no wall-clock wait.
+        sleep(REPORT_INTERVAL * 2 + REPORT_INTERVAL / 2).await;
+        assert!(
+            !completed.load(Ordering::SeqCst),
+            "the web task must still be pending before it is released"
+        );
+
+        release_tx
+            .send(())
+            .expect("the reporting loop should still be awaiting the web task");
+
+        tokio::time::timeout(Duration::from_secs(5), await_task)
             .await
+            .expect("the reporting loop should return once the web task finishes")
+            .expect("await task should not panic")
             .expect("await should observe the task's normal completion");
 
         assert!(
@@ -542,9 +622,9 @@ mod tests {
         );
         let logs = String::from_utf8(buf.lock().expect("capture lock").clone()).expect("utf8 logs");
         let reports = logs.matches("shutdown still pending").count();
-        assert!(
-            reports >= 1,
-            "expected at least one pending-shutdown report while waiting, logs: {logs}"
+        assert_eq!(
+            reports, 2,
+            "each pending round should be reported while the web task stays pending, logs: {logs}"
         );
     }
 
@@ -699,7 +779,8 @@ mod tests {
     /// ordinary request and a graceful shutdown under the resolved default,
     /// proving the default budget is what reaches `serve`. (The cutoff *timing*
     /// of a stuck request is value-independent and is covered with a short
-    /// configured timeout by `request_exceeding_timeout_does_not_block_drain`, so
+    /// configured timeout by
+    /// `stuck_web_request_cutoff_lets_the_top_level_drain_reach_drained`, so
     /// this need not wait the full 30s to exercise the default.)
     #[tokio::test]
     async fn default_timeout_from_settings_is_applied_to_web_lifecycle() {
