@@ -10,7 +10,9 @@ mod test_bootroot;
 mod tls_reload;
 mod web;
 
-use std::{fs::OpenOptions, path::Path, process::exit, sync::Arc, time::Duration};
+use std::{
+    fs::OpenOptions, ops::ControlFlow, path::Path, process::exit, sync::Arc, time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
@@ -65,6 +67,15 @@ const TOP_LEVEL_DRAIN_LABEL: &str = "shutdown";
 /// top-level label so a shutdown waiting on a `tcpdump` reaper is told apart
 /// from one waiting on a tracked subsystem.
 const WEB_REAPER_DRAIN_LABEL: &str = "web PCAP reaper";
+
+/// Prefix every phase marker of the shutdown sequence carries.
+///
+/// The sequence is otherwise nearly silent on a clean shutdown, so these are
+/// what say which phase a stalled shutdown is stuck in — and what lets a test
+/// pull the whole sequence out of a captured log by filtering on one string.
+/// It is deliberately not a prefix of the drain's own round reports, which
+/// name their tracker instead.
+const SHUTDOWN_PHASE: &str = "shutdown phase";
 
 /// Creates a reqwest client configured for mTLS GraphQL communication.
 ///
@@ -167,25 +178,152 @@ async fn main() -> Result<()> {
         }
     }
 
+    // The seam is built here and lent to the lifecycle rather than
+    // constructed inside it: a lifecycle that owned its own production effects
+    // could never be driven by a test without a second, test-only entry point,
+    // and the two would drift.
+    run_lifecycle(&mut settings, &process, &HostEffects).await
+}
+
+/// The effects the lifecycle performs on something outside its own control
+/// flow.
+///
+/// Shutting the store down, rebooting the host and powering it off are grouped
+/// into one seam because they are the three things a test has to be able to
+/// watch happen, watch not happen, and make fail. All three are synchronous;
+/// the lifecycle awaits nothing through this trait. It is `Send + Sync`
+/// because the teardown holds a reference to it across awaits and the futures
+/// that do so have to be spawnable.
+trait LifecycleEffects: Send + Sync {
+    /// Flushes the store, writes its WAL and cancels its background work.
+    ///
+    /// This does not close the database and does not release RocksDB's file
+    /// `LOCK`: the lock goes when the last [`storage::Database`] clone is
+    /// dropped, which happens as the generation returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store could not be flushed. That is the one
+    /// outcome the lifecycle refuses to follow with a host action or a new
+    /// generation.
+    fn shutdown_database(&self, database: &storage::Database) -> Result<()>;
+
+    /// Reboots the host.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the host refused the request.
+    fn reboot(&self) -> Result<()>;
+
+    /// Powers the host off.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the host refused the request.
+    fn power_off(&self) -> Result<()>;
+}
+
+/// The production seam: the real store and the real host.
+struct HostEffects;
+
+impl LifecycleEffects for HostEffects {
+    fn shutdown_database(&self, database: &storage::Database) -> Result<()> {
+        database.shutdown()
+    }
+
+    fn reboot(&self) -> Result<()> {
+        roxy::reboot()
+            .map(|_| ())
+            .map_err(|e| anyhow!("cannot restart the system: {e}"))
+    }
+
+    fn power_off(&self) -> Result<()> {
+        roxy::power_off()
+            .map(|_| ())
+            .map_err(|e| anyhow!("cannot power off the system: {e}"))
+    }
+}
+
+/// Runs generations until one of them ends the process.
+///
+/// This is the whole of the process lifecycle: it starts a generation, takes
+/// the action the generation's ending asks for, and either comes back around
+/// for another generation or returns. `main` keeps only argument parsing,
+/// process-wide setup, and the call into here.
+///
+/// The order of the two steps is the point. [`run_generation`] returns only
+/// after it has dropped every [`storage::Database`] clone it held, and only
+/// then does [`act_on_generation_end`] run: a reload's next generation reopens
+/// the same path, and `Database::open` fails while a clone of the previous one
+/// is alive. Reboot and power-off do not depend on that drop the way a reload
+/// does, but they take the same position so that one order holds for every
+/// ending.
+///
+/// # Errors
+///
+/// Returns an error if a generation failed, if the store could not be shut
+/// down, if the host refused a reboot or a power-off, or if the ingest entry
+/// task ended on its own.
+async fn run_lifecycle(
+    settings: &mut Settings,
+    process: &ProcessContext,
+    effects: &dyn LifecycleEffects,
+) -> Result<()> {
     loop {
-        match run_generation(&mut settings, &process).await? {
-            GenerationEnd::ReloadConfig => {}
-            GenerationEnd::Terminate => return Ok(()),
-            GenerationEnd::Reboot => {
-                roxy::reboot().map_err(|e| anyhow!("cannot restart the system: {e}"))?;
-                return Ok(());
-            }
-            GenerationEnd::PowerOff => {
-                roxy::power_off().map_err(|e| anyhow!("cannot power off the system: {e}"))?;
-                return Ok(());
-            }
-            // The generation has already drained and closed itself down; what
-            // is left is to tell the process manager that this exit was not
-            // asked for, so a unit configured to restart on failure does.
-            // What failed was reported where it happened.
-            GenerationEnd::IngestExited => {
-                return Err(anyhow!("the ingest subsystem ended before the daemon did"));
-            }
+        let generation_end = run_generation(settings, process, effects).await?;
+        match act_on_generation_end(generation_end, effects)? {
+            ControlFlow::Continue(()) => {}
+            ControlFlow::Break(()) => return Ok(()),
+        }
+    }
+}
+
+/// Takes the one action a generation's ending asks for, and says whether the
+/// lifecycle carries on.
+///
+/// This runs immediately after the teardown has returned, so it is the last
+/// step of the observable shutdown sequence and the only one that reaches
+/// outside the process. Everything before it is identical for every ending.
+///
+/// # Errors
+///
+/// Returns an error if the host refused the reboot or the power-off, or if the
+/// generation ended because the ingest entry task did: nobody asked for that
+/// one, so the process manager is told the exit was not wanted.
+fn act_on_generation_end(
+    generation_end: GenerationEnd,
+    effects: &dyn LifecycleEffects,
+) -> Result<ControlFlow<()>> {
+    match generation_end {
+        GenerationEnd::ReloadConfig => {
+            info!(
+                "{SHUTDOWN_PHASE}: final action, starting the next generation ({generation_end:?})"
+            );
+            Ok(ControlFlow::Continue(()))
+        }
+        GenerationEnd::Terminate => {
+            info!(
+                "{SHUTDOWN_PHASE}: final action, returning from the lifecycle ({generation_end:?})"
+            );
+            Ok(ControlFlow::Break(()))
+        }
+        GenerationEnd::Reboot => {
+            info!("{SHUTDOWN_PHASE}: final action, rebooting the host ({generation_end:?})");
+            effects.reboot()?;
+            Ok(ControlFlow::Break(()))
+        }
+        GenerationEnd::PowerOff => {
+            info!("{SHUTDOWN_PHASE}: final action, powering the host off ({generation_end:?})");
+            effects.power_off()?;
+            Ok(ControlFlow::Break(()))
+        }
+        // The generation has already drained and closed itself down; what is
+        // left is to tell the process manager that this exit was not asked
+        // for, so a unit configured to restart on failure does. What failed
+        // was reported where it happened.
+        GenerationEnd::IngestExited => {
+            info!("{SHUTDOWN_PHASE}: final action, failing the lifecycle ({generation_end:?})");
+            Err(anyhow!("the ingest subsystem ended before the daemon did"))
         }
     }
 }
@@ -256,7 +394,8 @@ impl ProcessContext {
 ///
 /// Four of these are intents that arrive from outside; the fifth is a
 /// subsystem entry task ending on its own, which is not an intent but is just
-/// as final. Each one names a different thing for `main` to do next.
+/// as final. Each one names a different final action for
+/// [`act_on_generation_end`] to take.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GenerationEnd {
     /// The configuration file was rewritten. The next generation starts from
@@ -275,11 +414,11 @@ enum GenerationEnd {
     /// panics, and a node that keeps serving GraphQL and publish while
     /// ingesting nothing is not a node anyone asked for either. So the early
     /// exit ends the generation through the same shutdown sequence as the
-    /// intents, and `main` reports it as a failure rather than exiting
-    /// cleanly. Ingest is the only entry task the top-level tracker watches
+    /// intents, and the lifecycle reports it as a failure rather than
+    /// returning cleanly. Ingest is the only entry task the tracker watches
     /// for now: peer and publish are registered in the tracker but their
     /// handles are not kept, so an early exit of either goes unwatched until
-    /// the process-level lifecycle work takes that on.
+    /// the entry-task supervision issue retains them.
     IngestExited,
 }
 
@@ -293,17 +432,20 @@ enum GenerationEnd {
 /// for more than tidiness: RocksDB holds a file lock on the data directory, so
 /// a handle surviving into the next generation would fail its `Database::open`.
 ///
-/// `main` keeps only the outer loop and acts on the returned [`GenerationEnd`].
+/// [`run_lifecycle`] keeps only the loop and acts on the returned
+/// [`GenerationEnd`].
 ///
 /// # Errors
 ///
 /// Returns an error if the data directory fails compression validation or
 /// migration, if the database cannot be opened, if the node certificate
-/// carries no usable node name, or if the peer subsystem cannot be built.
+/// carries no usable node name, if the peer subsystem cannot be built, or if
+/// the teardown could not shut the store down.
 #[allow(clippy::too_many_lines)]
 async fn run_generation(
     settings: &mut Settings,
     process: &ProcessContext,
+    effects: &dyn LifecycleEffects,
 ) -> Result<GenerationEnd> {
     info!("Data store started");
     let (db_path, db_options) = db_path_and_option(
@@ -332,7 +474,6 @@ async fn run_generation(
     let database = storage::Database::open(&db_path, &db_options)?;
 
     let (reload_tx, reload_rx) = mpsc::channel::<ConfigVisible>(1);
-    let notify_shutdown = Arc::new(Notify::new());
     let notify_reboot = Arc::new(Notify::new());
     let notify_power_off = Arc::new(Notify::new());
 
@@ -413,8 +554,7 @@ async fn run_generation(
     // Retention is tracked, not detached: the tracker's cancellation is what
     // stops it, the tracker's drain is what waits for it, and the handle kept
     // here is what says how it ended. Its child token reaches it through the
-    // closure argument, so nothing about its shutdown travels on
-    // `notify_shutdown`.
+    // closure argument, which is the only thing its shutdown travels on.
     let retention = settings.config.visible.retention;
     let retain_task_handle: JoinHandle<Result<()>> = top_level_tracker
         .spawn("retention", {
@@ -428,8 +568,8 @@ async fn run_generation(
     // drain below. Unlike theirs, its handle is dropped. Peer reports its own
     // failure where it happens and the tracker's registry guard names a panic
     // or an abort, so the only outcome a retained handle would add is a normal
-    // early exit — supervising that, and ordering the read against
-    // `database.shutdown()`, is process-level lifecycle work (#1569).
+    // early exit, and supervising that belongs to the issue that retains and
+    // reports on every entry task's handle.
     if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
         let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
         let notify_sensor = notify_sensor_change
@@ -468,8 +608,8 @@ async fn run_generation(
     // drain below, and its handle is dropped. Publish reports its own failure
     // where it happens and the tracker's registry guard names a panic or an
     // abort, so the only outcome a retained handle would add is a normal early
-    // exit. Acting on that — a node that keeps serving without publish — is
-    // process-level lifecycle work (#1569), which is also why no
+    // exit. Acting on that — a node that keeps serving without publish —
+    // belongs to the entry-task supervision issue, which is also why no
     // `GenerationEnd` variant watches this task the way one watches ingest.
     let publish_server =
         publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
@@ -564,38 +704,35 @@ async fn run_generation(
     )
     .await;
 
-    // Every intent that ends a generation is shut down the same way, so the
-    // sequence runs once here instead of once per arm. The order is the one
-    // each arm had.
-    shutdown_web(web_controller.take()).await;
-    // Web shutdown is not complete until the `tcpdump` children of any PCAP
-    // requests the graceful-shutdown timeout cut off have been reaped. Draining
-    // the web-owned reaper tracker here waits for them before subsystem
-    // cancellation and drain begin, so a timed-out PCAP child is killed and
-    // reaped ahead of the drain rather than as detached work that could outlive
-    // web shutdown.
-    drain_web_reaper_tracker_or_log(&web_reaper_tracker).await;
-    // Publish was the last subsystem listening on `notify_shutdown`, and it
-    // now takes its signal from the token like the rest. The signal is still
-    // raised because retiring the `Notify` belongs to the process-level
-    // lifecycle work (#1569); nothing subscribes to it today.
-    notify_shutdown.notify_waiters();
-    // Every subsystem is tracked, so cancelling here is what starts them all
-    // draining. `shutdown_generation` cancels again, which is idempotent.
-    top_level_tracker.cancel_children();
+    // Every ending is shut down the same way, so the whole sequence is one
+    // call rather than a step per arm. Nothing is cancelled here: the only
+    // cancellation of the top-level tracker is the close-then-cancel inside
+    // the drain, so the tracker is never left cancelled but still admitting.
     shutdown_generation(
-        &top_level_tracker,
-        retain_task_handle,
-        // Handed over only when the wait ended on something else. If the entry
-        // task is what ended it, its arm has already read the handle back and
-        // reported it, and a `JoinHandle` polled again after it has completed
-        // is not a handle that resolves a second time.
-        (generation_end != GenerationEnd::IngestExited).then_some(ingest_task_handle),
+        GenerationTeardown {
+            web_controller: web_controller.take(),
+            web_reaper_tracker,
+            top_level_tracker,
+            retain_task_handle,
+            // Handed over only when the wait ended on something else. If the
+            // entry task is what ended it, its arm has already read the handle
+            // back and reported it, and a `JoinHandle` polled again after it
+            // has completed is not a handle that resolves a second time.
+            ingest_task_handle: (generation_end != GenerationEnd::IngestExited)
+                .then_some(ingest_task_handle),
+        },
         generation_end,
         &database,
+        effects,
     )
     .await?;
 
+    // Returning is what releases the store. The teardown flushed it; the file
+    // `LOCK` goes only when the last `Database` clone is dropped, and the
+    // clones this generation still holds — its own handle, the schema's, the
+    // listeners' — go here. That guarantee is exactly as wide as the tracker's
+    // registry: work that never entered it, such as the untracked
+    // customer-deletion worker, can still hold a clone past this point.
     Ok(generation_end)
 }
 
@@ -687,46 +824,102 @@ where
     }
 }
 
-/// Stops what the generation registered in its top-level tracker, then runs
-/// the tail the ending intent asks for.
+/// Everything a generation hands to its teardown.
 ///
-/// The order is the whole of it. The drain cancels the tracker and does not
-/// return until every tracked task has returned, so the retention and ingest
-/// entry tasks — and with them any cleanup still running on the blocking pool
-/// or any handler still writing — have stopped before their handles are read
-/// and before [`finish_generation`] is in a position to close the database.
-/// Retention holds a database handle on a blocking thread; closing the
-/// database while it still ran would pull the store out from under a live
-/// RocksDB operation, which is why nothing here is reordered.
+/// The teardown takes ownership of all of it: the web controller it shuts
+/// down, the two trackers it drains, and the two handles it reads back. They
+/// travel together because the teardown is one unit — grouping them is also
+/// what keeps its parameter list within reach of a test that builds one by
+/// hand.
+struct GenerationTeardown {
+    /// The HTTPS GraphQL server, or `None` when the bind failed and the
+    /// generation carried on without one.
+    web_controller: Option<WebController>,
+    /// The web-owned tracker holding the PCAP `tcpdump` reaping.
+    web_reaper_tracker: TaskTracker,
+    /// The generation's own tracker, holding every subsystem and every
+    /// long-running piece of web-origin work.
+    top_level_tracker: TaskTracker,
+    /// The retention entry task.
+    retain_task_handle: JoinHandle<Result<()>>,
+    /// The ingest entry task, or `None` when the generation ended because that
+    /// very task returned: the wait has already read the handle back, and a
+    /// `JoinHandle` polled again after it has completed is not a handle that
+    /// resolves a second time.
+    ingest_task_handle: Option<JoinHandle<Result<()>>>,
+}
+
+/// Runs the whole teardown of a generation, in the one order every ending
+/// shares.
 ///
-/// `ingest_task_handle` is `None` when the generation ended because that very
-/// task returned: the wait has already read the handle back, and a
-/// `JoinHandle` polled again after it has completed is not a handle that
-/// resolves a second time.
+/// Five phases, and only the tail after the last of them differs by ending:
+/// web shutdown, the web reaper drain, the top-level tracker's
+/// close-cancel-drain, the retained-handle observation, and the database
+/// shutdown. Each phase leaves a marker behind, so a shutdown that stalls says
+/// which phase it stalled in and a test can read the sequence back out of one
+/// log.
+///
+/// The order is the whole of it. The drain closes the tracker, cancels it, and
+/// does not return until every tracked task has returned, so the retention and
+/// ingest entry tasks — and with them any cleanup still running on the
+/// blocking pool or any handler still writing — have stopped before their
+/// handles are read and before the store is shut down. Retention holds a
+/// database handle on a blocking thread; flushing the store while it still ran
+/// would pull it out from under a live RocksDB operation, which is why nothing
+/// here is reordered.
+///
+/// What that ordering buys is bounded by the tracker's registry: shutting the
+/// database down is not closing it, and the file `LOCK` is released only when
+/// the last [`storage::Database`] clone is dropped as the generation returns,
+/// so work that never entered the tracker can still hold a clone past this
+/// point.
 ///
 /// # Errors
 ///
-/// Returns an error if the tail cannot flush the database. A retention failure
-/// is reported, not returned: the generation is already ending, and the tail
-/// still has to run.
+/// Returns an error if the store could not be shut down. A retained handle
+/// that came back badly is reported, not returned: the drain has already
+/// waited for that task, the store is closed cleanly afterwards, and the
+/// ending's action still stands.
 async fn shutdown_generation(
-    top_level_tracker: &TaskTracker,
-    retain_task_handle: JoinHandle<Result<()>>,
-    ingest_task_handle: Option<JoinHandle<Result<()>>>,
+    teardown: GenerationTeardown,
     generation_end: GenerationEnd,
     database: &storage::Database,
+    effects: &dyn LifecycleEffects,
 ) -> Result<()> {
-    drain_top_level_tracker_or_log(top_level_tracker).await;
+    let GenerationTeardown {
+        web_controller,
+        web_reaper_tracker,
+        top_level_tracker,
+        retain_task_handle,
+        ingest_task_handle,
+    } = teardown;
+
+    shutdown_web(web_controller).await;
+    info!("{SHUTDOWN_PHASE}: web shutdown returned ({generation_end:?})");
+    // Web shutdown is not complete until the `tcpdump` children of any PCAP
+    // requests the graceful-shutdown timeout cut off have been reaped. Draining
+    // the web-owned reaper tracker here waits for them before subsystem
+    // cancellation and drain begin, so a timed-out PCAP child is killed and
+    // reaped ahead of the drain rather than as detached work that could outlive
+    // web shutdown. The placement is cheap only because that tracker holds
+    // nothing but the reaping: a long-running job registered there would
+    // serialize the whole of subsystem cancellation behind it, which is why
+    // long-running web-origin work goes in the top-level tracker instead.
+    drain_web_reaper_tracker_or_log(&web_reaper_tracker).await;
+    info!("{SHUTDOWN_PHASE}: web reaper drain returned ({generation_end:?})");
+    drain_top_level_tracker_or_log(&top_level_tracker).await;
+    info!("{SHUTDOWN_PHASE}: top-level drain returned ({generation_end:?})");
     report_retention_outcome(retain_task_handle).await;
     if let Some(ingest_task_handle) = ingest_task_handle {
         observe_ingest_shutdown(ingest_task_handle).await;
     }
-    finish_generation(generation_end, database).await
+    info!("{SHUTDOWN_PHASE}: retained handles read ({generation_end:?})");
+    finish_generation(generation_end, database, effects).await
 }
 
 /// Runs the retention entry task, reporting a failure the moment it happens.
 ///
-/// The handle `main` retains carries whatever this returns to
+/// The handle the generation retains carries whatever this returns to
 /// [`report_retention_outcome`], but that accounting runs only when the
 /// generation ends — which, for a node that is simply left running, is days or
 /// months after a retention pass failed. Retention that stops deleting is the
@@ -772,37 +965,46 @@ async fn report_retention_outcome(retain_task_handle: JoinHandle<Result<()>>) {
     }
 }
 
-/// Runs the tail of a generation, the part that differs by intent.
+/// Shuts the store down, then runs the tail the ending asks for.
 ///
-/// By the time this runs the subsystems have already been notified and joined
-/// and the top-level tracker has drained, so nothing is left holding the
-/// database and what remains is what each intent needs of the handle before
-/// the generation drops it.
+/// By the time this runs the subsystems have been cancelled and joined and the
+/// top-level tracker has drained, so nothing tracked is left holding the
+/// database and the flush cannot be surprised by a retention cleanup on a
+/// blocking thread. The shutdown itself runs on every ending, before the tail,
+/// so the flush, the WAL write and the cancellation of background work happen
+/// once and unconditionally.
+///
+/// It does not close the database and does not release RocksDB's file `LOCK`:
+/// the lock goes when the last [`storage::Database`] clone is dropped, as the
+/// generation returns.
+///
+/// The marker is emitted before the seam is called, not after it returns: it
+/// records that the phase was entered, so it is there whether the shutdown
+/// succeeds or fails. What says it succeeded is the lifecycle carrying on.
 ///
 /// # Errors
 ///
-/// Returns an error if the database cannot be flushed on the way out.
+/// Returns an error if the store could not be shut down. Its on-disk state is
+/// then unknown, so the caller must take no host action and start no further
+/// generation on that path.
 async fn finish_generation(
     generation_end: GenerationEnd,
     database: &storage::Database,
+    effects: &dyn LifecycleEffects,
 ) -> Result<()> {
+    info!("{SHUTDOWN_PHASE}: shutting the database down ({generation_end:?})");
+    if let Err(e) = effects.shutdown_database(database) {
+        error!("Database shutdown failed: {e:#}");
+        return Err(e);
+    }
+
     match generation_end {
-        // None of these closes the database here. On terminate, and on an
-        // entry task that ended early, the process is on its way out and the
-        // handle goes with it; on a configuration reload the handle is dropped
-        // as the generation returns, before the next one reopens it. This is
-        // the pre-existing shape of the path, delay included, and the ordering
-        // cutover that revisits it is #1569's.
         GenerationEnd::ReloadConfig | GenerationEnd::Terminate | GenerationEnd::IngestExited => {
             sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
         }
-        // The host is about to go down, so the store is flushed and its
-        // background work stopped first. The caller has already drained the
-        // tracker, so no retention cleanup is running on a blocking thread to
-        // be surprised by it.
+        // The host is about to go down, so the pause that precedes handing it
+        // over is the whole of this tail.
         GenerationEnd::Reboot | GenerationEnd::PowerOff => {
-            database.shutdown()?;
-
             info!("Before shut down the system, wait {WAIT_SHUTDOWN} seconds...");
             sleep(tokio::time::Duration::from_secs(WAIT_SHUTDOWN)).await;
         }
@@ -1273,7 +1475,15 @@ mod tests {
 
         /// Builds an mTLS-capable reqwest client that presents the given
         /// client cert/key and trusts only the given CA bytes.
-        fn build_mtls_client(cert_pem: &[u8], key_pem: &[u8], ca_pem: &[u8]) -> reqwest::Client {
+        ///
+        /// Visible to the sibling test module too: the reload handoff drive
+        /// needs the same client identity to reach a generation's own HTTPS
+        /// server.
+        pub(super) fn build_mtls_client(
+            cert_pem: &[u8],
+            key_pem: &[u8],
+            ca_pem: &[u8],
+        ) -> reqwest::Client {
             let identity =
                 reqwest::Identity::from_pem(&[cert_pem, key_pem].concat()).expect("identity");
             let ca = reqwest::Certificate::from_pem(ca_pem).expect("ca cert");
@@ -1905,6 +2115,188 @@ mod tests {
             Schema::build(TestQuery, EmptyMutation, EmptySubscription).finish()
         }
 
+        /// Every ending a generation can have, in the order the parameterized
+        /// sequence tests walk them.
+        const ALL_ENDINGS: [GenerationEnd; 5] = [
+            GenerationEnd::Terminate,
+            GenerationEnd::ReloadConfig,
+            GenerationEnd::Reboot,
+            GenerationEnd::PowerOff,
+            GenerationEnd::IngestExited,
+        ];
+
+        /// The five teardown phases, in the one order every ending shares.
+        const TEARDOWN_MARKERS: [&str; 5] = [
+            "web shutdown returned",
+            "web reaper drain returned",
+            "top-level drain returned",
+            "retained handles read",
+            "shutting the database down",
+        ];
+
+        /// The sixth marker, the one that names the ending's final action.
+        fn final_action_marker(generation_end: GenerationEnd) -> &'static str {
+            match generation_end {
+                GenerationEnd::ReloadConfig => "final action, starting the next generation",
+                GenerationEnd::Terminate => "final action, returning from the lifecycle",
+                GenerationEnd::Reboot => "final action, rebooting the host",
+                GenerationEnd::PowerOff => "final action, powering the host off",
+                GenerationEnd::IngestExited => "final action, failing the lifecycle",
+            }
+        }
+
+        /// The whole observable sequence for one ending: the five teardown
+        /// phases and the action that follows them.
+        fn full_marker_sequence(generation_end: GenerationEnd) -> Vec<&'static str> {
+            let mut expected = TEARDOWN_MARKERS.to_vec();
+            expected.push(final_action_marker(generation_end));
+            expected
+        }
+
+        /// Pulls the shutdown sequence out of a captured log.
+        ///
+        /// One prefix names every phase, so filtering on it is all it takes to
+        /// get the sequence — and the drain's own round reports, which name
+        /// their tracker instead, are left behind.
+        fn phase_markers(logs: &Arc<Mutex<Vec<u8>>>) -> Vec<String> {
+            captured(logs)
+                .lines()
+                .filter(|line| line.contains(SHUTDOWN_PHASE))
+                .map(ToString::to_string)
+                .collect()
+        }
+
+        /// Asserts the captured log carries exactly `expected`, in order.
+        ///
+        /// One log is one ordered sink, so this is what establishes the order
+        /// of the whole sequence. The seam's record is a second, independent
+        /// recorder and is never compared against it.
+        fn assert_marker_sequence(logs: &Arc<Mutex<Vec<u8>>>, expected: &[&str], ending: &str) {
+            let markers = phase_markers(logs);
+            assert_eq!(
+                markers.len(),
+                expected.len(),
+                "{ending}: expected {} phase markers, got: {markers:#?}",
+                expected.len()
+            );
+            for (marker, needle) in markers.iter().zip(expected) {
+                assert!(
+                    marker.contains(needle),
+                    "{ending}: expected a marker for {needle:?}, got: {markers:#?}"
+                );
+            }
+        }
+
+        /// One operation of the lifecycle's effects seam.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum EffectCall {
+            ShutdownDatabase,
+            Reboot,
+            PowerOff,
+        }
+
+        /// A seam that records what the lifecycle asked of it, and can be told
+        /// to fail the database shutdown.
+        ///
+        /// The record answers only what a log cannot: whether an operation was
+        /// invoked at all, and whether it was invoked despite a failure. It is
+        /// never compared positionally against a captured log — the two are
+        /// independent recorders, and a position in one says nothing about its
+        /// order relative to a position in the other.
+        #[derive(Clone)]
+        struct RecordingEffects {
+            calls: Arc<Mutex<Vec<EffectCall>>>,
+            shutdown_database_fails: bool,
+            host_action_fails: bool,
+        }
+
+        impl RecordingEffects {
+            fn new() -> Self {
+                Self {
+                    calls: Arc::new(Mutex::new(Vec::new())),
+                    shutdown_database_fails: false,
+                    host_action_fails: false,
+                }
+            }
+
+            /// A seam whose store cannot be flushed.
+            fn failing() -> Self {
+                Self {
+                    shutdown_database_fails: true,
+                    ..Self::new()
+                }
+            }
+
+            /// A seam whose host refuses the command it is given.
+            fn refusing_host_actions() -> Self {
+                Self {
+                    host_action_fails: true,
+                    ..Self::new()
+                }
+            }
+
+            fn calls(&self) -> Vec<EffectCall> {
+                self.calls.lock().expect("lock").clone()
+            }
+
+            fn record(&self, call: EffectCall) {
+                self.calls.lock().expect("lock").push(call);
+            }
+        }
+
+        /// The message a failing seam's database shutdown carries.
+        const SHUTDOWN_FAILURE: &str = "the store could not be flushed";
+
+        /// The message a seam whose host refuses the command carries.
+        const HOST_REFUSAL: &str = "the host refused the command";
+
+        impl LifecycleEffects for RecordingEffects {
+            fn shutdown_database(&self, _database: &storage::Database) -> Result<()> {
+                self.record(EffectCall::ShutdownDatabase);
+                if self.shutdown_database_fails {
+                    bail!(SHUTDOWN_FAILURE)
+                }
+                Ok(())
+            }
+
+            fn reboot(&self) -> Result<()> {
+                self.record(EffectCall::Reboot);
+                if self.host_action_fails {
+                    bail!(HOST_REFUSAL)
+                }
+                Ok(())
+            }
+
+            fn power_off(&self) -> Result<()> {
+                self.record(EffectCall::PowerOff);
+                if self.host_action_fails {
+                    bail!(HOST_REFUSAL)
+                }
+                Ok(())
+            }
+        }
+
+        /// A teardown with nothing left to do but run its phases.
+        ///
+        /// No web controller, a fresh empty tracker for each of the two
+        /// trackers, a retention handle that has already returned and no
+        /// ingest handle: what is left is the sequence itself.
+        fn teardown_with_retention(
+            retain_task_handle: JoinHandle<Result<()>>,
+        ) -> GenerationTeardown {
+            GenerationTeardown {
+                web_controller: None,
+                web_reaper_tracker: TaskTracker::new(),
+                top_level_tracker: TaskTracker::new(),
+                retain_task_handle,
+                ingest_task_handle: None,
+            }
+        }
+
+        fn empty_teardown() -> GenerationTeardown {
+            teardown_with_retention(task::spawn(async { Ok(()) }))
+        }
+
         /// Everything [`wait_for_generation_end`] waits on, and the handles a
         /// test drives it with.
         ///
@@ -2157,32 +2549,53 @@ mod tests {
             shutdown_web(web_controller.take()).await;
         }
 
-        /// The tail of a generation that is not shutting the host down.
+        /// Every ending shuts the store down, and only the tail after it
+        /// differs.
         ///
-        /// It only waits out `SERVER_REBOOT_DELAY`, and the database handle is
-        /// left for the caller to drop. Time is paused, so the delay costs no
-        /// wall-clock time.
+        /// This is the rule that replaced the one where a reload, a terminate
+        /// and an early exit fell through to their delay with the store never
+        /// flushed. Time is paused, so neither tail costs wall-clock time.
         #[tokio::test(start_paused = true)]
-        async fn a_reload_or_terminate_tail_leaves_the_database_open() {
+        async fn every_ending_shuts_the_database_down_before_its_tail() {
             let dir = tempdir().expect("tempdir");
             let settings = test_settings(dir.path());
             let database = test_database(&settings.config.visible.data_dir);
 
-            let (logs, _guard) = capture_logs();
-            finish_generation(GenerationEnd::Terminate, &database)
-                .await
-                .expect("the terminate tail should not fail");
+            for generation_end in ALL_ENDINGS {
+                let ending = format!("{generation_end:?}");
+                let effects = RecordingEffects::new();
+                let (logs, guard) = capture_logs();
+                finish_generation(generation_end, &database, &effects)
+                    .await
+                    .unwrap_or_else(|e| panic!("{ending}: the tail should not fail: {e:#}"));
 
-            assert!(
-                !captured(&logs).contains("Before shut down the system"),
-                "only a reboot or a power-off waits for the host"
-            );
+                assert_eq!(
+                    effects.calls(),
+                    vec![EffectCall::ShutdownDatabase],
+                    "{ending}: the store should have been shut down exactly once"
+                );
+                let output = captured(&logs);
+                let waits_for_the_host = matches!(
+                    generation_end,
+                    GenerationEnd::Reboot | GenerationEnd::PowerOff
+                );
+                assert_eq!(
+                    output.contains("Before shut down the system"),
+                    waits_for_the_host,
+                    "{ending}: only a reboot or a power-off waits for the host, got: {output}"
+                );
+                drop(guard);
+            }
         }
 
-        /// The tail of a generation that is handing the host to `roxy`.
+        /// The tail of a generation that is handing the host to `roxy`, taken
+        /// through the production seam.
         ///
-        /// Time is paused, so the `WAIT_SHUTDOWN` pause it takes before the
-        /// host goes down costs no wall-clock time.
+        /// The parameterized test above covers every ending against a
+        /// recording seam; this one is the single case that runs the real
+        /// `Database::shutdown` on the way out. Time is paused, so the
+        /// `WAIT_SHUTDOWN` pause it takes before the host goes down costs no
+        /// wall-clock time.
         #[tokio::test(start_paused = true)]
         async fn a_reboot_tail_flushes_the_database() {
             let dir = tempdir().expect("tempdir");
@@ -2190,7 +2603,7 @@ mod tests {
             let database = test_database(&settings.config.visible.data_dir);
 
             let (logs, _guard) = capture_logs();
-            finish_generation(GenerationEnd::Reboot, &database)
+            finish_generation(GenerationEnd::Reboot, &database, &HostEffects)
                 .await
                 .expect("the reboot tail should flush the database");
 
@@ -2200,100 +2613,445 @@ mod tests {
             );
         }
 
-        /// The database is not closed while retention still holds it.
+        /// The whole sequence, for every ending, at the boundary the lifecycle
+        /// calls.
         ///
-        /// The stand-in retention task is written the way the real one is: it
-        /// waits for cancellation, and then waits out a cleanup already
-        /// running on the blocking pool before returning. The shutdown
-        /// sequence must not reach `database.shutdown()` until that blocking
-        /// cleanup has finished, so the test releases the blocking work only
-        /// after checking that the sequence is still waiting, and reads the
-        /// log line that follows the flush as the marker for it.
-        #[tokio::test]
-        async fn the_database_is_not_closed_until_retention_has_stopped() {
+        /// Both trackers are empty and no drain round can go pending, so this
+        /// is also what says the markers do not depend on one: all six appear
+        /// with neither of the drain's own report lines anywhere in the log.
+        /// Time is paused, so the tails cost nothing.
+        #[tokio::test(start_paused = true)]
+        async fn the_shutdown_sequence_runs_in_order_for_every_ending() {
             let dir = tempdir().expect("tempdir");
             let settings = test_settings(dir.path());
             let database = test_database(&settings.config.visible.data_dir);
-            let tracker = TaskTracker::new();
 
-            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-            let cleanup_started = Arc::new(AtomicBool::new(false));
-            let cleanup_finished = Arc::new(AtomicBool::new(false));
-            let retain_task_handle: JoinHandle<Result<()>> = tracker
-                .spawn("retention", {
-                    let db = database.clone();
-                    let cleanup_started = Arc::clone(&cleanup_started);
-                    let cleanup_finished = Arc::clone(&cleanup_finished);
-                    move |cancel| async move {
-                        cancel.cancelled().await;
-                        // The handle is awaited, never aborted: the blocking
-                        // cleanup holds a database handle.
-                        task::spawn_blocking(move || {
-                            cleanup_started.store(true, Ordering::SeqCst);
-                            let _ = release_rx.recv();
-                            // Touching the store is the point: it is what
-                            // would race a database closed too early.
-                            db.sensors_store().expect("sensors store");
-                            cleanup_finished.store(true, Ordering::SeqCst);
-                        })
-                        .await?;
-                        Ok(())
+            for generation_end in ALL_ENDINGS {
+                let ending = format!("{generation_end:?}");
+                let effects = RecordingEffects::new();
+                let (logs, guard) = capture_logs();
+
+                shutdown_generation(empty_teardown(), generation_end, &database, &effects)
+                    .await
+                    .unwrap_or_else(|e| panic!("{ending}: the teardown should not fail: {e:#}"));
+                let flow = act_on_generation_end(generation_end, &effects);
+
+                assert_marker_sequence(&logs, &full_marker_sequence(generation_end), &ending);
+                let output = captured(&logs);
+                assert!(
+                    !output.contains("shutdown drain round")
+                        && !output.contains("shutdown drain complete"),
+                    "{ending}: two empty trackers should report no drain round, got: {output}"
+                );
+
+                // A second recorder, read only for what it alone can say:
+                // which operations were invoked. Its order is never used.
+                let expected_calls = match generation_end {
+                    GenerationEnd::Reboot => {
+                        vec![EffectCall::ShutdownDatabase, EffectCall::Reboot]
+                    }
+                    GenerationEnd::PowerOff => {
+                        vec![EffectCall::ShutdownDatabase, EffectCall::PowerOff]
+                    }
+                    _ => vec![EffectCall::ShutdownDatabase],
+                };
+                assert_eq!(effects.calls(), expected_calls, "{ending}");
+
+                match generation_end {
+                    // The reload ends here, at the boundary: no second
+                    // generation is started, and the store was shut down once.
+                    GenerationEnd::ReloadConfig => assert_eq!(
+                        flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
+                        ControlFlow::Continue(()),
+                        "{ending}: a reload should ask for another generation"
+                    ),
+                    GenerationEnd::IngestExited => {
+                        let error = flow
+                            .err()
+                            .unwrap_or_else(|| panic!("{ending}: an early exit should fail"));
+                        assert!(
+                            error.to_string().contains("ingest subsystem ended"),
+                            "{ending}: got: {error:#}"
+                        );
+                    }
+                    _ => assert_eq!(
+                        flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
+                        ControlFlow::Break(()),
+                        "{ending}: this ending should end the lifecycle"
+                    ),
+                }
+                drop(guard);
+            }
+        }
+
+        /// A store that cannot be shut down stops the sequence where it is.
+        ///
+        /// The teardown returns the failure, so `act_on_generation_end` is
+        /// never reached: no reboot, no power-off, and — on the reload case —
+        /// no next generation. Five markers and no sixth, on every ending.
+        #[tokio::test(start_paused = true)]
+        async fn a_failed_database_shutdown_takes_no_action_on_any_ending() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            for generation_end in ALL_ENDINGS {
+                let ending = format!("{generation_end:?}");
+                let effects = RecordingEffects::failing();
+                let (logs, guard) = capture_logs();
+
+                let error =
+                    shutdown_generation(empty_teardown(), generation_end, &database, &effects)
+                        .await
+                        .err()
+                        .unwrap_or_else(|| {
+                            panic!("{ending}: a failed database shutdown should end the teardown")
+                        });
+
+                assert!(
+                    error.to_string().contains(SHUTDOWN_FAILURE),
+                    "{ending}: the seam's failure should be what propagates, got: {error:#}"
+                );
+                assert_marker_sequence(&logs, &TEARDOWN_MARKERS, &ending);
+                assert_eq!(
+                    effects.calls(),
+                    vec![EffectCall::ShutdownDatabase],
+                    "{ending}: no host action may follow a store whose state is unknown"
+                );
+                assert!(
+                    captured(&logs).contains("Database shutdown failed"),
+                    "{ending}: the failure should be reported where it happened"
+                );
+                drop(guard);
+            }
+        }
+
+        /// A host that refuses the command it is given fails the lifecycle.
+        ///
+        /// The marker is emitted before the seam is called, so it is there
+        /// either way: what says the action succeeded is the lifecycle result,
+        /// not the marker.
+        #[tokio::test]
+        async fn a_refused_host_action_fails_the_lifecycle() {
+            for (generation_end, expected_call) in [
+                (GenerationEnd::Reboot, EffectCall::Reboot),
+                (GenerationEnd::PowerOff, EffectCall::PowerOff),
+            ] {
+                let ending = format!("{generation_end:?}");
+                let effects = RecordingEffects::refusing_host_actions();
+                let (logs, guard) = capture_logs();
+
+                let error = act_on_generation_end(generation_end, &effects)
+                    .err()
+                    .unwrap_or_else(|| panic!("{ending}: a refused command should fail"));
+
+                assert!(
+                    error.to_string().contains(HOST_REFUSAL),
+                    "{ending}: the host's refusal should be what propagates, got: {error:#}"
+                );
+                assert_eq!(
+                    effects.calls(),
+                    vec![expected_call],
+                    "{ending}: the command should have been asked for once"
+                );
+                assert_marker_sequence(&logs, &[final_action_marker(generation_end)], &ending);
+                drop(guard);
+            }
+        }
+
+        /// A retained handle that came back badly is reported and suppresses
+        /// nothing.
+        ///
+        /// The three abnormal completions a handle can carry, against the two
+        /// shapes of final action: a host command, and the next generation.
+        /// What is asserted is that the failure was reported and that the
+        /// action still happened — not that the teardown returned plain
+        /// success, which is what the entry-task supervision issue is expected
+        /// to turn into a degraded outcome.
+        #[tokio::test(start_paused = true)]
+        async fn a_failed_retained_handle_is_reported_and_suppresses_no_action() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            for (failure, report) in [
+                ("error", "Retention had already terminated unexpectedly"),
+                ("panic", "Retention panicked"),
+                ("cancelled", "Retention did not run to completion"),
+            ] {
+                for generation_end in [GenerationEnd::Reboot, GenerationEnd::ReloadConfig] {
+                    let case = format!("{failure}/{generation_end:?}");
+                    let retain_task_handle: JoinHandle<Result<()>> = match failure {
+                        "error" => task::spawn(async { Err(anyhow!("a retention pass failed")) }),
+                        "panic" => task::spawn(async { panic!("the retention task panicked") }),
+                        _ => {
+                            // Aborted before the teardown reads it, so the join
+                            // returns a cancellation `JoinError`.
+                            let handle = task::spawn(std::future::pending::<Result<()>>());
+                            handle.abort();
+                            handle
+                        }
+                    };
+
+                    let effects = RecordingEffects::new();
+                    let (logs, guard) = capture_logs();
+                    // The return value is deliberately not asserted on: a
+                    // handle failure reaching the lifecycle result is the
+                    // supervision issue's to add.
+                    let _outcome = shutdown_generation(
+                        teardown_with_retention(retain_task_handle),
+                        generation_end,
+                        &database,
+                        &effects,
+                    )
+                    .await;
+                    let flow = act_on_generation_end(generation_end, &effects);
+
+                    let output = captured(&logs);
+                    assert!(
+                        output.contains(report),
+                        "{case}: the handle failure should be reported, got: {output}"
+                    );
+                    assert_marker_sequence(&logs, &full_marker_sequence(generation_end), &case);
+
+                    if generation_end == GenerationEnd::Reboot {
+                        assert_eq!(
+                            effects.calls(),
+                            vec![EffectCall::ShutdownDatabase, EffectCall::Reboot],
+                            "{case}: the reboot should still have been asked for"
+                        );
+                    } else {
+                        assert_eq!(
+                            flow.unwrap_or_else(|e| panic!("{case}: {e:#}")),
+                            ControlFlow::Continue(()),
+                            "{case}: the next generation should still start"
+                        );
+                    }
+                    drop(guard);
+                }
+            }
+        }
+
+        /// The store is shut down only after the drain reports the tracker
+        /// empty — on every ending, not just on a reboot.
+        ///
+        /// The stand-in retention task is written the way the real one is: it
+        /// waits for cancellation, and then waits out a cleanup already
+        /// running on the blocking pool before returning. The sequence must
+        /// not reach the database shutdown until that blocking cleanup has
+        /// finished, so the test releases the blocking work only after
+        /// checking that the sequence is still waiting. The phase marker is
+        /// the observable, which is why this holds for a terminate and a
+        /// reload as well as for the reboot that used to be the only ending
+        /// leaving a line behind.
+        #[tokio::test]
+        async fn the_database_is_shut_down_only_after_the_drain_reports_the_tracker_empty() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+            let shutdown_marker = format!("{SHUTDOWN_PHASE}: shutting the database down");
+
+            for generation_end in [
+                GenerationEnd::Reboot,
+                GenerationEnd::Terminate,
+                GenerationEnd::ReloadConfig,
+            ] {
+                let ending = format!("{generation_end:?}");
+                let tracker = TaskTracker::new();
+
+                let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+                let cleanup_started = Arc::new(AtomicBool::new(false));
+                let cleanup_finished = Arc::new(AtomicBool::new(false));
+                let retain_task_handle: JoinHandle<Result<()>> = tracker
+                    .spawn("retention", {
+                        let db = database.clone();
+                        let cleanup_started = Arc::clone(&cleanup_started);
+                        let cleanup_finished = Arc::clone(&cleanup_finished);
+                        move |cancel| async move {
+                            cancel.cancelled().await;
+                            // The handle is awaited, never aborted: the
+                            // blocking cleanup holds a database handle.
+                            task::spawn_blocking(move || {
+                                cleanup_started.store(true, Ordering::SeqCst);
+                                let _ = release_rx.recv();
+                                // Touching the store is the point: it is what
+                                // would race a store flushed too early.
+                                db.sensors_store().expect("sensors store");
+                                cleanup_finished.store(true, Ordering::SeqCst);
+                            })
+                            .await?;
+                            Ok(())
+                        }
+                    })
+                    .expect("a fresh tracker admits the retention task");
+
+                let effects = RecordingEffects::new();
+                let (logs, guard) = capture_logs();
+                let shutdown = task::spawn({
+                    let database = database.clone();
+                    let effects = effects.clone();
+                    let top_level_tracker = tracker.clone();
+                    async move {
+                        shutdown_generation(
+                            GenerationTeardown {
+                                web_controller: None,
+                                web_reaper_tracker: TaskTracker::new(),
+                                top_level_tracker,
+                                retain_task_handle,
+                                ingest_task_handle: None,
+                            },
+                            generation_end,
+                            &database,
+                            &effects,
+                        )
+                        .await
+                    }
+                });
+
+                // Cancellation has to reach the stand-in and its blocking
+                // cleanup has to be running before the ordering under test
+                // means anything.
+                let started = async {
+                    while !cleanup_started.load(Ordering::SeqCst) {
+                        sleep(READY_POLL).await;
+                    }
+                };
+                assert!(
+                    tokio::time::timeout(READY_TIMEOUT, started).await.is_ok(),
+                    "{ending}: the drain should have cancelled the retention stand-in"
+                );
+
+                // A sequence that did not wait would have shut the store down
+                // by now: the drain is the only thing between it and the tail.
+                sleep(Duration::from_millis(100)).await;
+                assert!(
+                    !captured(&logs).contains(&shutdown_marker),
+                    "{ending}: the store was shut down while a blocking cleanup was still running"
+                );
+                assert!(
+                    effects.calls().is_empty(),
+                    "{ending}: the seam should not have been reached yet"
+                );
+
+                release_tx
+                    .send(())
+                    .expect("the blocking cleanup is waiting");
+                wait_for_logs(&logs, &[shutdown_marker.as_str()]).await;
+                assert!(
+                    cleanup_finished.load(Ordering::SeqCst),
+                    "{ending}: the blocking cleanup should have run to the end first"
+                );
+                let output = captured(&logs);
+                assert!(
+                    output.contains("Retention stopped"),
+                    "{ending}: the retention handle should have been read, got: {output}"
+                );
+
+                // What is left of the tail is a delay, and this test is not
+                // waiting it out.
+                shutdown.abort();
+                drop(guard);
+            }
+        }
+
+        /// Each drain phase waits on its own tracker, in the order the
+        /// sequence puts them in.
+        ///
+        /// Both trackers are empty in the sequence test above, so nothing there
+        /// would notice a phase draining the wrong one. Here the web reaper
+        /// tracker holds a stand-in written the way the real reaper is — it
+        /// ignores its cancellation token, because a `SIGKILL` followed by
+        /// `wait()` must not be abandoned mid-reap — and the sequence has to
+        /// stop at it: the top-level tracker is not even closed to new
+        /// admissions until the reaping has finished, which is what says
+        /// subsystem cancellation had not begun.
+        #[tokio::test]
+        async fn the_web_reaper_drain_waits_on_its_own_tracker_before_the_top_level_one() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            let web_reaper_tracker = TaskTracker::new();
+            let top_level_tracker = TaskTracker::new();
+            let (release_tx, release_rx) = oneshot::channel::<()>();
+            let reaping = Arc::new(AtomicBool::new(false));
+            web_reaper_tracker
+                .spawn("pcap reaper", {
+                    let reaping = Arc::clone(&reaping);
+                    move |_cancel| async move {
+                        reaping.store(true, Ordering::SeqCst);
+                        let _ = release_rx.await;
                     }
                 })
-                .expect("a fresh tracker admits the retention task");
+                .expect("a fresh tracker admits the reaper stand-in");
 
+            let effects = RecordingEffects::new();
             let (logs, _guard) = capture_logs();
             let shutdown = task::spawn({
-                let tracker = tracker.clone();
                 let database = database.clone();
+                let effects = effects.clone();
+                let web_reaper_tracker = web_reaper_tracker.clone();
+                let top_level_tracker = top_level_tracker.clone();
                 async move {
                     shutdown_generation(
-                        &tracker,
-                        retain_task_handle,
-                        None,
-                        GenerationEnd::Reboot,
+                        GenerationTeardown {
+                            web_controller: None,
+                            web_reaper_tracker,
+                            top_level_tracker,
+                            retain_task_handle: task::spawn(async { Ok(()) }),
+                            ingest_task_handle: None,
+                        },
+                        GenerationEnd::Terminate,
                         &database,
+                        &effects,
                     )
                     .await
                 }
             });
 
-            // Cancellation has to reach the stand-in and its blocking cleanup
-            // has to be running before the ordering under test means anything.
-            let started = async {
-                while !cleanup_started.load(Ordering::SeqCst) {
+            let reaping_started = async {
+                while !reaping.load(Ordering::SeqCst) {
                     sleep(READY_POLL).await;
                 }
             };
             assert!(
-                tokio::time::timeout(READY_TIMEOUT, started).await.is_ok(),
-                "the drain should have cancelled the retention stand-in"
+                tokio::time::timeout(READY_TIMEOUT, reaping_started)
+                    .await
+                    .is_ok(),
+                "the reaper drain should have started its stand-in"
             );
 
-            // A shutdown that did not wait would have flushed by now: the
-            // drain is the only thing between it and the tail.
+            // A sequence that did not wait would have walked past this phase by
+            // now: nothing else stands between it and the rest of the teardown.
             sleep(Duration::from_millis(100)).await;
             assert!(
-                !captured(&logs).contains("Before shut down the system"),
-                "the database was closed while a blocking cleanup was still running"
+                web_reaper_tracker.is_closed(),
+                "the reaper drain should have closed its own tracker to new admissions"
+            );
+            assert!(
+                !top_level_tracker.is_closed(),
+                "subsystem cancellation began while a `tcpdump` child was still being reaped"
+            );
+            let markers = phase_markers(&logs);
+            assert_eq!(
+                markers.len(),
+                1,
+                "the sequence should be waiting on the reaper drain, got: {markers:#?}"
             );
 
-            release_tx
-                .send(())
-                .expect("the blocking cleanup is waiting");
-            wait_for_logs(&logs, &["Before shut down the system"]).await;
+            release_tx.send(()).expect("the reaper stand-in is waiting");
+            wait_for_logs(
+                &logs,
+                &[&format!("{SHUTDOWN_PHASE}: shutting the database down")],
+            )
+            .await;
             assert!(
-                cleanup_finished.load(Ordering::SeqCst),
-                "the blocking cleanup should have run to the end before the flush"
-            );
-            let output = captured(&logs);
-            assert!(
-                output.contains("Retention stopped"),
-                "the retention handle should have been read, got: {output}"
+                top_level_tracker.is_closed(),
+                "the top-level drain should have closed its tracker once the reaping was done"
             );
 
-            // What is left of the tail is the pause before the host goes down,
-            // and this test is not waiting it out.
+            // What is left of the tail is a delay, and this test is not waiting
+            // it out.
             shutdown.abort();
         }
 
@@ -2346,7 +3104,7 @@ mod tests {
             .expect("write compression metadata");
 
             let (logs, _guard) = capture_logs();
-            let error = run_generation(&mut settings, &process)
+            let error = run_generation(&mut settings, &process, &HostEffects)
                 .await
                 .expect_err("a compression mismatch should end the generation");
 
@@ -2368,7 +3126,7 @@ mod tests {
                 .expect("write version file");
 
             let (logs, _guard) = capture_logs();
-            let error = run_generation(&mut settings, &process)
+            let error = run_generation(&mut settings, &process, &HostEffects)
                 .await
                 .expect_err("an unsupported data directory should end the generation");
 
@@ -2379,6 +3137,13 @@ mod tests {
             );
         }
 
+        /// A terminate intent taken through the real lifecycle, with the
+        /// production seam and real subsystems in the tracker.
+        ///
+        /// Nothing is asserted about whether a drain round went pending: with
+        /// real subsystems that is a race against the reporting cadence, and
+        /// the empty-tracker boundary test is what shows the markers do not
+        /// depend on it.
         #[tokio::test]
         async fn a_generation_ends_on_a_terminate_intent() {
             let dir = tempdir().expect("tempdir");
@@ -2387,11 +3152,14 @@ mod tests {
             let mut settings = test_settings(dir.path());
 
             let (logs, _guard) = capture_logs();
-            // `join!` drives both on this task: the generation runs while the
+            // `join!` drives both on this task: the lifecycle runs while the
             // other side watches the log for readiness and then sends the
             // intent that ends it.
-            let (end, ()) = tokio::join!(
-                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+            let (outcome, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut settings, &process, &HostEffects)
+                ),
                 async {
                     wait_for_logs(
                         &logs,
@@ -2405,44 +3173,83 @@ mod tests {
                     notify_terminate.notify_one();
                 }
             );
-            let end = end
-                .expect("a terminate intent should end the generation")
-                .expect("the generation should not fail");
-
-            assert_eq!(end, GenerationEnd::Terminate);
+            outcome
+                .expect("a terminate intent should end the lifecycle")
+                .expect("the lifecycle should not fail");
 
             let output = captured(&logs);
             assert!(
                 output.contains("Termination signal: daemon exit"),
                 "the terminate arm should have run, got: {output}"
             );
-            // Ingest, publish, and retention are the tasks in the top-level
-            // tracker, and all of them stop on the cancellation the drain
-            // delivers, so the drain returns on its first round with nothing
-            // to report.
             assert!(
                 output.contains("Retention stopped"),
                 "the retention task should have stopped cleanly, got: {output}"
             );
-            // Nothing here joins a publish handle, and publish no longer
-            // listens on `notify_shutdown`, so this line can only come from
-            // the token the top-level tracker handed its entry task.
+            // Nothing here joins a publish handle, so this line can only come
+            // from the token the top-level tracker handed its entry task.
             assert!(
                 output.contains("Shutting down publish"),
                 "the generation's cancellation should reach publish, got: {output}"
             );
             assert!(
-                !output.contains("shutdown drain round"),
-                "a tracker that drains at once should not report a round, got: {output}"
-            );
-            assert!(
-                !output.contains("shutdown drain complete"),
-                "a tracker that drains at once should not report progress, got: {output}"
-            );
-            assert!(
                 !output.contains("tracked task did not run to completion"),
                 "the tracked tasks should have returned, not vanished, got: {output}"
             );
+            assert_marker_sequence(
+                &logs,
+                &full_marker_sequence(GenerationEnd::Terminate),
+                "Terminate",
+            );
+        }
+
+        /// A store the lifecycle cannot shut down ends it, and no action is
+        /// taken.
+        ///
+        /// The propagation proof through the real lifecycle: the same drive as
+        /// the terminate test above, with a seam whose database shutdown
+        /// fails.
+        #[tokio::test]
+        async fn a_failing_database_shutdown_ends_the_lifecycle_with_no_action() {
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+            let effects = RecordingEffects::failing();
+
+            let (logs, _guard) = capture_logs();
+            let (outcome, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut settings, &process, &effects)
+                ),
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &[
+                            "Ingest listening on",
+                            "Publish listening on",
+                            "Database cleanup completed.",
+                        ],
+                    )
+                    .await;
+                    notify_terminate.notify_one();
+                }
+            );
+            let error = outcome
+                .expect("a terminate intent should end the lifecycle")
+                .expect_err("a failed database shutdown should fail the lifecycle");
+
+            assert!(
+                error.to_string().contains(SHUTDOWN_FAILURE),
+                "the seam's failure should be what propagates, got: {error:#}"
+            );
+            assert_eq!(
+                effects.calls(),
+                vec![EffectCall::ShutdownDatabase],
+                "no host action may follow a store whose state is unknown"
+            );
+            assert_marker_sequence(&logs, &TEARDOWN_MARKERS, "Terminate/failing seam");
         }
 
         /// A generation with the peer subsystem configured and no HTTPS
@@ -2470,7 +3277,10 @@ mod tests {
 
             let (logs, _guard) = capture_logs();
             let (end, ()) = tokio::join!(
-                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_generation(&mut settings, &process, &HostEffects)
+                ),
                 async {
                     wait_for_logs(
                         &logs,
@@ -2520,6 +3330,239 @@ mod tests {
             );
         }
 
+        /// Everything both reload drives need.
+        ///
+        /// All four addresses are pinned with `free_addr()` so the same ports
+        /// can be asked of both generations, and the peer subsystem is
+        /// configured so the fourth of them is bound at all. The configuration
+        /// file has to exist: the peer subsystem reads it on startup, and a
+        /// reload backs it up before rewriting it.
+        struct ReloadFixture {
+            settings: Settings,
+            process: ProcessContext,
+            notify_terminate: Arc<Notify>,
+            graphql_addr: SocketAddr,
+        }
+
+        fn reload_fixture(dir: &Path) -> ReloadFixture {
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir, Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir);
+            let graphql_addr = free_addr();
+            settings.config.visible.graphql_srv_addr = graphql_addr;
+            settings.config.visible.ingest_srv_addr = free_addr();
+            settings.config.visible.publish_srv_addr = free_addr();
+            // `update_config_file` carries these two through the rewrite
+            // unchanged, so the second generation is handed the same peer
+            // address.
+            settings.config.peer_srv_addr = Some(free_addr());
+            settings.config.peers = Some(HashSet::new());
+            write_config_file(&settings);
+
+            ReloadFixture {
+                settings,
+                process,
+                notify_terminate,
+                graphql_addr,
+            }
+        }
+
+        /// The four readiness lines, one per pinned address.
+        const READINESS_LINES: [&str; 4] = [
+            "Ingest listening on",
+            "Publish listening on",
+            // The peer subsystem logs a bare `listening on`, so the level that
+            // precedes it is what tells it apart from the two lines above.
+            "INFO listening on",
+            "GraphQL web server is starting on",
+        ];
+
+        fn occurrences(logs: &Arc<Mutex<Vec<u8>>>, needle: &str) -> usize {
+            captured(logs).matches(needle).count()
+        }
+
+        /// Waits until `needle` has appeared `count` times in the captured log.
+        ///
+        /// The same bounded poll [`wait_for_logs`] uses, for the assertions
+        /// that are about a second occurrence rather than a first.
+        async fn wait_for_occurrences(logs: &Arc<Mutex<Vec<u8>>>, needle: &str, count: usize) {
+            let wait = async {
+                while occurrences(logs, needle) < count {
+                    sleep(READY_POLL).await;
+                }
+            };
+            assert!(
+                tokio::time::timeout(READY_TIMEOUT, wait).await.is_ok(),
+                "expected {needle:?} {count} time(s) in the log, got: {}",
+                captured(logs)
+            );
+        }
+
+        /// Sends a configuration reload the only way production sends one: an
+        /// mTLS `updateConfig` mutation against the generation's own HTTPS
+        /// server.
+        ///
+        /// The mutation sleeps `GRAPHQL_REBOOT_DELAY` before it hands the new
+        /// configuration to the generation, so the response says only that the
+        /// mutation was accepted; the reload itself is waited for in the log.
+        async fn send_reload_mutation(
+            process: &ProcessContext,
+            addr: SocketAddr,
+            current: &ConfigVisible,
+        ) {
+            let tls = tls_reload::get_current_tls_material(&process.tls_watch);
+            let client = super::reload_https_server_tests::build_mtls_client(
+                &tls.cert_pem,
+                &tls.key_pem,
+                &tls.ca_pem,
+            );
+
+            let old = toml::to_string(current).expect("serialize the current config");
+            let mut updated = current.clone();
+            // One harmless field, so nothing about the next generation changes
+            // but the value that proves the rewrite happened.
+            updated.ack_transmission = current.ack_transmission + 1;
+            let new = toml::to_string(&updated).expect("serialize the new config");
+
+            let body = serde_json::json!({
+                "query": "mutation($old: String!, $new: String!) \
+                          { updateConfig(old: $old, new: $new) { ackTransmission } }",
+                "variables": { "old": old, "new": new },
+            });
+            let response = client
+                .post(format!("https://{addr}/graphql"))
+                .json(&body)
+                .send()
+                .await
+                .expect("the reload mutation should reach the generation's web server")
+                .text()
+                .await
+                .expect("the mutation response should decode");
+            assert!(
+                !response.contains("\"errors\""),
+                "the reload mutation should have been accepted, got: {response}"
+            );
+        }
+
+        /// The lifecycle loops on a reload, and the next generation reopens the
+        /// same store and rebinds the same addresses.
+        ///
+        /// This is the drive that proves the previous generation dropped every
+        /// `Database` clone it held: nothing untracked holds one here, so the
+        /// second `Database::open` on that path could not have succeeded
+        /// otherwise. The four readiness lines are all needed, one per pinned
+        /// address, and the GraphQL one is not substitutable — `web::serve`
+        /// logs it only after the acceptor has bound, so a second occurrence
+        /// is what says this lifecycle released the pinned GraphQL port and
+        /// took it again.
+        #[tokio::test]
+        async fn a_reload_reopens_the_same_store_and_rebinds_the_same_addresses() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = reload_fixture(dir.path());
+            let notify_terminate = Arc::clone(&fixture.notify_terminate);
+            let graphql_addr = fixture.graphql_addr;
+            let first_config = fixture.settings.config.visible.clone();
+            let process = fixture.process;
+            let reload_marker = final_action_marker(GenerationEnd::ReloadConfig);
+            let shutdown_marker = format!("{SHUTDOWN_PHASE}: shutting the database down");
+
+            let (logs, _guard) = capture_logs();
+            let (outcome, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut fixture.settings, &process, &HostEffects)
+                ),
+                async {
+                    wait_for_logs(&logs, &READINESS_LINES).await;
+                    send_reload_mutation(&process, graphql_addr, &first_config).await;
+
+                    // The first generation ended on the reload, shut its store
+                    // down, and asked for another generation.
+                    wait_for_logs(&logs, &[shutdown_marker.as_str(), reload_marker]).await;
+
+                    // The second generation took every pinned address back.
+                    for line in READINESS_LINES {
+                        wait_for_occurrences(&logs, line, 2).await;
+                    }
+                    // And reopened the store behind them.
+                    wait_for_occurrences(&logs, "Database cleanup completed.", 2).await;
+
+                    notify_terminate.notify_one();
+                }
+            );
+            outcome
+                .expect("the lifecycle should end on the terminate intent")
+                .expect("the lifecycle should not fail");
+
+            let output = captured(&logs);
+            // A bind failure there is non-fatal, so a second generation that
+            // came up without a web server would satisfy everything else.
+            assert!(
+                !output.contains("Failed to start GraphQL server"),
+                "both generations should have bound the pinned GraphQL address, got: {output}"
+            );
+            assert_eq!(
+                fixture.settings.config.visible.ack_transmission,
+                first_config.ack_transmission + 1,
+                "the reload should have left the rewritten configuration behind it"
+            );
+            // Two endings, two full sequences: the reload and the terminate.
+            assert_marker_sequence(
+                &logs,
+                &[
+                    full_marker_sequence(GenerationEnd::ReloadConfig),
+                    full_marker_sequence(GenerationEnd::Terminate),
+                ]
+                .concat(),
+                "ReloadConfig then Terminate",
+            );
+            assert_eq!(
+                occurrences(&logs, &shutdown_marker),
+                2,
+                "each generation shuts its own store down, got: {output}"
+            );
+        }
+
+        /// A store the first generation could not shut down stops the reload
+        /// there: the second generation never starts.
+        #[tokio::test]
+        async fn a_failed_shutdown_on_a_reload_starts_no_second_generation() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = reload_fixture(dir.path());
+            let graphql_addr = fixture.graphql_addr;
+            let first_config = fixture.settings.config.visible.clone();
+            let process = fixture.process;
+            let effects = RecordingEffects::failing();
+
+            let (logs, _guard) = capture_logs();
+            let (outcome, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut fixture.settings, &process, &effects)
+                ),
+                async {
+                    wait_for_logs(&logs, &READINESS_LINES).await;
+                    send_reload_mutation(&process, graphql_addr, &first_config).await;
+                }
+            );
+            let error = outcome
+                .expect("a failed database shutdown should end the lifecycle")
+                .expect_err("a failed database shutdown should fail the lifecycle");
+
+            assert!(
+                error.to_string().contains(SHUTDOWN_FAILURE),
+                "the seam's failure should be what propagates, got: {error:#}"
+            );
+            assert_eq!(
+                occurrences(&logs, "Ingest listening on"),
+                1,
+                "no second generation should have started, got: {}",
+                captured(&logs)
+            );
+            assert_marker_sequence(&logs, &TEARDOWN_MARKERS, "ReloadConfig/failing seam");
+            assert_eq!(effects.calls(), vec![EffectCall::ShutdownDatabase]);
+        }
+
         /// A peer subsystem that ends on its own does not take the generation
         /// with it.
         ///
@@ -2537,7 +3580,10 @@ mod tests {
 
             let (logs, _guard) = capture_logs();
             let (end, ()) = tokio::join!(
-                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_generation(&mut settings, &process, &HostEffects)
+                ),
                 async {
                     wait_for_logs(
                         &logs,
@@ -2583,13 +3629,24 @@ mod tests {
             settings.config.visible.ingest_srv_addr = occupied.local_addr().expect("occupied addr");
 
             let (logs, _guard) = capture_logs();
-            let end =
-                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process))
-                    .await
-                    .expect("a failed ingest listener should end the generation on its own")
-                    .expect("the generation reports the early exit through its end, not an error");
+            let effects = RecordingEffects::new();
+            let error = tokio::time::timeout(
+                GENERATION_TIMEOUT,
+                run_lifecycle(&mut settings, &process, &effects),
+            )
+            .await
+            .expect("a failed ingest listener should end the generation on its own")
+            .expect_err("an entry task that ended on its own is a failure of the lifecycle");
 
-            assert_eq!(end, GenerationEnd::IngestExited);
+            assert!(
+                error
+                    .to_string()
+                    .contains("the ingest subsystem ended before the daemon did"),
+                "the lifecycle should name what ended it, got: {error:#}"
+            );
+            // The store was shut down like every other ending, and no second
+            // generation was started.
+            assert_eq!(effects.calls(), vec![EffectCall::ShutdownDatabase]);
 
             let output = captured(&logs);
             assert!(
@@ -2609,6 +3666,11 @@ mod tests {
             assert!(
                 output.contains("Shutting down publish"),
                 "the early exit should run the same shutdown sequence as an intent, got: {output}"
+            );
+            assert_marker_sequence(
+                &logs,
+                &full_marker_sequence(GenerationEnd::IngestExited),
+                "IngestExited",
             );
         }
 
@@ -2638,7 +3700,10 @@ mod tests {
 
             let (logs, _guard) = capture_logs();
             let (end, ()) = tokio::join!(
-                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_generation(&mut settings, &process, &HostEffects)
+                ),
                 async {
                     wait_for_logs(
                         &logs,
@@ -2717,7 +3782,10 @@ mod tests {
 
             let (logs, _guard) = capture_logs();
             let (end, conn) = tokio::join!(
-                tokio::time::timeout(GENERATION_TIMEOUT, run_generation(&mut settings, &process)),
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_generation(&mut settings, &process, &HostEffects)
+                ),
                 async {
                     wait_for_logs(
                         &logs,
@@ -2776,6 +3844,13 @@ mod tests {
             assert!(
                 output.contains("Shutting down ingest"),
                 "the ingest listener should have observed cancellation, got: {output}"
+            );
+            // What follows is read from a store that was shut down, not merely
+            // dropped: the flush, the WAL write and the cancellation of
+            // background work all ran before the generation let go of it.
+            assert!(
+                output.contains(&format!("{SHUTDOWN_PHASE}: shutting the database down")),
+                "the store should have been shut down before the reopen, got: {output}"
             );
 
             let reopened = test_database(Path::new(&data_dir));

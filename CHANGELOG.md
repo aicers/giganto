@@ -23,6 +23,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   range deletes. Worker failures, including task panics, are recorded as
   failed jobs, and terminal status writes are retried without repeating data
   deletion.
+- Shutdown now reports the phase it has reached at `INFO`: the web server
+  stopping, the packet-capture reaper finishing, the subsystems draining, the
+  entry-task results being read, the database being shut down, and the action
+  the node takes at the end — starting the next generation, exiting, rebooting,
+  or powering off. A shutdown that stalls now says which phase it stalled in
+  instead of going quiet.
 - Added `rev` support to `scripts/fetch-theme.sh` and `docs/theme.toml` so
   docs-theme can be fetched from a commit SHA for pre-release testing.
   `version` and `rev` are mutually exclusive source selectors: set
@@ -87,6 +93,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   retry loop dialing an unreachable peer all give up when shutdown starts.
   Failures that used to vanish with a detached task, including a publish
   listener that cannot bind, are now reported.
+- Fixed the database not being flushed when the node was asked to terminate or
+  to reload its configuration. Only a reboot or a power off flushed the store,
+  wrote its write-ahead log and stopped its background work; the other endings
+  simply let the handle go. Every ending now shuts the store down, and a store
+  that cannot be shut down stops the node there instead of rebooting the host,
+  powering it off, or handing the same data directory to the next generation.
 - Fixed a shutdown that could hang indefinitely when the signal arrived in the
   first moments after startup. A subsystem that had not yet begun listening
   missed the one-shot notification and then waited out its own interval before
