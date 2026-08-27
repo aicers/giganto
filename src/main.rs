@@ -876,10 +876,11 @@ struct GenerationTeardown {
 ///
 /// # Errors
 ///
-/// Returns an error if the store could not be shut down. A retained handle
+/// Returns an error if the database could not be shut down. A retained handle
 /// that came back badly is reported, not returned: the drain has already
-/// waited for that task, the store is closed cleanly afterwards, and the
-/// ending's action still stands.
+/// waited for that task, and its failure does not suppress the later database
+/// shutdown phase or the ending's requested action. A database-shutdown
+/// failure returns before that action.
 async fn shutdown_generation(
     teardown: GenerationTeardown,
     generation_end: GenerationEnd,
@@ -953,7 +954,7 @@ async fn run_retention(
 /// its own; a panic and an abort leave no return value behind, so this is the
 /// only place they can be seen at all. Awaiting the handle here costs
 /// nothing — the drain has already waited for this task — and it is what makes
-/// the report the last word on retention before the database is closed.
+/// the report the last retention observation before database shutdown.
 async fn report_retention_outcome(retain_task_handle: JoinHandle<Result<()>>) {
     match retain_task_handle.await {
         Ok(Ok(())) => info!("Retention stopped"),
