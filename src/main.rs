@@ -2967,6 +2967,13 @@ mod tests {
                     phase_markers(&logs),
                     effects.calls()
                 );
+                let markers = phase_markers(&logs);
+                assert_eq!(
+                    markers.len(),
+                    2,
+                    "{ending}: the sequence should be waiting on the top-level drain, got: \
+                     {markers:#?}"
+                );
 
                 release_tx
                     .send(())
