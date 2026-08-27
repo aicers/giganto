@@ -215,6 +215,13 @@ impl CustomerDeletionMutation {
     // `CustomerDeletionCoordinator` says whether retention or another
     // customer's deletion owns the store. A refused request leaves the job
     // store exactly as it found it.
+    //
+    // None of the three is reached by a node that holds neither a job for this
+    // customer nor a sensor named in the request. Such a node would have
+    // nothing to do even with the store to itself, so #1675 has it answer
+    // `NO_LOCAL_TARGET_ON_THIS_NODE` ahead of the maintenance state: telling a
+    // caller to retry after shutdown or after retention would send it back for
+    // an answer that can never change.
     async fn delete_customer_data(
         &self,
         ctx: &Context<'_>,
@@ -230,6 +237,19 @@ impl CustomerDeletionMutation {
         let peer_notify = ctx.data_opt::<Arc<Notify>>().cloned();
         let tracker = ctx.data::<TaskTracker>()?.clone();
         let coordination = ctx.data::<Arc<CustomerDeletionCoordinator>>()?;
+
+        let store = db.customer_deletion_job_store()?;
+        // Asked first, and asked without claiming anything: a node with no
+        // stake in the request answers it instead of refusing it, and a
+        // refusal it never needed must not make a retention cycle give way or
+        // turn another customer away.
+        if store.get(customer_id.0)?.is_none()
+            && local_targets(&provided_targets, &ingest_sensors)
+                .await
+                .is_empty()
+        {
+            return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
+        }
 
         // Asked before anything is written. The tracker is closed for the
         // whole of shutdown, so a request that arrives after it began can
@@ -257,7 +277,13 @@ impl CustomerDeletionMutation {
             }
         };
 
-        let store = db.customer_deletion_job_store()?;
+        // Read again rather than reused from the check above: that read
+        // answered a question no claim was needed for, and the job store can
+        // have moved on between the two. This one is taken under the claim,
+        // which is what makes it the state the request acts on — without it a
+        // request that saw no job before waiting for the sensor list could
+        // overwrite a deletion that succeeded while it waited.
+        //
         // Kept whole rather than consumed: it is both what this request reads
         // its decision off and what the job store is put back to if the
         // registration below loses a race with shutdown.
@@ -291,11 +317,7 @@ impl CustomerDeletionMutation {
                 }
             }
         } else {
-            let local_sensors = ingest_sensors.read().await;
-            let targets = provided_targets
-                .into_iter()
-                .filter(|target| local_sensors.contains(target))
-                .collect::<Vec<_>>();
+            let targets = local_targets(&provided_targets, &ingest_sensors).await;
             if targets.is_empty() {
                 return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
             }
@@ -327,32 +349,70 @@ impl CustomerDeletionMutation {
             stream_direct_channels,
             peer_notify,
         ) {
-            // Shutdown closed the tracker between the check above and this
-            // registration. The deletion never started and the claim is
-            // already released — the future that owned both was dropped
-            // unpolled — so all that is left of the request is the job just
-            // written, and a refusal must leave none.
-            //
-            // Reported rather than answered silently, because this is the one
-            // refusal the request had already been written into the job store
-            // for, and because the reason carries more than the response
-            // does: `Closed` is the shutdown this node expected to lose the
-            // race to, while `LockPoisoned` is a tracker that will admit
-            // nothing again for the rest of the generation.
-            warn!(
-                customer_id = customer_id.0,
-                "Refusing an accepted customer data deletion: the shutdown tracker would not admit it: {e}"
-            );
-            if let Err(e) = restore_previous_job(&store, customer_id.0, previous_job.as_ref()) {
-                error!(
-                    customer_id = customer_id.0,
-                    "Failed to undo the customer deletion job a shutdown refused: {e:#}"
-                );
-            }
-            return Ok(CustomerDataDeletionRequestStatus::BlockedByShutdown);
+            return refuse_registration(&e, customer_id.0, || {
+                restore_previous_job(&store, customer_id.0, previous_job.as_ref())
+            });
         }
         Ok(CustomerDataDeletionRequestStatus::Accepted)
     }
+}
+
+/// The service FQDNs of `provided` this node ingests, in the order given.
+///
+/// Only a first request resolves its targets this way. A `Failed` retry uses
+/// the list stored with the job instead, because an earlier attempt that
+/// partly succeeded may already have removed the sensors it deleted.
+async fn local_targets(provided: &[String], ingest_sensors: &IngestSensors) -> Vec<String> {
+    let local_sensors = ingest_sensors.read().await;
+    provided
+        .iter()
+        .filter(|target| local_sensors.contains(*target))
+        .cloned()
+        .collect()
+}
+
+/// Answers a request whose registration the shutdown tracker refused.
+///
+/// Reported rather than answered silently, because this is the one refusal the
+/// request had already been written into the job store for, and because the
+/// reason carries more than the response does: `Closed` is the shutdown this
+/// node expected to lose the race to, while `LockPoisoned` is a tracker that
+/// will admit nothing again for the rest of the generation.
+///
+/// `undo` puts the job store back the way the request found it, and only a
+/// request that leaves it that way is a refusal. When the undo fails the job
+/// just written stays `InProgress` with no worker registered to finish it —
+/// the very thing the refusal exists to prevent, and, until #1725 recovers
+/// such a job at startup, the answer to every later request for this customer.
+/// That is a failure of the mutation, not a `BLOCKED_BY_SHUTDOWN` the caller
+/// could act on, so it is raised as an error.
+///
+/// # Errors
+///
+/// Returns an error if `undo` fails.
+fn refuse_registration(
+    spawn_error: &SpawnError,
+    customer_id: u32,
+    undo: impl FnOnce() -> AnyhowResult<()>,
+) -> Result<CustomerDataDeletionRequestStatus> {
+    warn!(
+        customer_id,
+        "Refusing an accepted customer data deletion: the shutdown tracker would not admit it: {spawn_error}"
+    );
+    if let Err(e) = undo() {
+        error!(
+            customer_id,
+            "Failed to undo the customer deletion job a shutdown refused: {e:#}"
+        );
+        return Err(format!(
+            "Shutdown refused the deletion for customer {customer_id}, and the job record written \
+             for it could not be undone: {e:#}. The job is left in progress with nothing running \
+             it, and requests for this customer will report DELETION_IN_PROGRESS until it is \
+             recovered."
+        )
+        .into());
+    }
+    Ok(CustomerDataDeletionRequestStatus::BlockedByShutdown)
 }
 
 /// Puts the job store back the way a refused request found it.
@@ -663,13 +723,16 @@ mod tests {
     use giganto_client::publish::stream::{RequestStreamRecord, STREAM_REQUEST_ALL_SENSOR};
     use tokio::sync::Notify;
 
+    use anyhow::anyhow;
+
     use super::{
-        PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES, cleanup_runtime_for_targets,
-        delete_customer_data_from_db, delete_customer_data_with, restore_previous_job,
-        start_customer_deletion_worker, supervise_worker, validate_service_fqdn_list,
+        CustomerDataDeletionRequestStatus, PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES,
+        cleanup_runtime_for_targets, delete_customer_data_from_db, delete_customer_data_with,
+        refuse_registration, restore_previous_job, start_customer_deletion_worker,
+        supervise_worker, validate_service_fqdn_list,
     };
     use crate::{
-        cancellation::TaskTracker,
+        cancellation::{SpawnError, TaskTracker},
         comm::{
             IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
             new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
@@ -979,6 +1042,56 @@ mod tests {
                 .get(5)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// A node with neither a job for the customer nor a sensor named in the
+    /// request answers `NO_LOCAL_TARGET_ON_THIS_NODE` whatever its store is
+    /// busy with.
+    ///
+    /// The three refusals all mean "ask again later", and later never helps
+    /// here: no cycle of retention, no other customer's deletion and no
+    /// restart gives this node data it never held. It also claims nothing on
+    /// the way to that answer, so a request it has no part in cannot make a
+    /// retention cycle give way or turn another customer away.
+    #[tokio::test]
+    async fn no_local_target_outranks_every_refusal() {
+        const REQUESTING: u32 = 800;
+        const OTHER: u32 = 801;
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        let query = delete_customer_data_mutation(&["piglet.node1.example.test"], REQUESTING);
+        let no_local_target = "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}";
+
+        let retention = schema
+            .deletion_coordination
+            .begin_retention()
+            .expect("nothing has claimed the store yet");
+        assert_eq!(schema.execute(&query).await.data.to_string(), no_local_target);
+        drop(retention);
+
+        let other_customer = schema
+            .deletion_coordination
+            .begin_deletion(OTHER)
+            .expect("the retention cycle released the store");
+        assert_eq!(schema.execute(&query).await.data.to_string(), no_local_target);
+        drop(other_customer);
+
+        schema
+            .top_level_tracker
+            .close()
+            .expect("a fresh tracker closes");
+        assert_eq!(schema.execute(&query).await.data.to_string(), no_local_target);
+
+        assert_eq!(
+            job_status(&schema.db, REQUESTING),
+            None,
+            "a node with no local target must write no job"
+        );
+        drop(
+            schema
+                .deletion_coordination
+                .begin_retention()
+                .expect("a request answered this way claims nothing"),
         );
     }
 
@@ -1514,15 +1627,17 @@ mod tests {
     ///
     /// Nothing here is timed. The claim is taken inside the resolver, so it is
     /// already held when `ACCEPTED` comes back, and the deletion is kept from
-    /// finishing by a read guard on the sensor list — the supervisor takes
-    /// that lock for writing once the RocksDB deletes are done.
+    /// finishing by a write guard on the runtime sensor list — the second of
+    /// the four runtime maps the supervisor clears once the RocksDB deletes
+    /// are done. The resolver never reads that map, so the requests below run
+    /// while the deletion is parked on it.
     #[tokio::test]
     async fn a_deletion_in_flight_refuses_other_customers_and_repeats_itself() {
         let first = "piglet.node1.example.test";
         let second = "reproduce.node2.example.test";
         let schema = TestSchema::new_with_ingest_sensors(&[first, second]);
 
-        let hold_sensors = schema.ingest_sensors.read().await;
+        let hold_runtime_sensors = schema.runtime_ingest_sensors.write().await;
         let accepted = schema
             .execute(&delete_customer_data_mutation(&[first], 300))
             .await;
@@ -1551,7 +1666,7 @@ mod tests {
             "the customer already deleting is told to wait, not that it is blocked"
         );
 
-        drop(hold_sensors);
+        drop(hold_runtime_sensors);
         assert_eq!(
             wait_for_terminal_job(&schema.db, 300).await.status,
             CustomerDataDeletionStatus::Succeeded
@@ -1689,42 +1804,20 @@ mod tests {
         );
     }
 
-    /// A request that passes the shutdown check and then loses the race to it
-    /// is refused all the same, and leaves the job it had already written
-    /// nowhere.
+    /// A request already in flight when shutdown begins is refused and leaves
+    /// the job store alone.
     ///
-    /// This is the whole path the previous test covers only its far end of:
-    /// the resolver's early `is_closed` check, the job write that follows it,
-    /// the registration that is then refused, and the undo. Shutdown is made
-    /// to begin inside that window rather than raced into it — the request is
-    /// parked at the one `.await` between the check and the registration, the
-    /// sensor list it reads to work out its local targets, and it is held
-    /// there until the tracker has been closed.
+    /// The request is parked at the sensor list it reads to work out its local
+    /// targets — the resolver's first `.await`, and, on a current-thread
+    /// runtime, where a single yield is enough to put it — and held there
+    /// until the tracker has been closed. What it does next is the whole of
+    /// the resolver's shutdown handling: the `is_closed` check it now fails,
+    /// and the claim and the job write it therefore never reaches.
     #[tokio::test]
-    async fn a_registration_that_loses_the_shutdown_race_is_refused_and_writes_nothing() {
+    async fn a_request_in_flight_when_shutdown_begins_is_refused_and_writes_nothing() {
         const REQUESTING: u32 = 700;
-        const PROBE: u32 = 701;
         let target = "piglet.node1.example.test";
         let schema = TestSchema::new_with_ingest_sensors(&[target]);
-
-        // The probe asks the same question the request does and answers off
-        // the job store alone, so asking it repeatedly never reaches the
-        // sensor list the request is parked on.
-        schema
-            .db
-            .customer_deletion_job_store()
-            .unwrap()
-            .create(
-                PROBE,
-                &CustomerDataDeletion {
-                    service_fqdn_list: vec![target.to_string()],
-                    requested_at: 1,
-                    status: CustomerDataDeletionStatus::Succeeded,
-                    completed_at: Some(2),
-                    error: None,
-                },
-            )
-            .unwrap();
 
         let hold_sensors = schema.ingest_sensors.write().await;
         let request = tokio::spawn({
@@ -1732,29 +1825,10 @@ mod tests {
             let query = delete_customer_data_mutation(&[target], REQUESTING);
             async move { schema.execute(query).await }
         });
+        // Polls the request up to its first park, which is the sensor list
+        // this test is holding: everything before it is synchronous.
+        tokio::task::yield_now().await;
 
-        // The claim is taken after the shutdown check and before the parking
-        // `.await`, so a probe that is turned away by it is the request having
-        // passed the check it must pass for this race to be the one under
-        // test.
-        loop {
-            let probe = schema
-                .execute(&delete_customer_data_mutation(&[target], PROBE))
-                .await;
-            if probe.data.to_string() == "{deleteCustomerData: BLOCKED_BY_ANOTHER_DELETION}" {
-                break;
-            }
-            assert_eq!(
-                probe.data.to_string(),
-                "{deleteCustomerData: ALREADY_COMPLETED}",
-                "the probe must never do anything but read the job store"
-            );
-            tokio::task::yield_now().await;
-        }
-
-        // Shutdown begins while the request is held, which is what makes the
-        // race deterministic: the request cannot reach the registration until
-        // the sensor list is released, and by then the tracker is closed.
         schema
             .top_level_tracker
             .close()
@@ -1770,7 +1844,7 @@ mod tests {
         assert_eq!(
             job_status(&schema.db, REQUESTING),
             None,
-            "the job the refused request wrote must be undone"
+            "a refused request must leave no job behind"
         );
         assert!(
             schema.ingest_sensors.read().await.contains(target),
@@ -1780,8 +1854,129 @@ mod tests {
             schema
                 .deletion_coordination
                 .begin_retention()
-                .expect("the refused request released the store"),
+                .expect("the refused request claimed nothing"),
         );
+    }
+
+    /// A registration the tracker refuses undoes the job the request had
+    /// already written, for both shapes of request.
+    ///
+    /// This is the window the two tests above cannot be driven through:
+    /// nothing in the resolver awaits between the `is_closed` check and the
+    /// registration, so a request only reaches it when shutdown begins in the
+    /// middle of a synchronous run. What stands in for that here is the other
+    /// way the tracker refuses work — a poisoned admission lock, which
+    /// `is_closed` does not report and `spawn` does. The resolver takes the
+    /// same path either way: the job is written, the registration comes back
+    /// refused, and the write is undone before the refusal is reported.
+    #[tokio::test]
+    async fn a_registration_the_tracker_refuses_undoes_the_job_it_wrote() {
+        const REQUESTING: u32 = 700;
+        const RETRYING: u32 = 701;
+        let target = "piglet.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[target]);
+        let failed = CustomerDataDeletion {
+            service_fqdn_list: vec![target.to_string()],
+            requested_at: 1,
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(2),
+            error: Some("old failure".to_string()),
+        };
+        schema
+            .db
+            .customer_deletion_job_store()
+            .unwrap()
+            .create(RETRYING, &failed)
+            .unwrap();
+
+        // Poisons the admission lock the way `cancellation` already tests:
+        // the inner spawn panics off a runtime, and it panics while the lock
+        // is held. Done on a thread of its own because this test has a
+        // runtime, and left uncaught nowhere because a panicking test thread
+        // would take the assertions with it.
+        std::thread::spawn({
+            let tracker = schema.top_level_tracker.clone();
+            move || {
+                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = tracker.spawn("off-runtime", |_token| async {});
+                }));
+                assert!(panicked.is_err(), "spawning off a runtime should panic");
+            }
+        })
+        .join()
+        .expect("the poisoning thread caught its own panic");
+        assert!(
+            !schema.top_level_tracker.is_closed(),
+            "the request must pass the check the registration then fails"
+        );
+
+        for customer_id in [REQUESTING, RETRYING] {
+            let refused = schema
+                .execute(&delete_customer_data_mutation(&[target], customer_id))
+                .await;
+            assert!(refused.errors.is_empty(), "{:?}", refused.errors);
+            assert_eq!(
+                refused.data.to_string(),
+                "{deleteCustomerData: BLOCKED_BY_SHUTDOWN}"
+            );
+        }
+
+        assert_eq!(
+            job_status(&schema.db, REQUESTING),
+            None,
+            "the job the refused first request wrote must be undone"
+        );
+        assert_eq!(
+            schema
+                .db
+                .customer_deletion_job_store()
+                .unwrap()
+                .get(RETRYING)
+                .unwrap(),
+            Some(failed),
+            "a refused retry must leave the failed job it overwrote as it was"
+        );
+        assert!(
+            schema.ingest_sensors.read().await.contains(target),
+            "a refused registration must not have started deleting"
+        );
+        drop(
+            schema
+                .deletion_coordination
+                .begin_retention()
+                .expect("both refused requests released the store"),
+        );
+    }
+
+    /// An undo that fails is raised as an error rather than answered as a
+    /// refusal.
+    ///
+    /// Nothing ran the job the request wrote and nothing has removed it, so
+    /// reporting `BLOCKED_BY_SHUTDOWN` would tell the caller to retry
+    /// elsewhere while leaving this node answering `DELETION_IN_PROGRESS` for
+    /// the customer until #1725 recovers the job at startup.
+    #[test]
+    fn an_undo_that_fails_is_an_error_not_a_refusal() {
+        const CUSTOMER: u32 = 702;
+        let undone = std::cell::Cell::new(false);
+        let refusal = refuse_registration(&SpawnError::Closed, CUSTOMER, || {
+            undone.set(true);
+            Ok(())
+        })
+        .expect("an undone request is a refusal, not a failure");
+        assert_eq!(
+            refusal,
+            CustomerDataDeletionRequestStatus::BlockedByShutdown
+        );
+        assert!(undone.get(), "the job written for the request must be undone");
+
+        let failure = refuse_registration(&SpawnError::LockPoisoned, CUSTOMER, || {
+            Err(anyhow!("the job store is gone"))
+        })
+        .expect_err("an undo that failed is not a refusal the caller can act on");
+        let message = failure.message;
+        assert!(message.contains("the job store is gone"), "{message}");
+        assert!(message.contains("DELETION_IN_PROGRESS"), "{message}");
     }
 
     /// Undoing the job a refused request wrote leaves the store as the request

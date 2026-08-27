@@ -22,9 +22,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cycle: a request that arrives while another customer is being deleted, while
   retention is running, or after the node has begun shutting down is refused
   without starting a job, and a retention cycle that comes due while a deletion
-  is running is skipped until the next one. An accepted deletion always
-  finishes before the node shuts its database down. Cluster-wide aggregation is
-  not yet included.
+  is running is skipped until the next one. A node that holds neither a job for
+  the customer nor any of the requested services reports no-local-target
+  instead of one of those refusals, since retrying there can never help. An
+  accepted deletion always finishes before the node shuts its database down.
+  Cluster-wide aggregation is not yet included.
 - Customer deletion now runs on Tokio's blocking pool with batched RocksDB
   range deletes. Worker failures, including task panics, are recorded as
   failed jobs, and terminal status writes are retried without repeating data
