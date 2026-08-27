@@ -1960,6 +1960,16 @@ mod tests {
         const READY_TIMEOUT: Duration = Duration::from_mins(1);
         /// How often the readiness wait rechecks the captured log.
         const READY_POLL: Duration = Duration::from_millis(5);
+        /// How long a transition that must not have happened yet is watched
+        /// for.
+        ///
+        /// A negative is only as good as the window it is observed over, so
+        /// this one is a count of chances — twenty [`READY_POLL`]
+        /// observations — handed to a teardown that would advance too early,
+        /// rather than a settle delay whose end is the only moment anything
+        /// is looked at. The first observation that sees the forbidden
+        /// transition ends the watch there.
+        const FORBIDDEN_WINDOW: Duration = READY_POLL.saturating_mul(20);
 
         fn install_crypto_provider() {
             INSTALL_PROVIDER.call_once(|| {
@@ -2091,16 +2101,35 @@ mod tests {
         /// with no await between the announcement and the wait that follows,
         /// so a subsystem whose line is in the log is serving.
         async fn wait_for_logs(logs: &Arc<Mutex<Vec<u8>>>, needles: &[&str]) {
-            let wait = async {
-                while !needles.iter().all(|needle| captured(logs).contains(needle)) {
-                    sleep(READY_POLL).await;
-                }
-            };
             assert!(
-                tokio::time::timeout(READY_TIMEOUT, wait).await.is_ok(),
+                poll_until(READY_TIMEOUT, || needles
+                    .iter()
+                    .all(|needle| captured(logs).contains(needle)))
+                .await,
                 "expected {needles:?} in the log, got: {}",
                 captured(logs)
             );
+        }
+
+        /// Polls `condition` at [`READY_POLL`], reporting whether it held
+        /// within `limit`.
+        ///
+        /// None of what these tests synchronize on can be awaited: it is a
+        /// flag another task sets, a line in a captured log, or a tracker
+        /// closing. One poll covers both directions of that, which is what
+        /// keeps a proof that something has not happened from being a sleep.
+        /// A `true` under [`READY_TIMEOUT`] is a bounded wait for something
+        /// expected; a `false` under [`FORBIDDEN_WINDOW`] is a bounded watch
+        /// that saw a forbidden transition at no point in the window. The
+        /// result is returned rather than asserted on so that a caller's
+        /// diagnostics are read after the wait, not before it.
+        async fn poll_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
+            let wait = async {
+                while !condition() {
+                    sleep(READY_POLL).await;
+                }
+            };
+            tokio::time::timeout(limit, wait).await.is_ok()
         }
 
         struct TestQuery;
@@ -2912,32 +2941,46 @@ mod tests {
                 // Cancellation has to reach the stand-in and its blocking
                 // cleanup has to be running before the ordering under test
                 // means anything.
-                let started = async {
-                    while !cleanup_started.load(Ordering::SeqCst) {
-                        sleep(READY_POLL).await;
-                    }
-                };
                 assert!(
-                    tokio::time::timeout(READY_TIMEOUT, started).await.is_ok(),
+                    poll_until(READY_TIMEOUT, || cleanup_started.load(Ordering::SeqCst)).await,
                     "{ending}: the drain should have cancelled the retention stand-in"
                 );
 
-                // A sequence that did not wait would have shut the store down
-                // by now: the drain is the only thing between it and the tail.
-                sleep(Duration::from_millis(100)).await;
+                // The drain is the only thing between the sequence and the
+                // tail, so a sequence that did not wait for it would leave the
+                // phase it is parked in: by announcing the database shutdown,
+                // by reaching the seam, or by emitting any marker beyond the
+                // two the phases before the drain already left. The window
+                // below is watched rather than slept through — whichever of
+                // the three happened first would end it there — so an advance
+                // anywhere inside it fails, not only one that is still the
+                // state of the world when a single check runs.
+                let advanced = || {
+                    captured(&logs).contains(&shutdown_marker)
+                        || !effects.calls().is_empty()
+                        || phase_markers(&logs).len() > 2
+                };
                 assert!(
-                    !captured(&logs).contains(&shutdown_marker),
-                    "{ending}: the store was shut down while a blocking cleanup was still running"
-                );
-                assert!(
-                    effects.calls().is_empty(),
-                    "{ending}: the seam should not have been reached yet"
+                    !poll_until(FORBIDDEN_WINDOW, advanced).await,
+                    "{ending}: the sequence advanced past the drain while a blocking cleanup was \
+                     still running, markers {:#?}, seam calls {:?}",
+                    phase_markers(&logs),
+                    effects.calls()
                 );
 
                 release_tx
                     .send(())
                     .expect("the blocking cleanup is waiting");
                 wait_for_logs(&logs, &[shutdown_marker.as_str()]).await;
+                // The marker says the phase was entered; the seam is what says
+                // the store was actually handed over to be shut down.
+                assert!(
+                    poll_until(READY_TIMEOUT, || effects
+                        .calls()
+                        .contains(&EffectCall::ShutdownDatabase))
+                    .await,
+                    "{ending}: the store should have been shut down once the cleanup was released"
+                );
                 assert!(
                     cleanup_finished.load(Ordering::SeqCst),
                     "{ending}: the blocking cleanup should have run to the end first"
@@ -3010,28 +3053,27 @@ mod tests {
                 }
             });
 
-            let reaping_started = async {
-                while !reaping.load(Ordering::SeqCst) {
-                    sleep(READY_POLL).await;
-                }
-            };
             assert!(
-                tokio::time::timeout(READY_TIMEOUT, reaping_started)
-                    .await
-                    .is_ok(),
+                poll_until(READY_TIMEOUT, || reaping.load(Ordering::SeqCst)).await,
                 "the reaper drain should have started its stand-in"
             );
-
-            // A sequence that did not wait would have walked past this phase by
-            // now: nothing else stands between it and the rest of the teardown.
-            sleep(Duration::from_millis(100)).await;
             assert!(
                 web_reaper_tracker.is_closed(),
                 "the reaper drain should have closed its own tracker to new admissions"
             );
+
+            // Nothing stands between this phase and the rest of the teardown,
+            // so a sequence that did not wait would show it in one of two
+            // ways: subsystem cancellation closing the top-level tracker, or
+            // the next phase marker. Both are watched for the whole window
+            // rather than looked at once at the end of a settle delay, so
+            // either one, at any point inside it, fails here.
+            let advanced = || top_level_tracker.is_closed() || phase_markers(&logs).len() > 1;
             assert!(
-                !top_level_tracker.is_closed(),
-                "subsystem cancellation began while a `tcpdump` child was still being reaped"
+                !poll_until(FORBIDDEN_WINDOW, advanced).await,
+                "the teardown left the reaper phase while a `tcpdump` child was still being \
+                 reaped, markers {:#?}",
+                phase_markers(&logs)
             );
             let markers = phase_markers(&logs);
             assert_eq!(
@@ -3041,15 +3083,15 @@ mod tests {
             );
 
             release_tx.send(()).expect("the reaper stand-in is waiting");
+            assert!(
+                poll_until(READY_TIMEOUT, || top_level_tracker.is_closed()).await,
+                "the top-level drain should have closed its tracker once the reaping was done"
+            );
             wait_for_logs(
                 &logs,
                 &[&format!("{SHUTDOWN_PHASE}: shutting the database down")],
             )
             .await;
-            assert!(
-                top_level_tracker.is_closed(),
-                "the top-level drain should have closed its tracker once the reaping was done"
-            );
 
             // What is left of the tail is a delay, and this test is not waiting
             // it out.
@@ -3387,13 +3429,8 @@ mod tests {
         /// The same bounded poll [`wait_for_logs`] uses, for the assertions
         /// that are about a second occurrence rather than a first.
         async fn wait_for_occurrences(logs: &Arc<Mutex<Vec<u8>>>, needle: &str, count: usize) {
-            let wait = async {
-                while occurrences(logs, needle) < count {
-                    sleep(READY_POLL).await;
-                }
-            };
             assert!(
-                tokio::time::timeout(READY_TIMEOUT, wait).await.is_ok(),
+                poll_until(READY_TIMEOUT, || occurrences(logs, needle) >= count).await,
                 "expected {needle:?} {count} time(s) in the log, got: {}",
                 captured(logs)
             );
