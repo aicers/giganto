@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, connection::Connection};
-use data_encoding::BASE64;
+use base64::{Engine, engine::general_purpose::STANDARD as base64_engine};
 use giganto_client::ingest::Packet as pk;
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -110,7 +110,7 @@ impl FromKeyValue<pk> for Packet {
         Ok(Packet {
             request_time: get_time_from_key(&key[..key.len() - (TIMESTAMP_SIZE + 1)])?,
             packet_time: get_time_from_key(key)?,
-            packet: BASE64.encode(&pk.packet),
+            packet: base64_engine.encode(&pk.packet),
         })
     }
 }

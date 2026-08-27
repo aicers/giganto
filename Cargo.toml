@@ -22,12 +22,10 @@ base64 = "0.23"
 bincode = "1"
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
-data-encoding = "2"
 darling = "0.24"
 futures-util = "0.3"
 giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "0.28.0" }
 graphql_client = "0.16"
-humantime = "2"
 humantime-serde = "1"
 libc = "0.2"
 num_enum = "0.7"
@@ -43,7 +41,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 rocksdb = "0.24"
 roxy = { git = "https://github.com/aicers/roxy.git", tag = "0.6.0" }
 rustls = { version = "0.23", default-features = false, features = [
-    "ring",
+    "aws_lc_rs",
     "std",
 ] }
 rustls-pemfile = "2"
@@ -60,7 +58,6 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 x509-parser = "0.18"
 poem = { version = "3", features = ["rustls"] }
-tokio-rustls = "0.26"
 tokio-util = { version = "0.7", features = ["rt"] }
 async-graphql-poem = "7"
 jiff = { version = "0.2", features = ["serde"] }
@@ -71,11 +68,11 @@ pretty_assertions = "1"
 rcgen = "0.14"
 regex = "1"
 serial_test = "4"
-tempfile = "3"
 # `test-util` gives tests the paused clock (`#[tokio::test(start_paused =
 # true)]`), so a timing-dependent test advances virtual time instead of
 # sleeping. It is a dev-dependency feature, so it is not enabled in the binary.
 tokio = { version = "1", features = ["test-util"] }
+tokio-rustls = "0.26"
 url = "2"
 
 [features]
