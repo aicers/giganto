@@ -3399,6 +3399,22 @@ mod tests {
             );
         }
 
+        /// The captured log position where the `nth` occurrence of `needle`
+        /// starts.
+        ///
+        /// Meant to be called once a bounded wait — [`wait_for_occurrences`]
+        /// with a matching or greater count — has already established that
+        /// the occurrence exists; this does no waiting of its own; it is
+        /// where a position for two already-confirmed lines is read, so
+        /// their relative order in that one log can be asserted.
+        fn occurrence_position(logs: &Arc<Mutex<Vec<u8>>>, needle: &str, nth: usize) -> usize {
+            captured(logs)
+                .match_indices(needle)
+                .nth(nth - 1)
+                .unwrap_or_else(|| panic!("expected occurrence {nth} of {needle:?} in the log"))
+                .0
+        }
+
         /// Sends a configuration reload the only way production sends one: an
         /// mTLS `updateConfig` mutation against the generation's own HTTPS
         /// server.
@@ -3521,6 +3537,18 @@ mod tests {
                 occurrences(&logs, &shutdown_marker),
                 2,
                 "each generation shuts its own store down, got: {output}"
+            );
+            // `run_generation` awaits `web::serve` — which logs the GraphQL
+            // readiness line only after its acceptor has bound — before it
+            // registers retention, whose own pass is what logs cleanup. That
+            // ordering is deterministic, so the second generation's GraphQL
+            // readiness line must precede its cleanup line in this one log.
+            let second_graphql_ready =
+                occurrence_position(&logs, "GraphQL web server is starting on", 2);
+            let second_cleanup = occurrence_position(&logs, "Database cleanup completed.", 2);
+            assert!(
+                second_graphql_ready < second_cleanup,
+                "the second generation's GraphQL readiness should precede its cleanup, got: {output}"
             );
         }
 
