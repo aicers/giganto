@@ -720,10 +720,9 @@ mod tests {
     };
     use std::time::Duration;
 
+    use anyhow::anyhow;
     use giganto_client::publish::stream::{RequestStreamRecord, STREAM_REQUEST_ALL_SENSOR};
     use tokio::sync::Notify;
-
-    use anyhow::anyhow;
 
     use super::{
         CustomerDataDeletionRequestStatus, PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES,
@@ -1066,21 +1065,30 @@ mod tests {
             .deletion_coordination
             .begin_retention()
             .expect("nothing has claimed the store yet");
-        assert_eq!(schema.execute(&query).await.data.to_string(), no_local_target);
+        assert_eq!(
+            schema.execute(&query).await.data.to_string(),
+            no_local_target
+        );
         drop(retention);
 
         let other_customer = schema
             .deletion_coordination
             .begin_deletion(OTHER)
             .expect("the retention cycle released the store");
-        assert_eq!(schema.execute(&query).await.data.to_string(), no_local_target);
+        assert_eq!(
+            schema.execute(&query).await.data.to_string(),
+            no_local_target
+        );
         drop(other_customer);
 
         schema
             .top_level_tracker
             .close()
             .expect("a fresh tracker closes");
-        assert_eq!(schema.execute(&query).await.data.to_string(), no_local_target);
+        assert_eq!(
+            schema.execute(&query).await.data.to_string(),
+            no_local_target
+        );
 
         assert_eq!(
             job_status(&schema.db, REQUESTING),
@@ -1968,7 +1976,10 @@ mod tests {
             refusal,
             CustomerDataDeletionRequestStatus::BlockedByShutdown
         );
-        assert!(undone.get(), "the job written for the request must be undone");
+        assert!(
+            undone.get(),
+            "the job written for the request must be undone"
+        );
 
         let failure = refuse_registration(&SpawnError::LockPoisoned, CUSTOMER, || {
             Err(anyhow!("the job store is gone"))
