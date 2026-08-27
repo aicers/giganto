@@ -27,15 +27,34 @@ jobs:
             cargo_flags: ""
           - feature_set: standalone
             cargo_flags: --no-default-features --features benchmark
-          - feature_set: bootroot
-            cargo_flags: --features bootroot
+          - feature_set: all-features
+            cargo_flags: --all-features
     steps:
       - name: Increase ulimit size
         run: ulimit -n 8096
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy
+      - uses: actions/checkout@v5
+      - uses: ./.github/cache-cargo
+      - name: Clippy (${{ matrix.feature_set }})
+        run: cargo clippy ${{ matrix.cargo_flags }} --tests -- -D warnings
+      - name: Check (${{ matrix.feature_set }})
+        run: cargo check ${{ matrix.cargo_flags }} --tests
+      # Cargo.lock is feature-independent, but its drift only surfaces after a
+      # cargo invocation has re-resolved it, so this runs on one matrix entry
+      # rather than in the feature-independent `lint` job below.
+      - name: Detect Cargo.lock changes
+        if: matrix.feature_set == 'default'
+        run: git diff-index --quiet HEAD --
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: actions/checkout@v5
       - uses: biomejs/setup-biome@v2
         with:
@@ -43,14 +62,8 @@ jobs:
       - uses: ./.github/cache-cargo
       - name: Check formatting
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
-      - name: Clippy (${{ matrix.feature_set }})
-        run: cargo clippy ${{ matrix.cargo_flags }} --tests -- -D warnings
-      - name: Check (${{ matrix.feature_set }})
-        run: cargo check ${{ matrix.cargo_flags }} --tests
       - name: Biome check
         run: biome ci
-      - name: Detect Cargo.lock changes
-        run: git diff-index --quiet HEAD --
       - name: markdownlint
         uses: DavidAnson/markdownlint-cli2-action@v24
         with:
@@ -87,17 +100,12 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest, macOS-latest ]
-        feature_set: [ default, bootroot, all-features ]
+        feature_set: [ default, all-features ]
         include:
           - feature_set: default
             cargo_flags: ""
-          - feature_set: bootroot
-            cargo_flags: --features bootroot
           - feature_set: all-features
             cargo_flags: --all-features
-        exclude:
-          - os: macOS-latest
-            feature_set: all-features
     steps:
       - name: Increase ulimit size
         run: ulimit -n 8096

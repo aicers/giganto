@@ -1,4 +1,11 @@
 #![allow(clippy::module_name_repetitions)]
+// The `async_graphql::Enum` derive on `Protocol` (feature `storage_diagnostics`)
+// generates an `OutputType::resolve` impl whose `async` body has no `.await`,
+// tripping `clippy::unused_async_trait_impl`. The code originates inside the
+// derive macro, and the lint's level is resolved at this enclosing module rather
+// than at the enum, so the allow must sit here.
+// Remove `unused_async_trait_impl` after async-graphql issue #1832 is fixed and released.
+#![allow(clippy::unused_async_trait_impl)]
 
 use std::{
     collections::{HashMap, HashSet},
