@@ -17,8 +17,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   retried using their originally stored targets. After RocksDB deletion
   succeeds, Giganto removes the target services from its in-memory ingest,
   runtime-ingest, packet-capture, and direct-stream routing state and, when
-  configured, propagates the updated sensor list to connected peers.
-  Cluster-wide aggregation is not yet included.
+  configured, propagates the updated sensor list to connected peers. Only one
+  deletion runs at a time, and a deletion never overlaps a retention cleanup
+  cycle: a request that arrives while another customer is being deleted, while
+  retention is running, or after the node has begun shutting down is refused
+  without starting a job, and a retention cycle that comes due while a deletion
+  is running is skipped until the next one. An accepted deletion always
+  finishes before the node shuts its database down. Cluster-wide aggregation is
+  not yet included.
 - Customer deletion now runs on Tokio's blocking pool with batched RocksDB
   range deletes. Worker failures, including task panics, are recorded as
   failed jobs, and terminal status writes are retried without repeating data
