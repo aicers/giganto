@@ -364,7 +364,7 @@ impl CustomerDeletionMutation {
 ///
 /// # Errors
 ///
-/// Returns an error if the job store cannot be opened or written.
+/// Returns an error if the job store cannot be written.
 fn restore_previous_job(
     store: &CustomerDeletionJobStore<'_>,
     customer_id: u32,

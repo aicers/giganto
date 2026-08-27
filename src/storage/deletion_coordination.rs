@@ -22,6 +22,12 @@
 //! expired, so the cycle is skipped and the next tick deletes what this one
 //! did not.
 
+// Retention is built in every feature set and customer deletion is not, so
+// this module cannot be gated as a whole: a build without `bootroot` has the
+// retention half compiled and called, and the deletion half compiled with its
+// only caller — the `deleteCustomerData` resolver — absent.
+#![cfg_attr(not(feature = "bootroot"), allow(dead_code))]
+
 use std::sync::{
     Arc, Mutex, MutexGuard, PoisonError,
     atomic::{AtomicU64, Ordering},

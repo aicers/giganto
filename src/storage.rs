@@ -1425,7 +1425,13 @@ pub async fn retain_periodically(
         // of scope at the end of this iteration, on every path out of it. The
         // claim is a flag, not a held lock: nothing below waits on a mutex.
         let Some(_retention_guard) = deletion_coordination.begin_retention() else {
-            info!("Skipping the retention cleanup: a customer data deletion is in progress.");
+            // The running total goes with the line so an operator who finds
+            // retention quiet can see whether this is one deletion it gave way
+            // to or a store it has been kept off for a while.
+            info!(
+                skipped_cycles = deletion_coordination.skipped_retention_cycles(),
+                "Skipping the retention cleanup: a customer data deletion is in progress."
+            );
             continue;
         };
 
