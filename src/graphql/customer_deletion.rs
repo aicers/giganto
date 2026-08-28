@@ -371,13 +371,16 @@ async fn local_targets(provided: &[String], ingest_sensors: &IngestSensors) -> V
         .collect()
 }
 
-/// Answers a request whose registration the shutdown tracker refused.
+/// Answers a request whose registration the tracker refused.
 ///
-/// Reported rather than answered silently, because this is the one refusal the
-/// request had already been written into the job store for, and because the
-/// reason carries more than the response does: `Closed` is the shutdown this
-/// node expected to lose the race to, while `LockPoisoned` is a tracker that
-/// will admit nothing again for the rest of the generation.
+/// The two refusals are different answers, because the reason carries more
+/// than one response can. `Closed` is the shutdown this node expected to lose
+/// the race to: the caller can retry elsewhere now or here after a restart, so
+/// it is `BLOCKED_BY_SHUTDOWN`. `LockPoisoned` is a tracker that will admit
+/// nothing again for the rest of the generation — nothing about it is a
+/// shutdown, and answering as though it were would send the caller away to
+/// retry against a node that will refuse every later request the same way. It
+/// is raised as an error instead, and logged where it happens.
 ///
 /// `undo` puts the job store back the way the request found it, and only a
 /// request that leaves it that way is a refusal. When the undo fails the job
@@ -395,10 +398,17 @@ fn refuse_registration(
     customer_id: u32,
     undo: impl FnOnce() -> AnyhowResult<()>,
 ) -> Result<CustomerDataDeletionRequestStatus> {
-    warn!(
-        customer_id,
-        "Refusing an accepted customer data deletion: the shutdown tracker would not admit it: {spawn_error}"
-    );
+    match spawn_error {
+        SpawnError::Closed => warn!(
+            customer_id,
+            "Refusing an accepted customer data deletion: the shutdown tracker would not admit it: {spawn_error}"
+        ),
+        SpawnError::LockPoisoned => error!(
+            customer_id,
+            error = %spawn_error,
+            "Failed to register customer data deletion supervisor"
+        ),
+    }
     if let Err(e) = undo() {
         error!(
             customer_id,
@@ -412,7 +422,13 @@ fn refuse_registration(
         )
         .into());
     }
-    Ok(CustomerDataDeletionRequestStatus::BlockedByShutdown)
+    match spawn_error {
+        SpawnError::Closed => Ok(CustomerDataDeletionRequestStatus::BlockedByShutdown),
+        SpawnError::LockPoisoned => Err(format!(
+            "Failed to register customer data deletion supervisor: {spawn_error}"
+        )
+        .into()),
+    }
 }
 
 /// Puts the job store back the way a refused request found it.
@@ -1874,9 +1890,10 @@ mod tests {
     /// registration, so a request only reaches it when shutdown begins in the
     /// middle of a synchronous run. What stands in for that here is the other
     /// way the tracker refuses work — a poisoned admission lock, which
-    /// `is_closed` does not report and `spawn` does. The resolver takes the
-    /// same path either way: the job is written, the registration comes back
-    /// refused, and the write is undone before the refusal is reported.
+    /// `is_closed` does not report and `spawn` does. The undo is what the two
+    /// refusals share, and it is what this test is about; the answers differ,
+    /// and a poisoned lock is reported as an error rather than as the shutdown
+    /// it is not.
     #[tokio::test]
     async fn a_registration_the_tracker_refuses_undoes_the_job_it_wrote() {
         const REQUESTING: u32 = 700;
@@ -1922,10 +1939,17 @@ mod tests {
             let refused = schema
                 .execute(&delete_customer_data_mutation(&[target], customer_id))
                 .await;
-            assert!(refused.errors.is_empty(), "{:?}", refused.errors);
-            assert_eq!(
-                refused.data.to_string(),
-                "{deleteCustomerData: BLOCKED_BY_SHUTDOWN}"
+            let messages: Vec<&str> = refused.errors.iter().map(|e| e.message.as_str()).collect();
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m.contains("Failed to register customer data deletion supervisor")),
+                "a poisoned admission lock is reported as an error, got: {messages:?}"
+            );
+            let data = refused.data.to_string();
+            assert_ne!(
+                data, "{deleteCustomerData: BLOCKED_BY_SHUTDOWN}",
+                "a poisoned lock is not the shutdown the caller could retry past"
             );
         }
 
@@ -1956,15 +1980,9 @@ mod tests {
         );
     }
 
-    /// An undo that fails is raised as an error rather than answered as a
-    /// refusal.
-    ///
-    /// Nothing ran the job the request wrote and nothing has removed it, so
-    /// reporting `BLOCKED_BY_SHUTDOWN` would tell the caller to retry
-    /// elsewhere while leaving this node answering `DELETION_IN_PROGRESS` for
-    /// the customer until #1725 recovers the job at startup.
+    /// A tracker closed by shutdown is a refusal the caller can act on.
     #[test]
-    fn an_undo_that_fails_is_an_error_not_a_refusal() {
+    fn a_closed_tracker_is_answered_as_a_shutdown_refusal() {
         const CUSTOMER: u32 = 702;
         let undone = std::cell::Cell::new(false);
         let refusal = refuse_registration(&SpawnError::Closed, CUSTOMER, || {
@@ -1980,14 +1998,56 @@ mod tests {
             undone.get(),
             "the job written for the request must be undone"
         );
+    }
 
+    /// A poisoned tracker lock is not a shutdown, so it is raised as an error.
+    ///
+    /// Answering `BLOCKED_BY_SHUTDOWN` would send the caller away to retry,
+    /// while this node will refuse every later request the same way for the
+    /// rest of the generation. The job the request wrote is still undone.
+    #[test]
+    fn a_poisoned_tracker_lock_is_an_error_not_a_shutdown_refusal() {
+        const CUSTOMER: u32 = 703;
+        let undone = std::cell::Cell::new(false);
         let failure = refuse_registration(&SpawnError::LockPoisoned, CUSTOMER, || {
-            Err(anyhow!("the job store is gone"))
+            undone.set(true);
+            Ok(())
         })
-        .expect_err("an undo that failed is not a refusal the caller can act on");
+        .expect_err("a poisoned tracker lock is not a refusal the caller can act on");
         let message = failure.message;
-        assert!(message.contains("the job store is gone"), "{message}");
-        assert!(message.contains("DELETION_IN_PROGRESS"), "{message}");
+        assert!(
+            message.contains("Failed to register customer data deletion supervisor"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("DELETION_IN_PROGRESS"),
+            "an undone job is not left in progress: {message}"
+        );
+        assert!(
+            undone.get(),
+            "the job written for the request must be undone on this path too"
+        );
+    }
+
+    /// An undo that fails is raised as an error rather than answered as a
+    /// refusal, whichever refusal it followed.
+    ///
+    /// Nothing ran the job the request wrote and nothing has removed it, so
+    /// reporting `BLOCKED_BY_SHUTDOWN` would tell the caller to retry
+    /// elsewhere while leaving this node answering `DELETION_IN_PROGRESS` for
+    /// the customer until #1725 recovers the job at startup.
+    #[test]
+    fn an_undo_that_fails_is_an_error_not_a_refusal() {
+        const CUSTOMER: u32 = 704;
+        for spawn_error in [SpawnError::Closed, SpawnError::LockPoisoned] {
+            let failure = refuse_registration(&spawn_error, CUSTOMER, || {
+                Err(anyhow!("the job store is gone"))
+            })
+            .expect_err("an undo that failed is not a refusal the caller can act on");
+            let message = failure.message;
+            assert!(message.contains("the job store is gone"), "{message}");
+            assert!(message.contains("DELETION_IN_PROGRESS"), "{message}");
+        }
     }
 
     /// Undoing the job a refused request wrote leaves the store as the request
