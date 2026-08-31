@@ -392,7 +392,8 @@ async fn local_targets(provided: &[String], ingest_sensors: &IngestSensors) -> V
 ///
 /// # Errors
 ///
-/// Returns an error if `undo` fails.
+/// Returns an error if `undo` fails or if registration failed because the
+/// tracker's admission lock was poisoned.
 fn refuse_registration(
     spawn_error: &SpawnError,
     customer_id: u32,
