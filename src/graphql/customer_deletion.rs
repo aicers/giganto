@@ -413,13 +413,14 @@ fn refuse_registration(
     if let Err(e) = undo() {
         error!(
             customer_id,
-            "Failed to undo the customer deletion job a shutdown refused: {e:#}"
+            "Customer data deletion supervisor registration failed, and the job written for it \
+             could not be undone: {e:#}"
         );
         return Err(format!(
-            "Shutdown refused the deletion for customer {customer_id}, and the job record written \
-             for it could not be undone: {e:#}. The job is left in progress with nothing running \
-             it, and requests for this customer will report DELETION_IN_PROGRESS until it is \
-             recovered."
+            "Customer data deletion supervisor registration failed for customer {customer_id}, \
+             and the job record written for it could not be undone: {e:#}. The job is left in \
+             progress with nothing running it, and requests for this customer will report \
+             DELETION_IN_PROGRESS until it is recovered."
         )
         .into());
     }
