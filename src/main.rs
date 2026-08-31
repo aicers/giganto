@@ -49,7 +49,10 @@ use crate::{
     graphql::NodeName,
     server::{SERVER_REBOOT_DELAY, host_fqdn_from_cert},
     settings::Args,
-    storage::{migrate_data_dir, validate_compression_metadata},
+    storage::{
+        deletion_coordination::CustomerDeletionCoordinator, migrate_data_dir,
+        validate_compression_metadata,
+    },
     tls_reload::{CertPaths, ReloadHandle, load_tls_material},
     web::WebController,
 };
@@ -506,6 +509,14 @@ async fn run_generation(
     // shutdown; a reaper registered there would be waited too late.
     let web_reaper_tracker = TaskTracker::new();
 
+    // The one piece of state customer deletion and retention agree on, created
+    // here because both sides are built from here: it goes into the GraphQL
+    // context for the `deleteCustomerData` resolver and into the retention
+    // entry task below. Per generation, like the trackers, and for the same
+    // reason — a claim only ever describes work running now, so it must not
+    // outlive the store it was claimed over.
+    let deletion_coordination = Arc::new(CustomerDeletionCoordinator::new());
+
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
     let certs = Arc::clone(&tls.certs);
 
@@ -530,6 +541,7 @@ async fn run_generation(
         settings.clone(),
         top_level_tracker.clone(),
         web_reaper_tracker.clone(),
+        Arc::clone(&deletion_coordination),
     );
 
     let web_addr = settings.config.visible.graphql_srv_addr;
@@ -559,7 +571,8 @@ async fn run_generation(
     let retain_task_handle: JoinHandle<Result<()>> = top_level_tracker
         .spawn("retention", {
             let db = database.clone();
-            move |cancel| run_retention(ONE_DAY, retention, db, cancel)
+            let deletion_coordination = Arc::clone(&deletion_coordination);
+            move |cancel| run_retention(ONE_DAY, retention, db, cancel, deletion_coordination)
         })
         .map_err(|e| anyhow!("failed to register the retention task: {e}"))?;
 
@@ -731,8 +744,10 @@ async fn run_generation(
     // `LOCK` goes only when the last `Database` clone is dropped, and the
     // clones this generation still holds — its own handle, the schema's, the
     // listeners' — go here. That guarantee is exactly as wide as the tracker's
-    // registry: work that never entered it, such as the untracked
-    // customer-deletion worker, can still hold a clone past this point.
+    // registry, and an accepted customer deletion is inside it: the resolver
+    // registers its supervisor on `top_level_tracker`, so the drain above has
+    // already waited for it. Work that never entered the registry could still
+    // hold a clone past this point.
     Ok(generation_end)
 }
 
@@ -936,8 +951,16 @@ async fn run_retention(
     retention_period: Duration,
     db: storage::Database,
     cancel: CancellationToken,
+    deletion_coordination: Arc<CustomerDeletionCoordinator>,
 ) -> Result<()> {
-    let result = storage::retain_periodically(interval, retention_period, db, cancel).await;
+    let result = storage::retain_periodically(
+        interval,
+        retention_period,
+        db,
+        cancel,
+        deletion_coordination,
+    )
+    .await;
     if let Err(e) = &result {
         error!("Retention terminated unexpectedly: {e:#}");
     }
@@ -3126,6 +3149,7 @@ mod tests {
                 Duration::from_secs(u64::MAX),
                 database,
                 CancellationToken::new(),
+                Arc::new(CustomerDeletionCoordinator::new()),
             )
             .await;
 
@@ -3938,6 +3962,196 @@ mod tests {
                 vec![expected],
                 "the event the generation acknowledged did not survive its shutdown"
             );
+        }
+
+        /// An accepted customer deletion finishes before the generation closes
+        /// the database, on every ending an operator can ask for.
+        ///
+        /// The observable is the deletion job's own status, read at the moment
+        /// the teardown shuts the store down: a teardown that reached that
+        /// point while the job was still `InProgress` did not wait for the
+        /// deletion, whatever the log says. The deletion is held past the
+        /// start of the drain by a read guard on the sensor list — the
+        /// supervisor takes that lock for writing once the RocksDB deletes are
+        /// done — and the drain's own `close` is what the test waits on, so no
+        /// step here is timed.
+        #[cfg(feature = "bootroot")]
+        #[tokio::test]
+        async fn an_accepted_deletion_finishes_before_the_generation_closes_the_database() {
+            use crate::storage::CustomerDataDeletionStatus;
+
+            const CUSTOMER_ID: u32 = 400;
+            let target = "piglet.node1.example.test";
+
+            for generation_end in [
+                GenerationEnd::Terminate,
+                GenerationEnd::ReloadConfig,
+                GenerationEnd::Reboot,
+                GenerationEnd::PowerOff,
+            ] {
+                let ending = format!("{generation_end:?}");
+                let schema = crate::graphql::tests::TestSchema::new_with_ingest_sensors(&[target]);
+                let hold_sensors = schema.ingest_sensors.read().await;
+
+                let accepted = schema
+                    .execute(&format!(
+                        r#"mutation {{
+                            deleteCustomerData(
+                                serviceFqdnList: ["{target}"]
+                                customerId: "{CUSTOMER_ID}"
+                            )
+                        }}"#
+                    ))
+                    .await;
+                assert!(
+                    accepted.errors.is_empty(),
+                    "{ending}: {:?}",
+                    accepted.errors
+                );
+                assert_eq!(
+                    accepted.data.to_string(),
+                    "{deleteCustomerData: ACCEPTED}",
+                    "{ending}"
+                );
+
+                let effects = JobStatusAtShutdown::new(schema.db.clone(), CUSTOMER_ID);
+                let shutdown = task::spawn({
+                    let database = schema.db.clone();
+                    let effects = effects.clone();
+                    let top_level_tracker = schema.top_level_tracker.clone();
+                    async move {
+                        shutdown_generation(
+                            GenerationTeardown {
+                                web_controller: None,
+                                web_reaper_tracker: TaskTracker::new(),
+                                top_level_tracker,
+                                retain_task_handle: task::spawn(async { Ok(()) }),
+                                ingest_task_handle: None,
+                            },
+                            generation_end,
+                            &database,
+                            &effects,
+                        )
+                        .await
+                    }
+                });
+
+                // The drain closes the tracker on its way in, so this is the
+                // teardown having reached the phase that has to wait.
+                let closed = async {
+                    while !schema.top_level_tracker.is_closed() {
+                        sleep(READY_POLL).await;
+                    }
+                };
+                assert!(
+                    tokio::time::timeout(READY_TIMEOUT, closed).await.is_ok(),
+                    "{ending}: the teardown never reached the drain"
+                );
+                assert_eq!(
+                    job_status(&schema.db, CUSTOMER_ID),
+                    Some(CustomerDataDeletionStatus::InProgress),
+                    "{ending}: the deletion should still have been running"
+                );
+                assert!(
+                    effects.observed().is_none(),
+                    "{ending}: the store was shut down while a deletion was still running"
+                );
+
+                drop(hold_sensors);
+                let store_shutdown = async {
+                    while effects.observed().is_none() {
+                        sleep(READY_POLL).await;
+                    }
+                };
+                assert!(
+                    tokio::time::timeout(READY_TIMEOUT, store_shutdown)
+                        .await
+                        .is_ok(),
+                    "{ending}: the teardown never shut the store down"
+                );
+                assert_eq!(
+                    effects.observed(),
+                    Some(ShutdownObservation::Job(
+                        CustomerDataDeletionStatus::Succeeded
+                    )),
+                    "{ending}: the deletion had not finished when the store was shut down"
+                );
+
+                // What is left of the teardown is the pause before the
+                // ending's action, and this test is not waiting it out.
+                shutdown.abort();
+            }
+        }
+
+        #[cfg(feature = "bootroot")]
+        fn job_status(
+            db: &storage::Database,
+            customer_id: u32,
+        ) -> Option<crate::storage::CustomerDataDeletionStatus> {
+            db.customer_deletion_job_store()
+                .expect("open the customer deletion job store")
+                .get(customer_id)
+                .expect("read the customer deletion job")
+                .map(|job| job.status)
+        }
+
+        /// What the seam below found in the job store when it ran.
+        #[cfg(feature = "bootroot")]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum ShutdownObservation {
+            /// The customer had no deletion job at all.
+            NoJob,
+            /// The customer's deletion job stood at this status.
+            Job(crate::storage::CustomerDataDeletionStatus),
+        }
+
+        /// A lifecycle seam that records a customer deletion job's status at
+        /// the moment the store is shut down.
+        ///
+        /// The ordering under test is a fact about the job rather than a line
+        /// in a log, and this is where that fact is legible: the seam runs
+        /// exactly once, at the top of the last teardown phase.
+        #[cfg(feature = "bootroot")]
+        #[derive(Clone)]
+        struct JobStatusAtShutdown {
+            db: storage::Database,
+            customer_id: u32,
+            /// `None` until the store is shut down; then what the job store
+            /// held at that moment.
+            observed: Arc<Mutex<Option<ShutdownObservation>>>,
+        }
+
+        #[cfg(feature = "bootroot")]
+        impl JobStatusAtShutdown {
+            fn new(db: storage::Database, customer_id: u32) -> Self {
+                Self {
+                    db,
+                    customer_id,
+                    observed: Arc::new(Mutex::new(None)),
+                }
+            }
+
+            fn observed(&self) -> Option<ShutdownObservation> {
+                *self.observed.lock().expect("lock")
+            }
+        }
+
+        #[cfg(feature = "bootroot")]
+        impl LifecycleEffects for JobStatusAtShutdown {
+            fn shutdown_database(&self, _database: &storage::Database) -> Result<()> {
+                let observation = job_status(&self.db, self.customer_id)
+                    .map_or(ShutdownObservation::NoJob, ShutdownObservation::Job);
+                *self.observed.lock().expect("lock") = Some(observation);
+                Ok(())
+            }
+
+            fn reboot(&self) -> Result<()> {
+                unreachable!("the teardown itself takes no host action")
+            }
+
+            fn power_off(&self) -> Result<()> {
+                unreachable!("the teardown itself takes no host action")
+            }
         }
     }
 }

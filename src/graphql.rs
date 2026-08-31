@@ -51,7 +51,7 @@ use crate::{
     settings::{ConfigVisible, Settings},
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
-        TimestampKeyExtractor,
+        TimestampKeyExtractor, deletion_coordination::CustomerDeletionCoordinator,
     },
 };
 
@@ -238,6 +238,11 @@ pub fn schema(
     // graceful-shutdown timeout has its `tcpdump` child killed and reaped before
     // subsystem cancellation begins rather than left as detached work.
     pcap_reaper_tracker: TaskTracker,
+    // The state customer deletion and retention agree on, shared with the
+    // generation's retention entry task. It is in the context so the
+    // `deleteCustomerData` resolver can claim the store before it persists a
+    // job and hold the claim until the deletion is over.
+    deletion_coordination: Arc<CustomerDeletionCoordinator>,
 ) -> Schema {
     let schema = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -253,7 +258,8 @@ pub fn schema(
         .data(PowerOffNotify(notify_power_off))
         .data(settings)
         .data(top_level_tracker)
-        .data(PcapReaperTracker(pcap_reaper_tracker));
+        .data(PcapReaperTracker(pcap_reaper_tracker))
+        .data(deletion_coordination);
     #[cfg(feature = "bootroot")]
     let schema = schema
         .data(runtime_ingest_sensors)
@@ -264,10 +270,6 @@ pub fn schema(
     } else {
         schema
     };
-    #[cfg(feature = "bootroot")]
-    let schema = schema.data(Arc::new(
-        customer_deletion::CustomerDeletionRequestManager::default(),
-    ));
     schema.finish()
 }
 
@@ -1145,8 +1147,11 @@ impl_string_number!(StringNumberU64, u64);
 impl_string_number!(StringNumberU32, u32);
 impl_string_number!(StringNumberI64, i64);
 
+// `pub(crate)` so the lifecycle tests in `main.rs` can build a schema: the
+// customer-deletion shutdown property is about a generation's teardown, so it
+// is proved where the teardown lives, against the real resolver.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::{BTreeSet, HashMap, HashSet};
     use std::net::IpAddr;
     use std::sync::Arc;
@@ -1176,7 +1181,7 @@ mod tests {
     use crate::datetime::DateTime;
     use crate::graphql::{IpRange, Mutation, PortRange, Query};
     use crate::settings::{ConfigVisible, Settings};
-    use crate::storage::{Database, DbOptions};
+    use crate::storage::{Database, DbOptions, deletion_coordination::CustomerDeletionCoordinator};
 
     type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 
@@ -1188,8 +1193,17 @@ mod tests {
         pub export_dir: tempfile::TempDir, // keep export directory alive for tests
         pub db: Database,
         pub schema: Schema,
+        /// The generation tracker the schema was built with, so a test can
+        /// close it the way shutdown does and drain it the way a generation
+        /// teardown does.
         #[cfg(feature = "bootroot")]
-        pub(super) ingest_sensors: IngestSensors,
+        pub(crate) top_level_tracker: crate::cancellation::TaskTracker,
+        /// The store claim the schema was built with, so a test can hold it
+        /// the way a retention cycle or another customer's deletion does.
+        #[cfg(feature = "bootroot")]
+        pub(crate) deletion_coordination: Arc<CustomerDeletionCoordinator>,
+        #[cfg(feature = "bootroot")]
+        pub(crate) ingest_sensors: IngestSensors,
         #[cfg(feature = "bootroot")]
         pub(super) runtime_ingest_sensors: RunTimeIngestSensors,
         #[cfg(feature = "bootroot")]
@@ -1229,6 +1243,12 @@ mod tests {
             let notify_power_off = Arc::new(Notify::new());
             let notify_terminate = Arc::new(Notify::new());
             let settings = Settings::load("tests/config.toml").unwrap();
+            // Kept on the fixture, not built inline: the customer-deletion
+            // tests drive the generation's shutdown boundary and the store
+            // claim through these two, and both have to be the very ones the
+            // schema resolves out of its context.
+            let top_level_tracker = crate::cancellation::TaskTracker::new();
+            let deletion_coordination = Arc::new(CustomerDeletionCoordinator::new());
             let schema = schema(
                 NodeName(node_name.to_string()),
                 db.clone(),
@@ -1254,8 +1274,9 @@ mod tests {
                 notify_power_off,
                 notify_terminate,
                 settings,
+                top_level_tracker.clone(),
                 crate::cancellation::TaskTracker::new(),
-                crate::cancellation::TaskTracker::new(),
+                Arc::clone(&deletion_coordination),
             );
 
             Self {
@@ -1263,6 +1284,10 @@ mod tests {
                 export_dir,
                 db,
                 schema,
+                #[cfg(feature = "bootroot")]
+                top_level_tracker,
+                #[cfg(feature = "bootroot")]
+                deletion_coordination,
                 #[cfg(feature = "bootroot")]
                 ingest_sensors,
                 #[cfg(feature = "bootroot")]
@@ -1300,7 +1325,7 @@ mod tests {
         }
 
         #[cfg(feature = "bootroot")]
-        pub(super) fn new_with_ingest_sensors(sensors: &[&str]) -> Self {
+        pub(crate) fn new_with_ingest_sensors(sensors: &[&str]) -> Self {
             Self::new_with_ingest_sensors_and_peer_notify(sensors, None)
         }
 

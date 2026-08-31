@@ -1,5 +1,6 @@
 //! Raw event storage based on RocksDB.
 
+pub mod deletion_coordination;
 mod migration;
 
 use std::{
@@ -45,6 +46,7 @@ use tokio::{select, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use self::deletion_coordination::CustomerDeletionCoordinator;
 use crate::datetime::DateTime;
 use crate::{
     comm::ingest::implement::EventFilter,
@@ -817,7 +819,8 @@ impl CustomerDeletionJobStore<'_> {
         self.put(customer_id, job)
     }
 
-    #[allow(dead_code)]
+    /// Removes a customer's job, which is how a request refused by shutdown
+    /// undoes the `InProgress` job it had already written.
     pub fn delete(&self, customer_id: u32) -> Result<()> {
         self.db.delete_cf(self.cf, customer_id.to_be_bytes())?;
         Ok(())
@@ -1384,6 +1387,15 @@ where
 /// running on the blocking pool, because the caller closes the database as
 /// soon as this returns.
 ///
+/// # Exclusion with customer data deletion
+///
+/// Customer data deletion is the other bulk range delete over this store, and
+/// the two never overlap. `deletion_coordination` is the state they agree on:
+/// a cycle that comes due while a deletion is in flight is skipped rather than
+/// queued, for the same reason cancellation may skip one — expired data stays
+/// expired, so the next cycle deletes what this one did not. While a cycle
+/// holds the claim, a deletion request is refused instead.
+///
 /// # Errors
 ///
 /// Returns an error if the retention period cannot be expressed in
@@ -1393,6 +1405,7 @@ pub async fn retain_periodically(
     retention_period: Duration,
     db: Database,
     cancel: CancellationToken,
+    deletion_coordination: Arc<CustomerDeletionCoordinator>,
 ) -> Result<()> {
     const DEFAULT_FROM_TIMESTAMP_NANOS: i64 = 61_000_000_000;
 
@@ -1407,6 +1420,20 @@ pub async fn retain_periodically(
             () = cancel.cancelled() => return Ok(()),
             _ = itv.tick() => {}
         }
+
+        // Claimed for the whole cycle and released when the guard goes out
+        // of scope at the end of this iteration, on every path out of it. The
+        // claim is a flag, not a held lock: nothing below waits on a mutex.
+        let Some(_retention_guard) = deletion_coordination.begin_retention() else {
+            // The running total goes with the line so an operator who finds
+            // retention quiet can see whether this is one deletion it gave way
+            // to or a store it has been kept off for a while.
+            info!(
+                skipped_cycles = deletion_coordination.skipped_retention_cycles(),
+                "Skipping the retention cleanup: a customer data deletion is in progress."
+            );
+            continue;
+        };
 
         info!("Begin to cleanup the database based on retention period.");
         let now = DateTime::now();
@@ -1624,7 +1651,8 @@ mod tests {
 
     use super::{
         BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
-        StatisticsIter, StorageKey, read_compression_metadata, store_compression_metadata,
+        StatisticsIter, StorageKey, deletion_coordination::CustomerDeletionCoordinator,
+        read_compression_metadata, store_compression_metadata,
     };
     #[cfg(feature = "bootroot")]
     use super::{CUSTOMER_DELETION_JOBS_CF, CustomerDataDeletion, CustomerDataDeletionStatus};
@@ -1647,6 +1675,12 @@ mod tests {
     fn register_sensor(db: &Database, sensor: &str) {
         let sensor_store = db.sensors_store().unwrap();
         sensor_store.insert(sensor, DateTime::now()).unwrap();
+    }
+
+    /// A coordinator nothing has claimed, for the tests that are not about the
+    /// exclusion: every cycle they open is admitted.
+    fn idle_coordination() -> Arc<CustomerDeletionCoordinator> {
+        Arc::new(CustomerDeletionCoordinator::new())
     }
 
     #[cfg(feature = "bootroot")]
@@ -1717,6 +1751,24 @@ mod tests {
     fn assert_conn_key_exists(db: &Database, key: &[u8]) {
         let cf = db.get_cf_handle("conn").unwrap();
         assert!(db.db.get_cf(cf, key).unwrap().is_some());
+    }
+
+    fn conn_key_is_gone(db: &Database, key: &[u8]) -> bool {
+        let cf = db.get_cf_handle("conn").unwrap();
+        db.db.get_cf(cf, key).unwrap().is_none()
+    }
+
+    /// Waits for state a test set up to be reached, and fails the test if it
+    /// never is.
+    ///
+    /// The condition is the synchronization; the deadline only exists so a run
+    /// that will never satisfy it ends with an assertion rather than a hang.
+    async fn wait_until(condition: impl Fn() -> bool, what: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !condition() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
     }
 
     fn append_and_assert_first_conn(db: &Database, key: &[u8], value: &[u8]) {
@@ -2490,6 +2542,7 @@ mod tests {
             std::time::Duration::from_hours(1),
             db,
             cancel.clone(),
+            idle_coordination(),
         ));
 
         cancel.cancel();
@@ -2526,6 +2579,7 @@ mod tests {
             std::time::Duration::from_secs(2),
             db.clone(),
             cancel,
+            idle_coordination(),
         )
         .await;
 
@@ -2881,6 +2935,7 @@ mod tests {
             retention_period,
             db.clone(),
             cancel.clone(),
+            idle_coordination(),
         ));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -2907,6 +2962,60 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// A cycle that comes due while a customer's deletion owns the store gives
+    /// way to it, and the first cycle after that deletion ends does the work
+    /// the skipped one did not.
+    ///
+    /// What the test waits on is the coordinator's skip counter, not a clock:
+    /// the counter is what tells a cycle that was refused apart from one that
+    /// never came due, so the assertion below runs at a point where retention
+    /// has demonstrably opened a cycle and been turned away.
+    #[tokio::test]
+    async fn a_retention_cycle_gives_way_to_a_deletion_in_flight() {
+        let (_dir, db) = setup_db();
+        let sensor = "deletion_blocks_retention";
+        register_sensor(&db, sensor);
+
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let expired_ts_nanos = now_nanos - 10_000_000_000;
+        let expired_key = conn_key(sensor, expired_ts_nanos);
+        insert_conn(&db.conn_store().unwrap(), sensor, expired_ts_nanos, b"old");
+        assert_conn_key_exists(&db, &expired_key);
+
+        let coordination = idle_coordination();
+        let deletion_guard = coordination
+            .begin_deletion(1)
+            .expect("nothing has claimed the store yet");
+
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(super::retain_periodically(
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(2),
+            db.clone(),
+            cancel.clone(),
+            Arc::clone(&coordination),
+        ));
+
+        wait_until(
+            || coordination.skipped_retention_cycles() > 0,
+            "retention never opened a cycle for the deletion to turn away",
+        )
+        .await;
+        assert_conn_key_exists(&db, &expired_key);
+
+        // Releasing the claim is the only thing that changes, so the deletion
+        // that follows is the skipped cycle's work being picked up.
+        drop(deletion_guard);
+        wait_until(
+            || conn_key_is_gone(&db, &expired_key),
+            "retention did not resume once the deletion released the store",
+        )
+        .await;
+
+        cancel.cancel();
+        assert!(task.await.unwrap().is_ok());
+    }
+
     #[tokio::test]
     async fn test_retain_periodically_keeps_within_retention_window() {
         let (_dir, db) = setup_db();
@@ -2931,6 +3040,7 @@ mod tests {
             retention_period,
             db.clone(),
             cancel.clone(),
+            idle_coordination(),
         ));
 
         // Give retain loop a chance to run.
@@ -2963,6 +3073,7 @@ mod tests {
             retention_period,
             db.clone(),
             cancel.clone(),
+            idle_coordination(),
         ));
 
         // Wait briefly to give retain loop a chance to run.
@@ -3007,6 +3118,7 @@ mod tests {
             retention_period,
             db.clone(),
             cancel.clone(),
+            idle_coordination(),
         ));
 
         // The interval's first tick is immediate and a pass repeats every
