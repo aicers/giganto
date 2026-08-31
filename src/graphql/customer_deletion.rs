@@ -387,8 +387,8 @@ async fn local_targets(provided: &[String], ingest_sensors: &IngestSensors) -> V
 /// just written stays `InProgress` with no worker registered to finish it —
 /// the very thing the refusal exists to prevent, and, until #1725 recovers
 /// such a job at startup, the answer to every later request for this customer.
-/// That is a failure of the mutation, not a `BLOCKED_BY_SHUTDOWN` the caller
-/// could act on, so it is raised as an error.
+/// That is a failure of the mutation, not a refusal the caller could act on,
+/// so it is raised as an error.
 ///
 /// # Errors
 ///
