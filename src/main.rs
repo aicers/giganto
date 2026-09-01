@@ -2982,32 +2982,51 @@ mod tests {
             }
         }
 
-        /// Runs the wait, then shuts down whatever HTTPS server a TLS reload
-        /// left behind.
+        /// The record a TLS reload leaves when the material it reread is the
+        /// material the live server is already serving.
+        const TLS_NOOP_RECORD: &str = "HTTPS reload: no TLS material changes detected";
+
+        /// A live HTTPS server built from the fixture's current TLS material.
+        async fn live_web(fixture: &WaitFixture, web_addr: SocketAddr) -> WebController {
+            let tls = tls_reload::get_current_tls_material(&fixture.process.tls_watch);
+            web::serve(
+                test_schema(),
+                web_addr,
+                tls.cert_pem.clone(),
+                tls.key_pem.clone(),
+                tls.ca_pem.clone(),
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("the test server should start")
+        }
+
+        /// Runs the wait against a live HTTPS server the reload has nothing to
+        /// rebind for.
         ///
-        /// The TLS arm has no live server to preserve here, so it starts one;
-        /// leaving it running would hold a port past the test.
-        async fn wait_through_tls_reload(fixture: &mut WaitFixture) -> GenerationEnd {
+        /// `reload_https_server` returns as soon as it finds unchanged
+        /// material behind a live controller, so the arm still runs and still
+        /// leaves its completion record — without the bind, serve and
+        /// graceful shutdown a restart costs, which a test that repeats the
+        /// arm would otherwise pay for on every round.
+        async fn wait_with_live_web(
+            fixture: &mut WaitFixture,
+            web_controller: &mut Option<WebController>,
+            web_addr: SocketAddr,
+        ) -> GenerationEnd {
             let schema = test_schema();
-            let mut web_controller = None;
-            let end = wait_for_generation_end(
+            wait_for_generation_end(
                 &mut fixture.settings,
                 &fixture.process,
                 &mut fixture.intents,
                 &mut fixture.entry_tasks,
-                &mut web_controller,
+                web_controller,
                 &schema,
-                ephemeral_addr(),
+                web_addr,
                 Duration::from_secs(30),
             )
-            .await;
-            shutdown_web(web_controller.take()).await;
-            end
+            .await
         }
-
-        /// The record a TLS reload leaves when it had no live server to
-        /// preserve and started one.
-        const TLS_RELOAD_RECORD: &str = "HTTPS reload: new GraphQL server started";
 
         /// How many times a precedence assertion is repeated in one test.
         ///
@@ -3432,6 +3451,8 @@ mod tests {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
             write_config_file(&fixture.settings);
+            let web_addr = free_addr();
+            let mut web_controller = Some(live_web(&fixture, web_addr).await);
 
             for round in 0..PRECEDENCE_ROUNDS {
                 let new_config = fixture.settings.config.visible.clone();
@@ -3444,18 +3465,19 @@ mod tests {
 
                 let (logs, guard) = capture_logs();
                 assert_eq!(
-                    wait_through_tls_reload(&mut fixture).await,
+                    wait_with_live_web(&mut fixture, &mut web_controller, web_addr).await,
                     GenerationEnd::ReloadConfig,
                     "round {round}"
                 );
                 assert_eq!(
-                    records(&logs, TLS_RELOAD_RECORD).len(),
+                    records(&logs, TLS_NOOP_RECORD).len(),
                     1,
                     "round {round}: the TLS reload should have run first, got: {}",
                     captured(&logs)
                 );
                 drop(guard);
             }
+            shutdown_web(web_controller.take()).await;
             fixture.settle().await;
         }
 
@@ -3465,6 +3487,8 @@ mod tests {
         async fn a_tls_reload_outranks_a_finished_entry_handle() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
+            let web_addr = free_addr();
+            let mut web_controller = Some(live_web(&fixture, web_addr).await);
 
             for round in 0..PRECEDENCE_ROUNDS {
                 let id = fixture
@@ -3474,13 +3498,13 @@ mod tests {
 
                 let (logs, guard) = capture_logs();
                 assert_eq!(
-                    wait_through_tls_reload(&mut fixture).await,
+                    wait_with_live_web(&mut fixture, &mut web_controller, web_addr).await,
                     GenerationEnd::EntryTaskExited(Subsystem::Retention),
                     "round {round}"
                 );
                 let output = captured(&logs);
                 assert!(
-                    output.find(TLS_RELOAD_RECORD) < output.find(ABNORMAL_RECORD),
+                    output.find(TLS_NOOP_RECORD) < output.find(ABNORMAL_RECORD),
                     "round {round}: the TLS reload should have run first, got: {output}"
                 );
                 assert_report_fields(
@@ -3492,6 +3516,7 @@ mod tests {
                 );
                 drop(guard);
             }
+            shutdown_web(web_controller.take()).await;
             fixture.settle().await;
         }
 
