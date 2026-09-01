@@ -1351,11 +1351,12 @@ async fn observe_entry_task(retained: RetainedEntryTask) -> bool {
 /// Runs the retention entry task, reporting a failure the moment it happens.
 ///
 /// The handle the generation retains carries whatever this returns to
-/// [`report_retention_outcome`], but that accounting runs only when the
-/// generation ends — which, for a node that is simply left running, is days or
-/// months after a retention pass failed. Retention that stops deleting is the
-/// failure an operator has to hear about at once, not at the post-mortem, so
-/// it is reported here as well, the way the peer subsystem reports its own.
+/// [`report_entry_task_outcome`], which classes the outcome but says nothing
+/// about which pass failed or why. The cause is only here, so it is reported
+/// here as well, the way ingest, publish and peer report their own. The
+/// duplication is intended: the boundary record is what an operator greps for
+/// across the four subsystems, and this line is what says what retention was
+/// doing.
 ///
 /// # Errors
 ///
