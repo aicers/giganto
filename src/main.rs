@@ -2600,6 +2600,29 @@ mod tests {
             sole_record(logs, ABNORMAL_RECORD)
         }
 
+        /// Asserts `first` reached the log before `second`, both of them
+        /// having reached it at all.
+        ///
+        /// The presence check is what makes this an ordering assertion.
+        /// `str::find` answers with an `Option`, and `None` sorts below every
+        /// `Some`, so comparing the two answers directly would hold for a
+        /// `first` that never appeared — which is the very failure an
+        /// assertion that the higher-precedence arm ran first is there to
+        /// catch.
+        fn assert_precedes(logs: &Arc<Mutex<Vec<u8>>>, first: &str, second: &str, case: &str) {
+            let output = captured(logs);
+            let first_at = output
+                .find(first)
+                .unwrap_or_else(|| panic!("{case}: expected {first:?} in: {output}"));
+            let second_at = output
+                .find(second)
+                .unwrap_or_else(|| panic!("{case}: expected {second:?} in: {output}"));
+            assert!(
+                first_at < second_at,
+                "{case}: expected {first:?} before {second:?}, got: {output}"
+            );
+        }
+
         /// Asserts a per-task record carries the five fields, with these
         /// values.
         ///
@@ -3503,10 +3526,11 @@ mod tests {
                     GenerationEnd::EntryTaskExited(Subsystem::Retention),
                     "round {round}"
                 );
-                let output = captured(&logs);
-                assert!(
-                    output.find(TLS_NOOP_RECORD) < output.find(ABNORMAL_RECORD),
-                    "round {round}: the TLS reload should have run first, got: {output}"
+                assert_precedes(
+                    &logs,
+                    TLS_NOOP_RECORD,
+                    ABNORMAL_RECORD,
+                    &format!("round {round}: the TLS reload should have run first"),
                 );
                 assert_report_fields(
                     &abnormal_report(&logs),
@@ -3927,10 +3951,11 @@ mod tests {
                         // it returns at once. That it ran at all, and ran
                         // before the finished handle was taken, is the order
                         // under test.
-                        let second = "HTTPS reload: no TLS material changes detected";
-                        assert!(
-                            output.find(second) < output.find(ABNORMAL_RECORD),
-                            "{case}: the pending reload should have gone first, got: {output}"
+                        assert_precedes(
+                            &logs,
+                            TLS_NOOP_RECORD,
+                            ABNORMAL_RECORD,
+                            &format!("{case}: the pending reload should have gone first"),
                         );
                         assert_report_fields(
                             &abnormal_report(&logs),
@@ -4493,10 +4518,11 @@ mod tests {
                 failed_action.contains(HOST_REFUSAL),
                 "the failed-action record should carry the cause, got: {failed_action}"
             );
-            let output = captured(&logs);
-            assert!(
-                output.find(DEGRADED_RECORD) < output.find(FAILED_ACTION_RECORD),
-                "the degraded record comes first, got: {output}"
+            assert_precedes(
+                &logs,
+                DEGRADED_RECORD,
+                FAILED_ACTION_RECORD,
+                "the degraded record comes first",
             );
             drop(guard);
 
