@@ -65,6 +65,12 @@ giganto -c /path/to/giganto/config.toml \
 
 ## Peer Subsystem TLS Reload
 
+Giganto does not rotate its certificates itself. An operator replaces
+the files on disk and sends `SIGHUP`, and Giganto supports that being
+done as often as once an hour. A reload rereads whichever files are
+current when it runs, so repeated signals collapse into one reload and
+nothing is lost by sending more of them than needed.
+
 On `SIGHUP`, Giganto re-reads the certificate, private key, and CA
 files from disk and delivers the refreshed material to the peer
 subsystem, which applies it with the following observable behavior:
