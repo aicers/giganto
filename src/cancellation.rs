@@ -1814,6 +1814,12 @@ mod tests {
     /// awaiting, an abort handle to stop the task, and the join itself.
     #[tokio::test]
     async fn a_supervised_handle_forwards_the_join_handle_api() {
+        // The abort below leaves a tracked task that never returned, which the
+        // registration guard reports. Capturing here keeps that report inside a
+        // subscriber: a callsite first reached from a thread that has none is
+        // cached as uninteresting process-wide, and the tests that assert on
+        // that very report then read an empty log.
+        let (_logs, _guard) = capture_logs();
         let tracker = TaskTracker::new();
         let handle = tracker
             .spawn_supervised("forwarding", |token| async move {

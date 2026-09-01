@@ -2327,7 +2327,7 @@ mod tests {
         use tokio::task::JoinHandle;
 
         use super::*;
-        use crate::settings::Config;
+        use crate::{cancellation::DrainOutcome, settings::Config};
 
         static INSTALL_PROVIDER: Once = Once::new();
 
@@ -2930,6 +2930,30 @@ mod tests {
                 id
             }
 
+            /// Stops the stand-in entry tasks the test is done with.
+            ///
+            /// A tracked task the runtime drops without it having returned is
+            /// reported by the tracker's registration guard, and by then the
+            /// test's log capture is gone. That report is the first thing to
+            /// reach its callsite from a thread with no subscriber at all,
+            /// which caches the callsite as uninteresting process-wide — and
+            /// the tests that assert on that very report then read an empty
+            /// log. So a fixture drains its tracker, the way a generation
+            /// drains its own.
+            async fn settle(&mut self) {
+                drop(self.take_retained());
+                let outcome = self
+                    .tracker
+                    .cancel_and_drain(DRAIN_LOOP_TIMEOUT)
+                    .await
+                    .expect("the fixture tracker should not be poisoned");
+                assert_eq!(
+                    outcome,
+                    DrainOutcome::Drained,
+                    "the stand-in entry tasks should have stopped"
+                );
+            }
+
             /// Takes the entry tasks the wait left behind, the way the
             /// generation hands them to its teardown.
             fn take_retained(&mut self) -> Vec<RetainedEntryTask> {
@@ -3078,6 +3102,7 @@ mod tests {
                 wait_without_web(&mut fixture).await,
                 GenerationEnd::Terminate
             );
+            fixture.settle().await;
         }
 
         #[tokio::test]
@@ -3088,6 +3113,7 @@ mod tests {
             fixture.notify_reboot.notify_one();
 
             assert_eq!(wait_without_web(&mut fixture).await, GenerationEnd::Reboot);
+            fixture.settle().await;
         }
 
         #[tokio::test]
@@ -3101,6 +3127,7 @@ mod tests {
                 wait_without_web(&mut fixture).await,
                 GenerationEnd::PowerOff
             );
+            fixture.settle().await;
         }
 
         /// An entry task ending is not an intent, but it ends the wait all the
@@ -3121,6 +3148,10 @@ mod tests {
             ] {
                 let dir = tempdir().expect("tempdir");
                 let mut fixture = wait_fixture(dir.path());
+                // Installed before the stand-in is built: a panic and an abort
+                // are both reported by the registration guard the moment they
+                // happen, which is before the wait is even entered.
+                let (logs, guard) = capture_logs();
                 let id = match outcome {
                     "early_exit" => fixture.replace_entry_task(subsystem, async { Ok(()) }),
                     "error" => fixture.replace_entry_task(subsystem, async {
@@ -3131,7 +3162,6 @@ mod tests {
                     _ => fixture.abort_entry_task(subsystem).await,
                 };
 
-                let (logs, guard) = capture_logs();
                 assert_eq!(
                     wait_without_web(&mut fixture).await,
                     GenerationEnd::EntryTaskExited(subsystem),
@@ -3140,6 +3170,7 @@ mod tests {
 
                 let report = abnormal_report(&logs);
                 assert_report_fields(&report, subsystem, id, "serving", outcome);
+                fixture.settle().await;
                 drop(guard);
             }
         }
@@ -3168,6 +3199,7 @@ mod tests {
                 "serving",
                 "early_exit",
             );
+            fixture.settle().await;
         }
 
         #[tokio::test]
@@ -3191,6 +3223,7 @@ mod tests {
             // The reload is what the next generation starts from, so the wait
             // must leave the persisted settings behind it.
             assert_eq!(fixture.settings.config.visible.ack_transmission, 2048);
+            fixture.settle().await;
         }
 
         /// A reload that cannot be written down is not a shutdown.
@@ -3223,6 +3256,7 @@ mod tests {
                 fixture.settings.config.visible.ack_transmission, 1024,
                 "a reload that was not persisted must not change the in-memory configuration"
             );
+            fixture.settle().await;
         }
 
         /// A TLS reload rebinds the HTTPS server and keeps serving.
@@ -3264,6 +3298,7 @@ mod tests {
                 "the reload should have left a live server behind"
             );
             shutdown_web(web_controller.take()).await;
+            fixture.settle().await;
         }
 
         /// A terminal intent decides the ending over a queued configuration
@@ -3300,6 +3335,7 @@ mod tests {
                 fixture.settings.config.visible.ack_transmission, before,
                 "the queued reload should never have been taken"
             );
+            fixture.settle().await;
         }
 
         /// A terminal intent decides the ending over an entry handle that has
@@ -3473,6 +3509,7 @@ mod tests {
                 );
                 drop(guard);
             }
+            fixture.settle().await;
         }
 
         /// A TLS reload runs before an entry handle that has already finished,
@@ -3508,6 +3545,7 @@ mod tests {
                 );
                 drop(guard);
             }
+            fixture.settle().await;
         }
 
         /// A terminal intent ready alongside a TLS reload ends the generation
@@ -3536,6 +3574,7 @@ mod tests {
                 !output.contains("HTTPS reload"),
                 "no TLS reload should have run, got: {output}"
             );
+            fixture.settle().await;
         }
 
         /// A finished entry handle is detected while failing configuration
@@ -3599,6 +3638,7 @@ mod tests {
                 captured(&logs).contains("Failed to update configuration"),
                 "the failing write is what the check follows"
             );
+            fixture.settle().await;
         }
 
         /// One failed configuration write on its own leaves the generation
@@ -3643,6 +3683,7 @@ mod tests {
                 "nothing ended abnormally, got: {}",
                 captured(&logs)
             );
+            fixture.settle().await;
         }
 
         /// A resolver that parks until the test releases it.
@@ -3929,6 +3970,7 @@ mod tests {
                 }
                 drop(guard);
 
+                fixture.settle().await;
                 shutdown_web(web_controller.take()).await;
                 tokio::time::timeout(READY_TIMEOUT, parked)
                     .await
@@ -4176,6 +4218,10 @@ mod tests {
             for outcome in ["error", "panic", "cancelled"] {
                 for generation_end in [GenerationEnd::Reboot, GenerationEnd::ReloadConfig] {
                     let case = format!("{outcome}/{generation_end:?}");
+                    // Installed before the stand-in is built: a panic and an
+                    // abort are reported by the registration guard the moment
+                    // they happen, not when the handle is read back.
+                    let (logs, guard) = capture_logs();
                     let handle = match outcome {
                         "error" => stand_in(&tracker, Subsystem::Retention, async {
                             Err(anyhow!("a retention pass failed"))
@@ -4195,7 +4241,6 @@ mod tests {
                     let id = handle.id();
 
                     let effects = RecordingEffects::new();
-                    let (logs, guard) = capture_logs();
                     let health = shutdown_generation(
                         teardown_with_entry_tasks(vec![retained(handle, false)]),
                         generation_end,
