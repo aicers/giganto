@@ -892,22 +892,6 @@ impl EntryTasks {
         }
     }
 
-    /// The first entry task that has already finished, in the fixed order.
-    ///
-    /// A pass over readiness and nothing more: it takes no handle and awaits
-    /// nothing, so a caller that finds none has lost no time and no message.
-    fn first_finished(&self) -> Option<Subsystem> {
-        [
-            (Subsystem::Ingest, &self.ingest),
-            (Subsystem::Publish, &self.publish),
-            (Subsystem::Peer, &self.peer),
-            (Subsystem::Retention, &self.retention),
-        ]
-        .into_iter()
-        .find(|(_, handle)| handle.as_ref().is_some_and(SupervisedHandle::is_finished))
-        .map(|(subsystem, _)| subsystem)
-    }
-
     /// Everything the wait did not read, in the order the teardown reads it.
     ///
     /// Each handle carries whether it had already finished at this moment —
@@ -1090,17 +1074,6 @@ fn end_on_entry_task(
     GenerationEnd::EntryTaskExited(subsystem)
 }
 
-/// Reads back an entry task the readiness check found already finished.
-///
-/// The handle has finished, so the await resolves without parking.
-async fn read_finished_entry_task(
-    entry_tasks: &mut EntryTasks,
-    subsystem: Subsystem,
-) -> GenerationEnd {
-    let outcome = watch_entry_task(entry_tasks.slot(subsystem).as_mut()).await;
-    end_on_entry_task(entry_tasks, subsystem, &outcome)
-}
-
 /// Serves until a shutdown intent arrives or a subsystem entry task ends, and
 /// reports which it was.
 ///
@@ -1109,6 +1082,12 @@ async fn read_finished_entry_task(
 /// serving, which is why the wait is a loop rather than a single `select!`,
 /// and a configuration reload that cannot be persisted also keeps serving, on
 /// the configuration the generation started with.
+///
+/// One selection covers both the wait and the readiness check that follows a
+/// configuration write that failed. The check is that same selection with the
+/// configuration reload taken out for one round and an immediately ready arm
+/// put in below the handles, so the precedence an operator gets is written
+/// once rather than restated in a second block that could drift from it.
 ///
 /// The entry-task arms are why the handles are borrowed here rather than only
 /// read back after the drain: an entry task that ends on its own is an event
@@ -1133,6 +1112,22 @@ async fn wait_for_generation_end<S>(
 where
     S: async_graphql::Executor + Clone,
 {
+    // `poll_config_reload` is what makes the readiness check below a check.
+    //
+    // A configuration reload whose write failed does not end the generation
+    // and can be ready again at once — several senders parked in `send` refill
+    // a channel of capacity 1 as soon as one is taken — so on its own it would
+    // keep the entry-task arms beneath it from ever being polled. And the
+    // condition that fails a configuration write, a full disk or a path gone
+    // read-only, is the same one that kills subsystems, so detection must not
+    // depend on an entry-task arm winning. Clearing this flag takes the
+    // configuration reload out of the next round, and the last arm — ready on
+    // its first poll, and enabled only for that round — is what makes that
+    // round a single pass over readiness rather than a second place the wait
+    // can park. Only the three terminal intents and a pending TLS reload
+    // outrank the handles in it, and when none of those is ready it falls
+    // straight back to the full selection.
+    let mut poll_config_reload = true;
     loop {
         // `biased`, so the order the arms are written in is the policy.
         //
@@ -1163,12 +1158,11 @@ where
         // applied is discarded. Taking the entry-task exit first would throw
         // away the recovery the operator asked for.
         //
-        // The entry-task arms are last and in a fixed order, so two subsystems
+        // The entry-task arms are next and in a fixed order, so two subsystems
         // dying together always produce the same choice of which one the
         // generation names as its ending. Precedence decides which ending is
         // reported, not which outcomes are: a handle left unpolled because a
         // higher arm won is handed to the teardown and reported there.
-        let mut config_write_failed = false;
         select! {
             biased;
             () = process.notify_terminate.notified() => {
@@ -1192,18 +1186,19 @@ where
                     web_addr,
                     web_shutdown_timeout,
                 ).await;
-                // Straight back to the selection, with no readiness check.
-                // Checking here would let a configuration reload that arrived
-                // during the reload's `await` lose to a finished entry handle
-                // and be discarded, which is exactly what putting the
-                // configuration reload above the entry-task arms is for.
+                // Back to the full selection, with no readiness check of its
+                // own. Checking after a reload would let a configuration
+                // update that arrived during its `await` lose to a finished
+                // entry handle and be discarded, which is exactly what putting
+                // the configuration reload above the entry-task arms is for.
+                poll_config_reload = true;
             }
-            Some(new_config) = intents.reload_rx.recv() => {
+            Some(new_config) = intents.reload_rx.recv(), if poll_config_reload => {
                 match settings.update_config_file(&new_config) {
                     Ok(()) => return GenerationEnd::ReloadConfig,
                     Err(e) => {
                         warn!("Failed to update configuration: {e:#}, run with previous config");
-                        config_write_failed = true;
+                        poll_config_reload = false;
                     }
                 }
             }
@@ -1219,59 +1214,11 @@ where
             outcome = watch_entry_task(entry_tasks.retention.as_mut()) => {
                 return end_on_entry_task(entry_tasks, Subsystem::Retention, &outcome);
             }
-        }
-
-        // Every other arm returns or comes back around from inside the
-        // selection, so only a configuration write that failed reaches the
-        // check below.
-        if !config_write_failed {
-            continue;
-        }
-
-        // The check that follows a configuration reload whose write failed.
-        //
-        // That arm does not end the generation and can be ready again at once
-        // — several senders parked in `send` refill a channel of capacity 1 as
-        // soon as one is taken — so without this the entry-task arms below it
-        // could go unpolled indefinitely. And the condition that fails a
-        // configuration write, a full disk or a path gone read-only, is the
-        // same one that kills subsystems, so detection must not depend on an
-        // entry-task arm winning.
-        //
-        // `biased` again, and the last arm is ready on its first poll, so this
-        // is a single pass over readiness rather than a second place the wait
-        // can park: only the three terminal intents and a pending TLS reload
-        // outrank the handles, and when none of those is ready it falls
-        // straight back to the selection and waits on every arm again,
-        // including the next configuration reload.
-        select! {
-            biased;
-            () = process.notify_terminate.notified() => {
-                info!("Termination signal: daemon exit");
-                return GenerationEnd::Terminate;
-            }
-            () = intents.notify_reboot.notified() => {
-                info!("Restarting the system...");
-                return GenerationEnd::Reboot;
-            }
-            () = intents.notify_power_off.notified() => {
-                info!("Power off the system...");
-                return GenerationEnd::PowerOff;
-            }
-            () = process.notify_tls_reload.notified() => {
-                reload_https_server(
-                    &process.reload_handle,
-                    &process.tls_watch,
-                    web_controller,
-                    schema,
-                    web_addr,
-                    web_shutdown_timeout,
-                ).await;
-            }
-            () = std::future::ready(()) => {
-                if let Some(subsystem) = entry_tasks.first_finished() {
-                    return read_finished_entry_task(entry_tasks, subsystem).await;
-                }
+            // Enabled only for the round that follows a configuration write
+            // that failed, and ready on its first poll, so that round is a
+            // pass over the arms above rather than a wait on them.
+            () = std::future::ready(()), if !poll_config_reload => {
+                poll_config_reload = true;
             }
         }
     }

@@ -1806,6 +1806,16 @@ mod tests {
         );
         assert_eq!(handle.await.expect("task should not panic"), 8);
         assert_eq!(tracker.pending_count(), 0);
+
+        // The `Debug` rendering carries the same metadata, for a supervisor
+        // that logs the handle rather than its fields.
+        let handle = tracker
+            .spawn_supervised("rendered", |_token| async {})
+            .expect("spawn should succeed");
+        let rendered = format!("{handle:?}");
+        assert!(rendered.contains("rendered"), "got: {rendered}");
+        assert!(rendered.contains("is_finished"), "got: {rendered}");
+        handle.await.expect("task should not panic");
     }
 
     /// A supervised handle stands in for the `JoinHandle` it owns.
