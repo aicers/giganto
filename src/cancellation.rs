@@ -221,12 +221,6 @@ impl<T> SupervisedHandle<T> {
     pub fn abort_handle(&self) -> AbortHandle {
         self.handle.abort_handle()
     }
-
-    /// Gives up the metadata and returns the [`JoinHandle`] underneath.
-    #[must_use]
-    pub fn into_inner(self) -> JoinHandle<T> {
-        self.handle
-    }
 }
 
 impl<T> Future for SupervisedHandle<T> {
@@ -1842,11 +1836,10 @@ mod tests {
         let error = handle.await.expect_err("an aborted task does not join");
         assert!(error.is_cancelled());
 
-        let inner = tracker
-            .spawn_supervised("inner", |_token| async { 1_u8 })
-            .expect("spawn should succeed")
-            .into_inner();
-        assert_eq!(inner.await.expect("task should not panic"), 1);
+        let joined = tracker
+            .spawn_supervised("joining", |_token| async { 1_u8 })
+            .expect("spawn should succeed");
+        assert_eq!(joined.await.expect("task should not panic"), 1);
     }
 
     /// The new entry point is additive: `spawn` keeps its signature and its

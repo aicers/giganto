@@ -924,18 +924,37 @@ type EntryTaskOutput = std::result::Result<Result<()>, task::JoinError>;
 ///
 /// Two and no others: the generation was still serving, or the handle was read
 /// back after the drain.
+///
+/// Only the second carries whether the handle had already finished when the
+/// wait ended, because that is the only phase the answer changes anything in:
+/// a task read by its own arm ended before anything cancelled it, so an
+/// `Ok(())` observed while serving is an early exit whatever else is true.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ObservationPhase {
     Serving,
-    AfterDrain,
+    AfterDrain { already_finished: bool },
 }
 
 impl ObservationPhase {
     fn as_str(self) -> &'static str {
         match self {
             Self::Serving => "serving",
-            Self::AfterDrain => "after_drain",
+            Self::AfterDrain { .. } => "after_drain",
         }
+    }
+
+    /// Whether an `Ok(())` observed in this phase can only have come from the
+    /// drain's cancellation.
+    ///
+    /// Cancellation happens inside the drain, so a handle that was already
+    /// finished when the wait ended cannot have finished because of it.
+    fn stopped_on_cancellation(self) -> bool {
+        matches!(
+            self,
+            Self::AfterDrain {
+                already_finished: false
+            }
+        )
     }
 }
 
@@ -961,11 +980,10 @@ async fn watch_entry_task(handle: Option<&mut SupervisedHandle<Result<()>>>) -> 
 ///
 /// Both shapes carry all five fields, always: the abnormal one at `error!` and
 /// a task that was cancelled and stopped at `info!`. Only a cause is optional,
-/// because an early exit and a clean stop have none. `already_finished` is
-/// what tells a clean stop from an early exit at
-/// [`AfterDrain`](ObservationPhase::AfterDrain): cancellation happens inside
-/// the drain, so a handle that was already finished when the wait ended cannot
-/// have finished because of it.
+/// because an early exit and a clean stop have none. What tells a clean stop
+/// from an early exit is the phase, which carries at
+/// [`AfterDrain`](ObservationPhase::AfterDrain) whether the handle had already
+/// finished when the wait ended.
 ///
 /// One window is left. A task that finishes on its own between the wait
 /// returning and the drain cancelling — the span covering web shutdown, the
@@ -974,7 +992,6 @@ async fn watch_entry_task(handle: Option<&mut SupervisedHandle<Result<()>>>) -> 
 fn report_entry_task_outcome(
     handle: &SupervisedHandle<Result<()>>,
     phase: ObservationPhase,
-    already_finished: bool,
     outcome: &EntryTaskOutput,
 ) -> bool {
     // Recorded with `?` so a dynamic name and a rendered duration cannot break
@@ -986,7 +1003,7 @@ fn report_entry_task_outcome(
     // The one shape an `Ok(())` can be normal in: a handle read back after the
     // drain, from a task that was still running when the wait ended and so can
     // only have stopped because the drain cancelled it.
-    let stopped_on_cancellation = phase == ObservationPhase::AfterDrain && !already_finished;
+    let stopped_on_cancellation = phase.stopped_on_cancellation();
     let phase = phase.as_str();
 
     match outcome {
@@ -1068,9 +1085,11 @@ fn end_on_entry_task(
         .slot(subsystem)
         .take()
         .expect("the arm that ended the wait polled a handle that was there");
-    // A task read by its own arm ended before anything cancelled it, so an
-    // `Ok(())` here is an early exit whatever else is true.
-    report_entry_task_outcome(&handle, ObservationPhase::Serving, true, outcome);
+    // The report's answer is not needed here: an arm that ended the wait ended
+    // it on an outcome that is abnormal by definition, and the
+    // `EntryTaskExited` returned below is what carries that into the lifecycle
+    // result.
+    let _abnormal = report_entry_task_outcome(&handle, ObservationPhase::Serving, outcome);
     GenerationEnd::EntryTaskExited(subsystem)
 }
 
@@ -1191,6 +1210,12 @@ where
                 // update that arrived during its `await` lose to a finished
                 // entry handle and be discarded, which is exactly what putting
                 // the configuration reload above the entry-task arms is for.
+                //
+                // Restoring the flag is what that costs: a reload that wins
+                // during a check round drops that check rather than deferring
+                // it, so the next configuration message can be taken before
+                // the handles are looked at. It converges, because every
+                // failed write arms the check again.
                 poll_config_reload = true;
             }
             Some(new_config) = intents.reload_rx.recv(), if poll_config_reload => {
@@ -1342,8 +1367,7 @@ async fn observe_entry_task(retained: RetainedEntryTask) -> bool {
     let outcome = (&mut handle).await;
     report_entry_task_outcome(
         &handle,
-        ObservationPhase::AfterDrain,
-        already_finished,
+        ObservationPhase::AfterDrain { already_finished },
         &outcome,
     )
 }
@@ -2266,7 +2290,7 @@ mod tests {
             future::Future,
             net::{Ipv4Addr, SocketAddr},
             path::Path,
-            sync::{Once, atomic::AtomicUsize},
+            sync::Once,
         };
 
         use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
@@ -2940,6 +2964,28 @@ mod tests {
                 .into_retained()
             }
 
+            /// Queues `count` configuration reloads whose write will fail.
+            ///
+            /// Production's channel holds one message and senders parked in
+            /// `send` refill it as soon as one is taken, so the arm can be
+            /// ready round after round. A channel that already holds `count`
+            /// messages puts the wait in that same position without depending
+            /// on a sender task being scheduled between two polls of the arm —
+            /// and what is left in the receiver when the wait ends is then
+            /// exactly what the wait did not take.
+            fn queue_failing_reloads(&mut self, count: usize) {
+                let (tx, rx) = mpsc::channel::<ConfigVisible>(count);
+                for _ in 0..count {
+                    tx.try_send(self.settings.config.visible.clone())
+                        .expect("the queue should have room for every reload");
+                }
+                // The sender is kept so an emptied channel leaves the arm
+                // pending, the way a live GraphQL handler does, rather than
+                // closing it.
+                self.reload_tx = tx;
+                self.intents.reload_rx = rx;
+            }
+
             /// Replaces one entry task with a stand-in the test aborts, so the
             /// handle carries a cancellation `JoinError`.
             async fn abort_entry_task(&mut self, subsystem: Subsystem) -> u64 {
@@ -3575,13 +3621,23 @@ mod tests {
         }
 
         /// A finished entry handle is detected while failing configuration
-        /// reloads are still arriving.
+        /// reloads are still queued.
         ///
         /// The configuration file is never created, so every write fails on
         /// the backup that precedes it — a failure of the path, not of timing.
         /// That arm does not end the generation and refills at once, so
         /// without the check that follows it the entry-task arms below would
         /// go unpolled for as long as the reloads keep coming.
+        ///
+        /// What is left in the receiver is what pins the check. Two reloads
+        /// are queued before the wait is entered and the wait may take only
+        /// the first: the check the failed write arms takes the configuration
+        /// arm out of the round that follows, so the finished handle is
+        /// reached with the second reload still unread. Were the arm polled
+        /// again instead, the second reload would be taken as well and the
+        /// receiver would come back empty. The leftover message and the count
+        /// of failed writes are therefore what tell the two apart, neither of
+        /// them depending on how the runtime schedules a sender.
         #[tokio::test]
         async fn a_finished_handle_is_detected_while_failing_reloads_keep_arriving() {
             let dir = tempdir().expect("tempdir");
@@ -3589,51 +3645,33 @@ mod tests {
             let id = fixture
                 .finish_entry_task(Subsystem::Peer, async { Ok(()) })
                 .await;
-
-            let stop = Arc::new(AtomicBool::new(false));
-            let sent = Arc::new(AtomicUsize::new(0));
-            let sender = task::spawn({
-                let reload_tx = fixture.reload_tx.clone();
-                let new_config = fixture.settings.config.visible.clone();
-                let stop = Arc::clone(&stop);
-                let sent = Arc::clone(&sent);
-                async move {
-                    while !stop.load(Ordering::SeqCst) {
-                        if reload_tx.send(new_config.clone()).await.is_err() {
-                            break;
-                        }
-                        sent.fetch_add(1, Ordering::SeqCst);
-                    }
-                }
-            });
-            assert!(
-                poll_until(READY_TIMEOUT, || sent.load(Ordering::SeqCst) > 0).await,
-                "the reloads should have started arriving before the wait does"
-            );
+            fixture.queue_failing_reloads(2);
 
             let (logs, _guard) = capture_logs();
             let end = tokio::time::timeout(READY_TIMEOUT, wait_without_web(&mut fixture))
                 .await
-                .expect("the wait should end on the finished handle, not on the reloads stopping");
-
-            assert!(
-                !sender.is_finished(),
-                "the reloads should still have been arriving when the wait ended"
-            );
-            stop.store(true, Ordering::SeqCst);
-            sender.abort();
+                .expect(
+                    "the wait should end on the finished handle, not on the reloads running out",
+                );
 
             assert_eq!(end, GenerationEnd::EntryTaskExited(Subsystem::Peer));
+            assert!(
+                fixture.intents.reload_rx.try_recv().is_ok(),
+                "a queued reload should have been left unread, so the handle was reached \
+                 while the reloads were still there to take"
+            );
+            assert_eq!(
+                records(&logs, "Failed to update configuration").len(),
+                1,
+                "exactly one reload should have been taken before the check, got: {}",
+                captured(&logs)
+            );
             assert_report_fields(
                 &abnormal_report(&logs),
                 Subsystem::Peer,
                 id,
                 "serving",
                 "early_exit",
-            );
-            assert!(
-                captured(&logs).contains("Failed to update configuration"),
-                "the failing write is what the check follows"
             );
             fixture.settle().await;
         }
