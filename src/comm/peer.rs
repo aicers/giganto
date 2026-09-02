@@ -1847,8 +1847,24 @@ pub mod tests {
             server_endpoint: &Endpoint,
             server_addr: SocketAddr,
         ) -> ConnectedPeers {
+            connect_client_server_with_config(
+                server_endpoint,
+                server_addr,
+                client_config(),
+                test_connect_name(),
+            )
+            .await
+        }
+
+        pub(super) async fn connect_client_server_with_config(
+            server_endpoint: &Endpoint,
+            server_addr: SocketAddr,
+            client_config: ClientConfig,
+            server_name: &str,
+        ) -> ConnectedPeers {
             retry_dial("client/server pair", server_addr, async || {
-                let client_endpoint = init_client();
+                let mut client_endpoint = init_client();
+                client_endpoint.set_default_client_config(client_config.clone());
                 // Bound synchronously, so the source port that identifies
                 // this attempt's client is known before the dial races.
                 let client_port = client_endpoint
@@ -1857,7 +1873,7 @@ pub mod tests {
                     .port();
                 let connect_fut = async {
                     client_endpoint
-                        .connect(server_addr, test_connect_name())
+                        .connect(server_addr, server_name)
                         .map_err(|e| format!("connect setup failed: {e}"))?
                         .await
                         .map_err(|e| format!("connect failed: {e}"))
@@ -3963,18 +3979,17 @@ pub mod tests {
         // installed with configuration derived from `new_certs`, not just
         // replaced with an arbitrary different Arc.
         let (probe_server_endpoint, probe_addr) = setup_server_endpoint_with_certs(&new_certs);
-        let mut client_endpoint =
-            quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
-        client_endpoint.set_default_client_config((*after).clone());
-        let connect_fut = client_endpoint
-            .connect(probe_addr, test_connect_name_node2())
-            .expect("connect config");
-        let accept_fut = async {
-            let incoming = accept_incoming(&probe_server_endpoint, "probe accept timeout").await;
-            incoming.await.expect("probe server accept")
-        };
-        let (server_conn, client_conn) = tokio::join!(accept_fut, connect_fut);
-        let client_conn = client_conn.expect("new client config must dial new server");
+        let ConnectedPeers {
+            server_conn,
+            client_conn,
+            ..
+        } = connect_client_server_with_config(
+            &probe_server_endpoint,
+            probe_addr,
+            (*after).clone(),
+            test_connect_name_node2(),
+        )
+        .await;
         let presented = extract_cert_from_conn(&client_conn).expect("probe server certs");
         assert_eq!(
             leaf(&presented),
