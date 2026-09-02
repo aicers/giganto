@@ -413,6 +413,77 @@ impl TaskTracker {
         Ok(())
     }
 
+    /// Closes the tracker whether or not the admission lock is poisoned,
+    /// reporting back whether it was.
+    ///
+    /// [`drain_with_report`] is the only caller, and it needs the close to
+    /// happen on every path it can take: a drain that has not closed the
+    /// tracker cannot wait for emptiness, because nothing stops fresh work
+    /// from entering while it waits.
+    ///
+    /// Reading through the poison is safe here because the critical section
+    /// this lock serializes leaves nothing half-written behind. It re-checks
+    /// an atomic flag, inserts one registry entry under the registry's own
+    /// lock, builds a [`RegistryGuard`], and submits the task to the inner
+    /// tracker. An unwind at any of those points leaves the registry map
+    /// whole — the insert is atomic under its own lock, and the guard the
+    /// task owns deregisters the id when the unwind drops it — and the closed
+    /// flag is written by `close` alone, so nothing it guards can disagree
+    /// with anything. What this sets is therefore a flag whose meaning is
+    /// intact, which is exactly what [`spawn`](Self::spawn) reads before it
+    /// reaches any lock: a later registration is refused with
+    /// [`SpawnError::Closed`] rather than with
+    /// [`SpawnError::LockPoisoned`].
+    ///
+    /// The mutex stays poisoned afterwards, so a caller that has to keep
+    /// waiting must not go back through [`drain`](Self::drain), whose own
+    /// `close` would fail before waiting for anything.
+    fn close_through_poison(&self) -> bool {
+        let (_admission, poisoned) = match self.inner.admission.lock() {
+            Ok(guard) => (guard, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
+        };
+        self.inner.closed.store(true, Ordering::Release);
+        self.inner.tasks.close();
+        poisoned
+    }
+
+    /// Poisons the admission lock in place, for tests that need a poisoned
+    /// tracker they can still hold tasks on.
+    ///
+    /// The only production way to poison a tracker is to let the inner
+    /// `tasks.spawn` panic by spawning outside a runtime, which poisons the
+    /// admission lock alone and has to happen before any runtime is entered.
+    /// A tracker that already holds a pending task — the only way to watch a
+    /// drain wait — cannot be poisoned that way, so the tests poison it here
+    /// instead.
+    #[cfg(test)]
+    pub(crate) fn poison_admission_lock(&self) {
+        let inner = Arc::clone(&self.inner);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = inner
+                .admission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poisoning the admission lock for a test");
+        }));
+    }
+
+    /// Poisons the task registry lock in place. The registry counterpart of
+    /// [`poison_admission_lock`](Self::poison_admission_lock); poisoning both
+    /// locks is calling both.
+    #[cfg(test)]
+    pub(crate) fn poison_registry_lock(&self) {
+        let inner = Arc::clone(&self.inner);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = inner
+                .registry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poisoning the task registry lock for a test");
+        }));
+    }
+
     /// Spawns a named task on the tracker.
     ///
     /// The closure receives a child [`CancellationToken`] that will be
@@ -728,39 +799,153 @@ pub const DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 /// soon as the tracker is observed empty.
 ///
 /// `report_interval` must be non-zero. A zero cadence still drains, because
-/// each round polls the tracker before its deadline is checked, but it spins
-/// the loop and floods the log with one round per poll. Rejecting an
-/// unusable cadence belongs to the settings that supply it.
+/// each round polls the tracker before its deadline is checked — and, in the
+/// count-only state below, sleeps for it between polls — but it spins the loop
+/// and floods the log with one round per poll. Rejecting an unusable cadence
+/// belongs to the settings that supply it.
+///
+/// # A poisoned lock does not shorten the wait
+///
+/// The tracker is closed before anything else on every path, through a
+/// poisoned admission lock rather than failing on it, and cancelled straight
+/// after. What follows is the same wait, performed by whichever of three calls
+/// the locks still allow. The loop only ever moves down them, demoted by what
+/// a call returns rather than by any advance verdict on which mutex is bad —
+/// an unwind inside the admission section can poison both at once, so nothing
+/// about one implies anything about the other. Each demotion is lossless,
+/// because the tracker is already closed for the whole of the loop: it drops a
+/// call that cannot succeed and keeps waiting on the ones that can.
+///
+/// 1. [`TaskTracker::drain`], the healthy path, and where a call that meets no
+///    poison spends the whole of its life.
+/// 2. [`TaskTracker::drain_after_close`], once any [`LockPoisonedError`] has
+///    been seen — and from the start when the close had to read through a
+///    poisoned admission lock, since `drain` re-closes and would come straight
+///    back without waiting.
+/// 3. Polling [`TaskTracker::pending_count`], which reads through a poisoned
+///    registry, once the snapshot `drain_after_close` takes on expiry has
+///    failed too. A count-only round reports the count and the unreadable
+///    registry in place of the straggler snapshot the other two emit.
+///
+/// Whichever state it ends in, the loop returns only once the tracker has been
+/// observed empty. No state aborts a straggler or gives up, so a count that
+/// cannot reach zero blocks the shutdown and reports every round rather than
+/// being waved through.
 ///
 /// # Errors
 ///
-/// Returns [`LockPoisonedError`] if an internal tracker mutex is poisoned. A
-/// poisoned lock is the one outcome this policy treats as a real error;
-/// pending tasks are not.
+/// Returns [`LockPoisonedError`] if an internal tracker mutex was poisoned. It
+/// says the tracker is empty and a lock was poisoned on the way, not that
+/// nothing was proved: every caller may treat it as a completed drain that has
+/// to be reported. A poisoned lock is the one outcome this policy treats as a
+/// real error; pending tasks are not.
+///
+/// A registry poison is discovered only on an expiry that still has tasks
+/// pending, because that is the only time a snapshot is taken, so a
+/// registry-poisoned tracker whose tasks all return inside the first interval
+/// returns `Ok(())`. A drain that never had to read the registry has nothing
+/// to report about it.
 pub async fn drain_with_report(
     tracker: &TaskTracker,
     report_interval: Duration,
     label: &str,
 ) -> Result<(), LockPoisonedError> {
-    tracker.close()?;
+    // Close first, through the poison if there is one, and only then cancel:
+    // the wait below means nothing unless admission is shut, and a spawn
+    // refused for a poisoned lock is not a refusal that holds.
+    let mut poisoned = tracker.close_through_poison();
     tracker.cancel_children();
+
+    let mut state = if poisoned {
+        warn!(
+            "{label} drain: the admission lock is poisoned; the tracker was closed through it, \
+             and the wait will not re-close it"
+        );
+        DrainState::ClosedThroughPoison
+    } else {
+        DrainState::Normal
+    };
 
     let mut round: u64 = 0;
     let mut reported_snapshot: Option<Vec<(u64, String)>> = None;
     loop {
-        match tracker.drain(report_interval).await? {
-            DrainOutcome::Drained => {
-                if round > 0 {
-                    info!("{label} drain complete after {round} pending round(s)");
+        let outcome = match state {
+            DrainState::Normal => tracker.drain(report_interval).await,
+            DrainState::ClosedThroughPoison => tracker.drain_after_close(report_interval).await,
+            DrainState::CountOnly => {
+                let pending = tracker.pending_count();
+                if pending == 0 {
+                    break;
                 }
-                return Ok(());
+                round = round.saturating_add(1);
+                warn!(
+                    "{label} drain round {round}: {pending} task(s) still pending; the task \
+                     registry could not be read for a straggler snapshot"
+                );
+                // The state this fell back from is the one that owned the
+                // timeout, so the poll paces itself on the caller's cadence
+                // rather than on an interval of its own.
+                tokio::time::sleep(report_interval).await;
+                continue;
             }
-            DrainOutcome::Pending(pending) => {
+        };
+
+        match outcome {
+            Ok(DrainOutcome::Drained) => break,
+            Ok(DrainOutcome::Pending(pending)) => {
                 round = round.saturating_add(1);
                 report_pending_round(label, round, &pending, &mut reported_snapshot);
             }
+            // Never returned and never retried from the state that saw it: a
+            // poison does not clear, so the same call would fail the same way
+            // every round. Remember it and drop to the state below.
+            Err(LockPoisonedError) => {
+                poisoned = true;
+                state = if state == DrainState::Normal {
+                    warn!(
+                        "{label} drain: a tracker lock is poisoned; waiting without re-closing \
+                         the tracker"
+                    );
+                    DrainState::ClosedThroughPoison
+                } else {
+                    warn!(
+                        "{label} drain: the task registry is poisoned; waiting on the pending \
+                         count alone, without a straggler snapshot"
+                    );
+                    DrainState::CountOnly
+                };
+            }
         }
     }
+
+    if round > 0 {
+        info!("{label} drain complete after {round} pending round(s)");
+    }
+    if poisoned {
+        Err(LockPoisonedError)
+    } else {
+        Ok(())
+    }
+}
+
+/// How a [`drain_with_report`] round waits for the tracker to empty.
+///
+/// One ladder, walked in one direction. The state is demoted by a call that
+/// came back with a poisoned lock, never by inspecting the locks, because an
+/// unwind in the admission critical section poisons both mutexes at once and
+/// only one known path leaves the registry clean.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DrainState {
+    /// Today's loop: [`TaskTracker::drain`], whose own idempotent close is
+    /// harmless on a tracker that closed cleanly.
+    Normal,
+    /// [`TaskTracker::drain_after_close`]: the same wait and the same
+    /// straggler snapshot, without the re-close a poisoned admission lock
+    /// would fail.
+    ClosedThroughPoison,
+    /// [`TaskTracker::pending_count`], polled on the caller's cadence, for a
+    /// registry no snapshot can be taken from.
+    CountOnly,
 }
 
 /// Reports one drain round that timed out with tasks still pending.
@@ -808,6 +993,36 @@ fn report_pending_round(
         );
     }
     *reported_snapshot = Some(snapshot);
+}
+
+/// Keeps `tracing` from latching a callsite off for the whole process, for the
+/// tests that read the drain's own log lines back.
+///
+/// Those tests install their subscriber on the current thread, but whether a
+/// callsite is worth evaluating at all is cached process-wide, once, the first
+/// time that callsite is reached — and while only a single dispatcher is
+/// registered, `tracing` decides it from the subscriber of the thread that
+/// reached it and nothing else. The drain callsites are reached from tests all
+/// over this binary, most of which capture nothing, so a parallel run can cache
+/// one of them as "never" while a capturing test is midway through the drain
+/// that emits it. The capture then comes back missing exactly the lines the
+/// drain did emit, and the test fails on a shutdown that behaved correctly.
+///
+/// Registering one more dispatcher and never dropping it keeps the count above
+/// one, which sends that decision down the path that asks every live subscriber
+/// instead. A callsite some thread is capturing then caches as "sometimes",
+/// which defers the decision to each event and to the emitting thread's own
+/// subscriber — the thing a per-thread capture needs to be true. What is held
+/// open is interested in nothing itself, so it neither captures nor prints
+/// anything.
+///
+/// Callers install it before their own subscriber, so that the registration
+/// that follows is the one that lifts the count.
+#[cfg(test)]
+pub(crate) fn hold_callsite_interest_open() {
+    static HELD: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+    let _ =
+        HELD.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
 }
 
 #[cfg(test)]
@@ -861,8 +1076,11 @@ mod tests {
         }
     }
 
-    /// Installs a log-capturing subscriber for the current thread.
+    /// Installs a log-capturing subscriber for the current thread, over the
+    /// dispatcher [`hold_callsite_interest_open`] keeps registered so that a
+    /// parallel test cannot cache one of the callsites asserted on below off.
     fn capture_logs() -> (SharedLogBuffer, tracing::subscriber::DefaultGuard) {
+        hold_callsite_interest_open();
         let logs = SharedLogBuffer::default();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
@@ -934,6 +1152,48 @@ mod tests {
     const TEST_DRAIN_LABEL: &str = "shutdown";
     /// Prefix of the per-round progress line `TEST_DRAIN_LABEL` produces.
     const DRAIN_ROUND_NEEDLE: &str = "shutdown drain round";
+
+    /// Message of the one callsite
+    /// [`a_callsite_reached_without_a_subscriber_still_reaches_a_capturing_one`]
+    /// emits, from both of the threads it runs.
+    const SHARED_CALLSITE_NEEDLE: &str = "a callsite two threads reach, one of them capturing";
+
+    /// Emits `SHARED_CALLSITE_NEEDLE` from a single callsite, so that two
+    /// threads calling this reach the same one. Two `warn!` invocations are two
+    /// callsites however alike they read, which is the whole of why this is a
+    /// function.
+    fn emit_shared_callsite() {
+        warn!("{SHARED_CALLSITE_NEEDLE}");
+    }
+
+    /// A capturing thread still sees a callsite that a thread capturing nothing
+    /// reached first.
+    ///
+    /// What this guards is not in the drain but in the capture the drain tests
+    /// read back: `tracing` caches per callsite, once and for the whole
+    /// process, whether that callsite is worth evaluating, and computes it from
+    /// the reaching thread alone while a single dispatcher is registered.
+    /// Without [`hold_callsite_interest_open`] the thread below caches the
+    /// shared callsite off for everyone, and every later capture of it — here,
+    /// and in the drain tests whose lines are emitted from tasks all over this
+    /// binary — comes back empty for a shutdown that behaved correctly.
+    #[test]
+    fn a_callsite_reached_without_a_subscriber_still_reaches_a_capturing_one() {
+        let (logs, _guard) = capture_logs();
+
+        // Reached first from a thread that has installed no subscriber, which
+        // is what every test in this binary that drains without capturing is.
+        std::thread::spawn(emit_shared_callsite)
+            .join()
+            .expect("the emitting thread should not panic");
+
+        emit_shared_callsite();
+        assert!(
+            logs.contents().contains(SHARED_CALLSITE_NEEDLE),
+            "the capturing thread sees the callsite, got: {}",
+            logs.contents()
+        );
+    }
 
     fn count_lines_containing(output: &str, needle: &str) -> usize {
         output.lines().filter(|line| line.contains(needle)).count()
@@ -1130,9 +1390,10 @@ mod tests {
         .expect("drain loop should not report a poisoned lock");
     }
 
-    /// A poisoned tracker lock ends the loop instead of being retried. Unlike
-    /// a pending task, a poison never clears, so every later round would fail
-    /// the same way and the loop would spin.
+    /// A poisoned tracker lock is reported, and the loop still does the whole
+    /// of its job on the way: the tracker is closed, cancelled, and observed
+    /// empty before the error comes back. The error records how the drain got
+    /// there, not that nothing was proved.
     ///
     /// The lock is poisoned the way `cancellation`'s own poison test does it:
     /// outside a runtime the inner `tasks.spawn` panics while the admission
@@ -1161,6 +1422,446 @@ mod tests {
         });
 
         assert_eq!(result, Err(LockPoisonedError));
+        assert!(
+            tracker.is_closed(),
+            "the drain closes the tracker through the poison"
+        );
+        assert_eq!(
+            tracker.pending_count(),
+            0,
+            "the drain returns only over an empty tracker"
+        );
+        assert!(
+            matches!(
+                tracker.spawn("after-drain", |_token| async {}),
+                Err(SpawnError::Closed)
+            ),
+            "a registration after the close is refused as closed, not as poisoned"
+        );
+        // `close` on its own is not what changed: it still fails on the
+        // poisoned admission lock for its own callers.
+        assert_eq!(tracker.close(), Err(LockPoisonedError));
+    }
+
+    /// A task that observes cancellation, records it, and only then waits for
+    /// `release`.
+    ///
+    /// The shape the poisoned-drain tests need: it proves the drain cancelled
+    /// before it waited, and it holds the drain open for as long as the test
+    /// wants to watch it wait.
+    fn spawn_cancel_watching_task(
+        tracker: &TaskTracker,
+        name: &'static str,
+        release: oneshot::Receiver<()>,
+    ) -> (JoinHandle<()>, Arc<AtomicBool>) {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancelled);
+        let handle = tracker
+            .spawn(name, move |token| async move {
+                token.cancelled().await;
+                flag.store(true, Ordering::SeqCst);
+                let _ = release.await;
+            })
+            .expect("spawn should succeed");
+        (handle, cancelled)
+    }
+
+    /// Drives one poisoned drain over a tracker holding one task, and asserts
+    /// the whole of the contract it now carries.
+    ///
+    /// The tracker is poisoned by `poison` after the task has been registered,
+    /// which is the only way to hold a drain open long enough to watch it
+    /// wait. Whatever the poison is, the drain must close before it cancels,
+    /// cancel before it waits, keep waiting while the task is pending, and
+    /// report the poison only once the tracker is empty.
+    async fn assert_a_poisoned_drain_waits_for_emptiness(poison: impl FnOnce(&TaskTracker)) {
+        let tracker = TaskTracker::new();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (task_handle, cancelled) = spawn_cancel_watching_task(&tracker, "held", release_rx);
+        poison(&tracker);
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_with_report(&tracker, REPORT_INTERVAL, TEST_DRAIN_LABEL).await }
+        });
+
+        // Several reporting rounds of virtual time. A registry poison is
+        // discovered only when a snapshot is attempted, which is only on an
+        // expiry that still has tasks pending, so the demotions need rounds to
+        // happen in.
+        sleep(REPORT_INTERVAL * 3 + REPORT_INTERVAL / 2).await;
+
+        assert!(
+            !drain.is_finished(),
+            "the drain must not return while a tracked task is pending"
+        );
+        assert!(
+            tracker.is_closed(),
+            "the drain closes the tracker before it waits"
+        );
+        assert!(
+            matches!(
+                tracker.spawn("late", |_token| async {}),
+                Err(SpawnError::Closed)
+            ),
+            "a registration during the wait is refused as closed, not as poisoned"
+        );
+        assert!(
+            cancelled.load(Ordering::SeqCst),
+            "the drain cancels the tracker's children"
+        );
+
+        release_tx.send(()).expect("the task is still waiting");
+        let result = tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
+            .await
+            .expect("the drain returns once the task has")
+            .expect("the drain task should not panic");
+
+        assert_eq!(
+            result,
+            Err(LockPoisonedError),
+            "the poison is remembered across the wait, not swallowed"
+        );
+        assert_eq!(
+            tracker.pending_count(),
+            0,
+            "the drain returns only over an empty tracker"
+        );
+        task_handle
+            .await
+            .expect("the task should not have been aborted");
+    }
+
+    /// The shape the one production trigger produces: the admission lock
+    /// alone. The drain starts in the closed-through-poison state, because
+    /// `drain`'s own `close()?` would fail before waiting for anything.
+    #[tokio::test(start_paused = true)]
+    async fn a_poisoned_admission_drain_waits_for_emptiness() {
+        assert_a_poisoned_drain_waits_for_emptiness(TaskTracker::poison_admission_lock).await;
+    }
+
+    /// The registry alone: the drain starts in the normal state and is
+    /// demoted twice, once by `drain` and once by `drain_after_close`, because
+    /// the demotion follows the failing call rather than any advance verdict
+    /// on which mutex is bad.
+    #[tokio::test(start_paused = true)]
+    async fn a_poisoned_registry_drain_waits_for_emptiness() {
+        assert_a_poisoned_drain_waits_for_emptiness(TaskTracker::poison_registry_lock).await;
+    }
+
+    /// Both at once, which is what an unwind inside `register_task` leaves
+    /// behind: the same unwind carries out through the registry guard and then
+    /// the admission guard.
+    #[tokio::test(start_paused = true)]
+    async fn a_drain_over_two_poisoned_locks_waits_for_emptiness() {
+        assert_a_poisoned_drain_waits_for_emptiness(|tracker| {
+            tracker.poison_admission_lock();
+            tracker.poison_registry_lock();
+        })
+        .await;
+    }
+
+    /// `close` on its own is unchanged, and a registry poison alone does not
+    /// touch it.
+    #[tokio::test]
+    async fn close_on_its_own_still_answers_for_the_admission_lock_alone() {
+        let admission_poisoned = TaskTracker::new();
+        admission_poisoned.poison_admission_lock();
+        assert_eq!(admission_poisoned.close(), Err(LockPoisonedError));
+
+        let registry_poisoned = TaskTracker::new();
+        registry_poisoned.poison_registry_lock();
+        assert_eq!(
+            registry_poisoned.close(),
+            Ok(()),
+            "a poisoned registry is not the lock `close` takes"
+        );
+    }
+
+    /// A drain over healthy locks says nothing the recovery added, at any
+    /// boundary.
+    ///
+    /// The label is the only thing that differs between the five production
+    /// drains, so a healthy drain that emits none of the recovery's lines here
+    /// emits none of them anywhere. The pending round it does report is
+    /// today's, in today's shape.
+    #[tokio::test(start_paused = true)]
+    async fn a_healthy_drain_emits_nothing_the_recovery_added() {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (task_handle, _cancelled) = spawn_cancel_watching_task(&tracker, "held", release_rx);
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_with_report(&tracker, REPORT_INTERVAL, TEST_DRAIN_LABEL).await }
+        });
+        sleep(REPORT_INTERVAL + REPORT_INTERVAL / 2).await;
+        release_tx.send(()).expect("the task is still waiting");
+        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
+            .await
+            .expect("the drain returns once the task has")
+            .expect("the drain task should not panic")
+            .expect("a healthy drain reports no poison");
+        task_handle
+            .await
+            .expect("the task should not have been aborted");
+
+        let output = logs.contents();
+        for added in ["is poisoned", "could not be read for a straggler snapshot"] {
+            assert!(
+                !output.contains(added),
+                "a healthy drain should not mention {added:?}, got: {output}"
+            );
+        }
+        assert_eq!(
+            count_lines_containing(&output, DRAIN_ROUND_NEEDLE),
+            1,
+            "the one expired round is reported, in today's shape, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "pending task id="),
+            1,
+            "with today's straggler snapshot, got: {output}"
+        );
+    }
+
+    /// The complement of the registry cases above. A registry poison is found
+    /// only when a snapshot is attempted, so a tracker whose tasks all return
+    /// inside the first reporting interval drains through the normal state and
+    /// has nothing to report.
+    #[tokio::test(start_paused = true)]
+    async fn a_registry_poison_no_round_reached_returns_ok() {
+        let tracker = TaskTracker::new();
+        let handle = tracker
+            .spawn("cooperative", |token| async move {
+                token.cancelled().await;
+            })
+            .expect("spawn should succeed");
+        tracker.poison_registry_lock();
+
+        let result = tokio::time::timeout(
+            DRAIN_LOOP_TIMEOUT,
+            drain_with_report(&tracker, REPORT_INTERVAL, TEST_DRAIN_LABEL),
+        )
+        .await
+        .expect("a cooperative task should drain on the first round");
+
+        assert_eq!(
+            result,
+            Ok(()),
+            "a drain that never reached for the registry has nothing to say about it"
+        );
+        handle.await.expect("the task should not have been aborted");
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    /// The closed-through-poison state keeps the reporting the normal one has:
+    /// the same round line and the same straggler snapshot. Only the state's
+    /// own entry is announced, once.
+    #[tokio::test(start_paused = true)]
+    async fn a_poisoned_admission_drain_still_reports_the_straggler_snapshot() {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (task_handle, _cancelled) = spawn_cancel_watching_task(&tracker, "held", release_rx);
+        tracker.poison_admission_lock();
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_with_report(&tracker, REPORT_INTERVAL, TEST_DRAIN_LABEL).await }
+        });
+        sleep(REPORT_INTERVAL * 2 + REPORT_INTERVAL / 2).await;
+        release_tx.send(()).expect("the task is still waiting");
+        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
+            .await
+            .expect("the drain returns once the task has")
+            .expect("the drain task should not panic")
+            .expect_err("the poison is reported");
+        task_handle
+            .await
+            .expect("the task should not have been aborted");
+
+        let output = logs.contents();
+        assert_eq!(
+            count_lines_containing(&output, "the admission lock is poisoned"),
+            1,
+            "the state is announced once, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, DRAIN_ROUND_NEEDLE),
+            2,
+            "each pending round should be reported, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "pending task id="),
+            1,
+            "the straggler snapshot is emitted, and repeats no unchanged set, got: {output}"
+        );
+        assert!(
+            !output.contains("could not be read for a straggler snapshot"),
+            "the registry is readable here, so no round is count-only, got: {output}"
+        );
+    }
+
+    /// A registry-poisoned drain explains its own change of shape: each
+    /// demotion once, at `warn!`, and then rounds that say what they can
+    /// report instead of a snapshot.
+    #[tokio::test(start_paused = true)]
+    async fn a_poisoned_registry_drain_reports_each_demotion_once_then_counts() {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (task_handle, _cancelled) = spawn_cancel_watching_task(&tracker, "held", release_rx);
+        tracker.poison_registry_lock();
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_with_report(&tracker, REPORT_INTERVAL, TEST_DRAIN_LABEL).await }
+        });
+        sleep(REPORT_INTERVAL * 4 + REPORT_INTERVAL / 2).await;
+        release_tx.send(()).expect("the task is still waiting");
+        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
+            .await
+            .expect("the drain returns once the task has")
+            .expect("the drain task should not panic")
+            .expect_err("the poison is reported");
+        task_handle
+            .await
+            .expect("the task should not have been aborted");
+
+        let output = logs.contents();
+        assert_eq!(
+            count_lines_containing(&output, "a tracker lock is poisoned"),
+            1,
+            "the first demotion is reported once, got: {output}"
+        );
+        assert_eq!(
+            count_lines_containing(&output, "the task registry is poisoned"),
+            1,
+            "the second demotion is reported once, got: {output}"
+        );
+        let rounds = count_lines_containing(&output, DRAIN_ROUND_NEEDLE);
+        assert!(rounds > 0, "the wait still reports rounds, got: {output}");
+        assert_eq!(
+            count_lines_containing(&output, "could not be read for a straggler snapshot"),
+            rounds,
+            "every round reported from the count-only state says so, got: {output}"
+        );
+        assert!(
+            !output.contains("pending task id="),
+            "no snapshot can be taken from a poisoned registry, got: {output}"
+        );
+    }
+
+    /// A count that cannot reach zero blocks the shutdown, reporting the same
+    /// count every round, rather than being waved through.
+    ///
+    /// The task here stands in for the one residual hazard the recovery
+    /// deliberately does not special-case: a registry entry stranded by an
+    /// unwind between the insert and the guard's construction belongs to no
+    /// future, so nothing will ever remove it. The two are indistinguishable
+    /// to the drain — a count that never falls — and a shutdown that visibly
+    /// hangs is something an operator can act on, where one that gave up would
+    /// go on to shut the store down on a proof it never obtained.
+    #[tokio::test(start_paused = true)]
+    async fn a_poisoned_drain_never_gives_up_on_a_count_that_cannot_fall() {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        // Deliberately ignores its cancellation token, and nothing releases it.
+        let (_task_handle, _flag) = spawn_pending_task(&tracker, "wedged", release_rx);
+        tracker.poison_registry_lock();
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_with_report(&tracker, REPORT_INTERVAL, TEST_DRAIN_LABEL).await }
+        });
+        sleep(REPORT_INTERVAL * 6 + REPORT_INTERVAL / 2).await;
+
+        assert!(
+            !drain.is_finished(),
+            "the drain must not give up on a task that will not return"
+        );
+        let output = logs.contents();
+        let rounds = count_lines_containing(&output, "1 task(s) still pending");
+        assert!(
+            rounds >= 4,
+            "the wait reports the same non-zero count every round, got {rounds} in: {output}"
+        );
+        assert!(
+            !output.contains("drain complete"),
+            "nothing completed, got: {output}"
+        );
+        assert_eq!(tracker.pending_count(), 1);
+        drain.abort();
+    }
+
+    /// Counts the rounds a poisoned drain reports in a fixed span of virtual
+    /// time, at the cadence the caller passed.
+    async fn poisoned_rounds_in_span(
+        poison: impl FnOnce(&TaskTracker),
+        report_interval: Duration,
+        span: Duration,
+    ) -> usize {
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let (_release_tx, release_rx) = oneshot::channel::<()>();
+        let (_task_handle, _flag) = spawn_pending_task(&tracker, "held", release_rx);
+        poison(&tracker);
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_with_report(&tracker, report_interval, TEST_DRAIN_LABEL).await }
+        });
+        sleep(span).await;
+        let rounds = count_lines_containing(&logs.contents(), DRAIN_ROUND_NEEDLE);
+        // Joined after the abort so the next call's capture cannot pick up a
+        // round this one is still emitting.
+        drain.abort();
+        let _ = drain.await;
+        rounds
+    }
+
+    /// Every state paces itself on the `report_interval` the caller passed,
+    /// and on nothing else: halve it and twice as many rounds land in the same
+    /// span.
+    ///
+    /// The two poisons pick out the two states below the normal one. The
+    /// admission lock alone puts the drain in the closed-through-poison state
+    /// from the start, so its rounds land at each multiple of the interval.
+    /// Both locks poisoned puts it there too and then demotes it to the
+    /// count-only poll on the first expiry, so its rounds land at the same
+    /// multiples — which is the point: the poll has no cadence of its own.
+    #[tokio::test(start_paused = true)]
+    async fn every_poisoned_state_reports_on_the_callers_cadence() {
+        // A quarter interval past the eighth expiry, so no assertion sits on
+        // the exact instant a round lands.
+        let span = REPORT_INTERVAL * 8 + REPORT_INTERVAL / 4;
+
+        for (state, poison) in [
+            (
+                "closed through poison",
+                Box::new(TaskTracker::poison_admission_lock) as Box<dyn Fn(&TaskTracker)>,
+            ),
+            (
+                "count only",
+                Box::new(|tracker: &TaskTracker| {
+                    tracker.poison_admission_lock();
+                    tracker.poison_registry_lock();
+                }),
+            ),
+        ] {
+            let full = poisoned_rounds_in_span(&poison, REPORT_INTERVAL, span).await;
+            let halved = poisoned_rounds_in_span(&poison, REPORT_INTERVAL / 2, span).await;
+
+            assert_eq!(full, 8, "{state}: one round per interval");
+            assert_eq!(
+                halved,
+                full * 2,
+                "{state}: halving the interval doubles the rounds in the same span"
+            );
+        }
     }
 
     #[test]
@@ -2186,6 +2887,76 @@ mod tests {
         assert_eq!(tracker.close(), Err(LockPoisonedError));
     }
 
+    /// The standing proof that closing through a poisoned admission lock is
+    /// safe, over the one path that actually poisons a tracker in production.
+    ///
+    /// What that path leaves behind is the whole of the argument: only the
+    /// admission lock is poisoned, because `register_task` takes the registry
+    /// lock and releases it before returning, and the registry itself is whole
+    /// because the guard the unwind dropped removed the entry. So the closed
+    /// flag `close_through_poison` sets is a flag whose meaning is intact, and
+    /// the count the wait watches is a count over a healthy map. If this ever
+    /// fails, closing through the poison is no longer safe.
+    #[test]
+    fn a_poisoned_admission_lock_leaves_the_registry_intact() {
+        let tracker = TaskTracker::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("no-runtime", |_token| async {});
+        }));
+        assert!(outcome.is_err(), "spawn outside a runtime should panic");
+
+        assert_eq!(
+            tracker.pending_count(),
+            0,
+            "the guard the unwind dropped should have deregistered the entry"
+        );
+        assert!(
+            tracker.log_pending().is_ok(),
+            "the registry lock is not poisoned by this path: `register_task` \
+             released it before returning"
+        );
+        assert!(
+            !tracker.is_closed(),
+            "a poisoned admission lock is not a closed tracker"
+        );
+        assert_eq!(tracker.close(), Err(LockPoisonedError));
+    }
+
+    /// Reading *through* a poisoned registry, which is what the count-only
+    /// state of a poisoned drain rests on: the count is still reported, and a
+    /// task that returns still removes its own entry, so the count falls
+    /// rather than freezing.
+    #[tokio::test]
+    async fn a_poisoned_registry_still_counts_and_deregisters() {
+        let tracker = TaskTracker::new();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let handle = tracker
+            .spawn("held", |_token| async move {
+                let _ = release_rx.await;
+            })
+            .expect("spawn should succeed");
+        tracker.poison_registry_lock();
+
+        assert_eq!(
+            tracker.pending_count(),
+            1,
+            "`pending_count` reads through the poison rather than reporting a bogus zero"
+        );
+        assert!(
+            tracker.close().is_ok(),
+            "the admission lock is untouched here"
+        );
+
+        release_tx.send(()).expect("the task is still waiting");
+        handle.await.expect("the task should not have been aborted");
+
+        assert_eq!(
+            tracker.pending_count(),
+            0,
+            "`Inner::deregister` reads through the poison too, so the count falls"
+        );
+    }
+
     // ── Miscellaneous ────────────────────────────────────────────────
 
     #[test]
@@ -2256,6 +3027,7 @@ mod tests {
             tokio::task::yield_now().await;
 
             let (writer, calls) = ReentrantPendingCountBuffer::new(tracker.clone());
+            hold_callsite_interest_open();
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
                 .without_time()

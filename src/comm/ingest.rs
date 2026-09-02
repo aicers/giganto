@@ -50,6 +50,7 @@ use tokio::{
         Notify,
         mpsc::{Receiver, Sender, channel},
     },
+    task::JoinHandle,
     time,
 };
 use tokio_util::sync::CancellationToken;
@@ -166,7 +167,9 @@ impl BoundServer {
     /// Cancellation ends admission on both sides: this loop stops accepting,
     /// and closing the tracker stops the handlers from registering more work.
     /// The entry task returns only once the drain is empty, so no ingest task
-    /// is left holding a database handle when the generation moves on.
+    /// is left holding a database handle when the generation moves on. What
+    /// runs after the loop is [`shutdown_ingest`], called unconditionally as
+    /// the last statement here.
     ///
     /// # Errors
     ///
@@ -305,34 +308,75 @@ impl BoundServer {
             }
         }
 
-        // Admission rejection, the half the accept loop cannot do on its own:
-        // a closed tracker turns away every connection and stream handler a
-        // still-running handler might try to register.
-        tracker
-            .close()
-            .context("failed to close the ingest task tracker")?;
-        // The entry task holds the only sender outside the handlers, so
-        // dropping it here lets the sensor-state task see the channel close
-        // once the handlers still holding clones have returned.
-        drop(tx);
-        // Same policy as the top level: report every round and keep waiting.
-        // `drain_with_report` closes and cancels again, both idempotent.
-        drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, INGEST_DRAIN_LABEL)
-            .await
-            .context("failed to drain the ingest task tracker")?;
+        shutdown_ingest(&tracker, &endpoint, sensor_state_handle, tx).await
+    }
+}
 
-        // Only now, with every handler returned, is the listener torn down.
-        // Closing it earlier would kill the connections the handlers are
-        // still cleaning up on.
-        endpoint.close(0_u32.into(), b"shutting down");
-        endpoint.wait_idle().await;
+/// Everything the ingest entry task does after it has left its accept loop.
+///
+/// Extracted from [`BoundServer::run`] purely so a test can drive it over a
+/// tracker of its own — a tracker built inside `run` is reachable from
+/// nowhere else, and the recovery a poisoned drain performs is what these
+/// statements have to survive. `run` calls it unconditionally as its last
+/// statement, so the two are the same sequence.
+///
+/// # Errors
+///
+/// Returns an error if the drain reported a poisoned tracker lock or if the
+/// sensor-state task did not return cleanly. Either way the listener has been
+/// torn down first: the address ingest was pinned to is released for the next
+/// generation on the failing path exactly as on the healthy one.
+async fn shutdown_ingest(
+    tracker: &TaskTracker,
+    endpoint: &Endpoint,
+    sensor_state_handle: JoinHandle<Result<()>>,
+    tx: Sender<SensorInfo>,
+) -> Result<()> {
+    // Admission rejection, the half the accept loop cannot do on its own:
+    // a closed tracker turns away every connection and stream handler a
+    // still-running handler might try to register. Failing here is no longer
+    // fatal: `drain_with_report` closes the tracker itself, through a
+    // poisoned admission lock if it has to, so this close only shuts
+    // admission a little earlier than the drain would.
+    if let Err(e) = tracker.close() {
+        error!("failed to close the ingest task tracker: {e}");
+    }
+    // The entry task holds the only sender outside the handlers, so
+    // dropping it here lets the sensor-state task see the channel close
+    // once the handlers still holding clones have returned.
+    drop(tx);
+    // Same policy as the top level: report every round and keep waiting.
+    // `drain_with_report` closes and cancels again, both idempotent. Its
+    // error is captured rather than propagated on the spot, because it means
+    // the tracker is empty and the teardown below still has to run.
+    let drained = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, INGEST_DRAIN_LABEL)
+        .await
+        .context("failed to drain the ingest task tracker");
 
-        // The drain already waited for this task; this reads back the result
-        // it returned, which the drain does not look at.
-        match sensor_state_handle.await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(e.context("ingest sensor-state task failed")),
-            Err(e) => Err(anyhow!("ingest sensor-state task did not join: {e}")),
+    // Only now, with every handler returned, is the listener torn down.
+    // Closing it earlier would kill the connections the handlers are
+    // still cleaning up on.
+    endpoint.close(0_u32.into(), b"shutting down");
+    endpoint.wait_idle().await;
+
+    // The drain already waited for this task; this reads back the result
+    // it returned, which the drain does not look at.
+    let sensor_state = match sensor_state_handle.await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e.context("ingest sensor-state task failed")),
+        Err(e) => Err(anyhow!("ingest sensor-state task did not join: {e}")),
+    };
+
+    match drained {
+        Ok(()) => sensor_state,
+        Err(drain_error) => {
+            // The drain error is the one returned: it names the tracker the
+            // whole subsystem was waited on through. A sensor-state failure
+            // underneath it still reaches the log.
+            if let Err(e) = sensor_state {
+                error!("ingest sensor-state task failed: {e:#}");
+            }
+            Err(drain_error)
         }
     }
 }

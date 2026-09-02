@@ -42,3 +42,12 @@ does.
   requested reboot or power off was still carried out, but the exit
   status reports the failure. A configuration reload is the exception:
   the node starts the next generation and only logs the failure.
+- `shutdown drain could not read the top-level tracker`, or the same
+  line for `the web PCAP reaper tracker`, is the other cause of a
+  degraded generation. It means an earlier panic left one of the
+  shutdown bookkeeping locks unusable. Shutdown still stopped admitting
+  work, cancelled what was running, and waited until every tracked task
+  had returned before shutting the database down; the message records
+  that it got there the hard way, not that anything was cut short.
+  Drain rounds that report only a count, saying the task registry could
+  not be read for a straggler snapshot, have the same cause.

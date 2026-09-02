@@ -8,7 +8,7 @@ use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
     },
 };
 
@@ -52,13 +52,13 @@ fn init_crypto() {
 }
 
 use tokio::{
-    sync::{Notify, watch},
+    sync::{Notify, mpsc, oneshot, watch},
     task::JoinHandle,
     time::{Instant, sleep, timeout},
 };
 use tokio_util::sync::CancellationToken;
 
-use super::Server;
+use super::{Server, shutdown_ingest};
 #[cfg(not(feature = "bootroot"))]
 use crate::comm::to_cert_chain;
 #[cfg(feature = "bootroot")]
@@ -67,6 +67,7 @@ use crate::test_bootroot::{
     bootroot_chain_node1_server_certs,
 };
 use crate::{
+    cancellation::TaskTracker,
     comm::{
         IngestSensors, PcapSensors, RunTimeIngestSensors, new_ingest_sensors, new_pcap_sensors,
         new_runtime_ingest_sensors, new_stream_direct_channels,
@@ -3122,4 +3123,123 @@ async fn stream_error_log_names_the_failing_stream() {
     );
 
     harness.shutdown(b"done").await;
+}
+
+/// The ingest shutdown tail, driven over a tracker the test poisoned itself.
+///
+/// The tail is what `run` calls as its last statement, so what holds here
+/// holds for the entry task. A poisoned admission lock used to return the
+/// entry task at its preliminary `close()`, before the drain and before the
+/// listener teardown, leaving the connection and stream handlers running while
+/// the generation moved on. Now the close is reported and the tail carries on:
+/// the drain closes the tracker itself, cancels it, and waits until it is
+/// empty, and the endpoint teardown runs before the captured error is
+/// returned.
+#[tokio::test]
+async fn the_ingest_tail_waits_and_tears_down_through_a_poisoned_tracker() {
+    init_crypto();
+    let bound = server(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0))
+        .bind()
+        .expect("bind ingest test server");
+    let local_addr = bound.local_addr();
+    let endpoint = bound.endpoint;
+
+    let tracker = TaskTracker::with_token(CancellationToken::new());
+
+    // A nested handler with the shape a connection handler has: it observes
+    // cancellation, and only then finishes what it was doing.
+    let (release_tx, release_rx) = oneshot::channel::<()>();
+    let handler_cancelled = Arc::new(AtomicBool::new(false));
+    let handler = tracker
+        .spawn("ingest-conn-test", {
+            let handler_cancelled = Arc::clone(&handler_cancelled);
+            move |token| async move {
+                token.cancelled().await;
+                handler_cancelled.store(true, Ordering::SeqCst);
+                let _ = release_rx.await;
+            }
+        })
+        .expect("a fresh tracker admits the handler");
+
+    let (tx, mut rx) = mpsc::channel::<super::SensorInfo>(1);
+    let sensor_state_handle = tracker
+        .spawn("ingest-sensor-state", |_token| async move {
+            // The real one returns when the channel the entry task holds the
+            // last sender of closes.
+            while rx.recv().await.is_some() {}
+            Ok(())
+        })
+        .expect("a fresh tracker admits the sensor-state stand-in");
+
+    // Only now, with both tasks registered: the production trigger poisons a
+    // tracker before any runtime exists, which is a tracker that can hold
+    // nothing.
+    tracker.poison_admission_lock();
+
+    let tail = tokio::spawn({
+        let tracker = tracker.clone();
+        async move {
+            let result = shutdown_ingest(&tracker, &endpoint, sensor_state_handle, tx).await;
+            (result, endpoint)
+        }
+    });
+
+    // Cancellation reaching the handler is the proof the tail did not return
+    // at its preliminary `close()`: nothing else in this test cancels, and the
+    // only `cancel_children` in the process is inside `drain_with_report`.
+    wait_until("the tail reaches the drain", SHUTDOWN_TIMEOUT, || async {
+        handler_cancelled.load(Ordering::SeqCst)
+    })
+    .await;
+    assert!(
+        !tail.is_finished(),
+        "the tail must not return while a nested handler is still running"
+    );
+    assert!(
+        tracker.is_closed(),
+        "the drain closes the tracker through the poison"
+    );
+
+    release_tx.send(()).expect("the handler is still waiting");
+    handler.await.expect("the handler should not be aborted");
+    let (result, endpoint) = with_timeout("ingest tail", SHUTDOWN_TIMEOUT, tail)
+        .await
+        .expect("the tail should not panic");
+
+    result.expect_err("a poisoned tracker lock is reported to the entry task");
+    assert_eq!(
+        tracker.pending_count(),
+        0,
+        "the tail returns only once its tracker is empty"
+    );
+
+    // The teardown ran despite the error: a closed endpoint hands back no
+    // more connections, and dropping it releases the address the next
+    // generation has to rebind.
+    assert!(
+        endpoint.accept().await.is_none(),
+        "the post-drain endpoint teardown should have closed the listener"
+    );
+    drop(endpoint);
+    // The endpoint's driver releases the UDP socket once the last handle is
+    // gone, which it does on its own schedule, so the rebind is retried until
+    // it succeeds rather than attempted once.
+    wait_until(
+        "the ingest address is released",
+        SHUTDOWN_TIMEOUT,
+        || async { server(local_addr).bind().is_ok() },
+    )
+    .await;
+}
+
+/// `run` reaches the tail unconditionally, which is what carries the
+/// assertions above back to the entry task.
+#[test]
+fn ingest_run_ends_in_the_shutdown_tail() {
+    let source = include_str!("../ingest.rs");
+    assert!(
+        source
+            .contains("shutdown_ingest(&tracker, &endpoint, sensor_state_handle, tx).await\n    }"),
+        "`run` should end in one unconditional call to `shutdown_ingest`"
+    );
 }

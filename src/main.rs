@@ -500,6 +500,30 @@ enum GenerationHealth {
     Degraded,
 }
 
+impl GenerationHealth {
+    /// The value for one source, from whether what it observed was abnormal.
+    fn degraded_if(abnormal: bool) -> Self {
+        if abnormal {
+            Self::Degraded
+        } else {
+            Self::Clean
+        }
+    }
+
+    /// Folds one more source into the generation's outcome.
+    ///
+    /// A monotonic OR: degradation never clears, so the fold does not depend
+    /// on the order the teardown's phases report in, and no source can undo
+    /// what another said. Each source has already emitted its own record where
+    /// it happened, so folding says nothing of its own.
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Clean, Self::Clean) => Self::Clean,
+            _ => Self::Degraded,
+        }
+    }
+}
+
 /// What one generation ended as.
 ///
 /// The ending on its own could not carry a degradation: an `Err` out of
@@ -1301,11 +1325,17 @@ struct GenerationTeardown {
 ///
 /// # Errors
 ///
-/// Returns an error if the database could not be shut down. A retained handle
-/// that came back badly is not one: it is reported, it makes the returned
-/// outcome degraded, and it suppresses neither the later database shutdown
-/// phase nor the ending's requested action. A database-shutdown failure
-/// returns before that action.
+/// Returns an error if the database could not be shut down. Neither a
+/// retained handle that came back badly nor a drain that had to recover from a
+/// poisoned tracker lock is one: each is reported where it happens, each makes
+/// the returned outcome degraded, and none of them suppresses the later
+/// database shutdown phase or the ending's requested action. A
+/// database-shutdown failure returns before that action.
+///
+/// The three sources of degradation — the web reaper drain, the top-level
+/// drain, and the retained-handle observation — are folded into one outcome by
+/// [`GenerationHealth::merge`], a monotonic OR, so which phase found it makes
+/// no difference to what is returned.
 async fn shutdown_generation(
     teardown: GenerationTeardown,
     generation_end: GenerationEnd,
@@ -1330,15 +1360,14 @@ async fn shutdown_generation(
     // nothing but the reaping: a long-running job registered there would
     // serialize the whole of subsystem cancellation behind it, which is why
     // long-running web-origin work goes in the top-level tracker instead.
-    drain_web_reaper_tracker_or_log(&web_reaper_tracker).await;
+    let mut health = drain_web_reaper_tracker(&web_reaper_tracker).await;
     info!("{SHUTDOWN_PHASE}: web reaper drain returned ({generation_end:?})");
-    drain_top_level_tracker_or_log(&top_level_tracker).await;
+    health = health.merge(drain_top_level_tracker(&top_level_tracker).await);
     info!("{SHUTDOWN_PHASE}: top-level drain returned ({generation_end:?})");
-    let mut health = GenerationHealth::Clean;
     for retained in entry_tasks {
-        if observe_entry_task(retained).await {
-            health = GenerationHealth::Degraded;
-        }
+        health = health.merge(GenerationHealth::degraded_if(
+            observe_entry_task(retained).await,
+        ));
     }
     info!("{SHUTDOWN_PHASE}: retained handles read ({generation_end:?})");
     finish_generation(generation_end, database, effects).await?;
@@ -1590,17 +1619,24 @@ async fn reload_https_server<S>(
     }
 }
 
-/// Drains the per-generation top-level tracker for one shutdown arm, logging a
-/// poisoned tracker lock instead of propagating it.
+/// Drains the per-generation top-level tracker for one shutdown arm, and says
+/// whether it had to recover from a poisoned tracker lock.
 ///
-/// A poisoned lock says nothing about the rest of the shutdown path, and
-/// carrying it out of the generation would skip the work that still has to run
-/// after the drain — the retained-handle observation and `database.shutdown()`.
-/// So it is reported where it happens and shutdown carries on.
-async fn drain_top_level_tracker_or_log(tracker: &TaskTracker) {
+/// The wrapper decides nothing about waiting. [`drain_with_report`] has closed
+/// the tracker, cancelled it, and waited until it was observed empty by the
+/// time an error reaches here, so a returned [`LockPoisonedError`] records how
+/// the drain got there rather than saying the drain was skipped: nothing after
+/// this point runs underneath a live tracked task. What is left is to report
+/// it and to hand the caller a value it has to look at, because a generation
+/// that recovered that way must not end as a silent success.
+///
+/// [`LockPoisonedError`]: cancellation::LockPoisonedError
+async fn drain_top_level_tracker(tracker: &TaskTracker) -> GenerationHealth {
     if let Err(e) = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, TOP_LEVEL_DRAIN_LABEL).await {
         error!("shutdown drain could not read the top-level tracker: {e}");
+        return GenerationHealth::Degraded;
     }
+    GenerationHealth::Clean
 }
 
 /// Drains the web-owned PCAP reaper tracker as the final step of web shutdown,
@@ -1614,13 +1650,22 @@ async fn drain_top_level_tracker_or_log(tracker: &TaskTracker) {
 /// cancellation token — `drain_with_report` cancels the tracker's children, but
 /// a `SIGKILL` followed by `wait()` must not be abandoned mid-reap — so the
 /// drain waits for the reap itself, bounded only by how long the kernel takes to
-/// reap a `SIGKILL`ed child. A poisoned lock is logged rather than propagated,
-/// the same policy as the top-level drain, so the rest of shutdown still runs.
-async fn drain_web_reaper_tracker_or_log(tracker: &TaskTracker) {
+/// reap a `SIGKILL`ed child.
+///
+/// A poisoned lock is not waved through here either, for the same reason the
+/// reaping is waited on at all: those `tcpdump` children have to be reaped
+/// before the process exits. [`drain_with_report`] has already waited until
+/// this tracker was observed empty by the time an error reaches here, so what
+/// is reported is how the drain got there — and, as at the top level, it is
+/// handed back as a value the caller has to look at rather than a log line it
+/// may not read.
+async fn drain_web_reaper_tracker(tracker: &TaskTracker) -> GenerationHealth {
     if let Err(e) = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, WEB_REAPER_DRAIN_LABEL).await
     {
         error!("shutdown drain could not read the web PCAP reaper tracker: {e}");
+        return GenerationHealth::Degraded;
     }
+    GenerationHealth::Clean
 }
 
 #[cfg(test)]
@@ -2301,8 +2346,12 @@ mod tests {
     ///
     /// The format is what the assertions read — fields rather than prose, and
     /// no timestamp or target in front of them — so the two entry points share
-    /// one builder rather than each carrying a copy to drift from.
+    /// one builder rather than each carrying a copy to drift from. Both go on
+    /// top of the dispatcher `hold_callsite_interest_open` keeps registered, so
+    /// that a parallel test cannot cache one of the callsites asserted on here
+    /// off for the whole process.
     fn capture_logs_gated(gate: Option<Arc<RecordGate>>) -> (Arc<Mutex<Vec<u8>>>, DefaultGuard) {
+        crate::cancellation::hold_callsite_interest_open();
         let buf = Arc::new(Mutex::new(Vec::new()));
         let subscriber = fmt::fmt()
             .with_ansi(false)
@@ -2321,14 +2370,15 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn drain_top_level_tracker_or_log_is_silent_for_an_empty_tracker() {
+    async fn drain_top_level_tracker_is_silent_for_an_empty_tracker() {
         let (logs, _guard) = capture_logs();
         let tracker = TaskTracker::new();
 
-        tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker_or_log(&tracker))
+        let health = tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker(&tracker))
             .await
             .expect("an empty tracker should drain on the first round");
 
+        assert_eq!(health, GenerationHealth::Clean);
         assert!(tracker.is_closed());
         assert_eq!(tracker.pending_count(), 0);
         let output = captured(&logs);
@@ -2338,12 +2388,15 @@ mod tests {
         );
     }
 
-    /// The wrapper exists so a poisoned tracker lock does not travel out of the
-    /// generation: it is reported where it happens and shutdown carries on. The
-    /// lock is poisoned the way the drain-loop poison test does it, which has to
-    /// happen before any runtime is entered.
+    /// The wrapper reports the poisoned lock and says it recovered from one.
+    ///
+    /// It decides nothing about waiting: by the time the error reaches it the
+    /// drain has closed, cancelled and waited until the tracker was observed
+    /// empty, so what the wrapper adds is the record and a value the caller
+    /// has to look at. The lock is poisoned the way the drain-loop poison test
+    /// does it, which has to happen before any runtime is entered.
     #[test]
-    fn drain_top_level_tracker_or_log_reports_a_poisoned_lock() {
+    fn drain_top_level_tracker_reports_a_poisoned_lock() {
         let tracker = TaskTracker::new();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = tracker.spawn("no-runtime", |_token| async {});
@@ -2356,17 +2409,74 @@ mod tests {
             .build()
             .expect("current-thread runtime should build");
         let (logs, _guard) = capture_logs();
-        runtime.block_on(async {
-            tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker_or_log(&tracker))
+        let health = runtime.block_on(async {
+            tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker(&tracker))
                 .await
-                .expect("a poisoned lock should end the wrapper, not be retried");
+                .expect("the wrapper returns once the drain has")
         });
 
+        assert_eq!(
+            health,
+            GenerationHealth::Degraded,
+            "a recovered poison has to reach the generation's outcome"
+        );
+        assert!(
+            tracker.is_closed(),
+            "the drain closes the tracker through the poison"
+        );
+        assert_eq!(
+            tracker.pending_count(),
+            0,
+            "the wrapper returns only once the tracker is empty"
+        );
         let output = captured(&logs);
         assert!(
             output.contains("task tracker lock was poisoned"),
             "the poisoned lock should be reported, got: {output}"
         );
+    }
+
+    /// The reaper wrapper answers the same way, on the tracker it owns.
+    #[test]
+    fn drain_web_reaper_tracker_reports_a_poisoned_lock() {
+        let tracker = TaskTracker::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = tracker.spawn("no-runtime", |_token| async {});
+        }));
+        assert!(outcome.is_err(), "spawn outside a runtime should panic");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("current-thread runtime should build");
+        let (logs, _guard) = capture_logs();
+        let health = runtime.block_on(async {
+            tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_web_reaper_tracker(&tracker))
+                .await
+                .expect("the wrapper returns once the drain has")
+        });
+
+        assert_eq!(health, GenerationHealth::Degraded);
+        assert_eq!(tracker.pending_count(), 0);
+        let output = captured(&logs);
+        assert!(
+            output.contains("web PCAP reaper tracker"),
+            "the reaper wrapper names its own tracker, got: {output}"
+        );
+    }
+
+    /// Degradation is folded in, never out.
+    #[test]
+    fn generation_health_merges_monotonically() {
+        use GenerationHealth::{Clean, Degraded};
+
+        assert_eq!(Clean.merge(Clean), Clean);
+        assert_eq!(Clean.merge(Degraded), Degraded);
+        assert_eq!(Degraded.merge(Clean), Degraded);
+        assert_eq!(Degraded.merge(Degraded), Degraded);
+        assert_eq!(GenerationHealth::degraded_if(true), Degraded);
+        assert_eq!(GenerationHealth::degraded_if(false), Clean);
     }
 
     /// A generation, piece by piece and end to end.
@@ -2392,7 +2502,10 @@ mod tests {
         use tokio::task::JoinHandle;
 
         use super::*;
-        use crate::{cancellation::DrainOutcome, settings::Config};
+        use crate::{
+            cancellation::{DrainOutcome, SpawnError},
+            settings::Config,
+        };
 
         static INSTALL_PROVIDER: Once = Once::new();
 
@@ -6030,6 +6143,485 @@ mod tests {
                 .get(customer_id)
                 .expect("read the customer deletion job")
                 .map(|job| job.status)
+        }
+
+        // ── A drain that recovered from a poisoned lock ──────────────────
+
+        /// The whole poisoned-drain contract at the teardown boundary, per
+        /// ending.
+        ///
+        /// The tracker is poisoned in place so the pending task can be
+        /// registered first — the production trigger poisons a tracker before
+        /// any runtime exists, which is a tracker that can hold nothing. What
+        /// the sequence must do with it is wait: the tracker is closed and
+        /// cancelled straight away, a registration attempted while the drain
+        /// is still waiting is refused as closed rather than as poisoned, and
+        /// nothing past the drain runs until the task has returned. Then the
+        /// generation ends degraded, and the ending decides what that means.
+        #[allow(clippy::too_many_lines)]
+        #[tokio::test]
+        async fn a_poisoned_top_level_drain_waits_and_degrades_the_generation() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            for generation_end in [
+                GenerationEnd::Terminate,
+                GenerationEnd::Reboot,
+                GenerationEnd::ReloadConfig,
+            ] {
+                let ending = format!("{generation_end:?}");
+                let top_level_tracker = TaskTracker::new();
+                let (release_tx, release_rx) = oneshot::channel::<()>();
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let held = top_level_tracker
+                    .spawn("held", {
+                        let cancelled = Arc::clone(&cancelled);
+                        move |token| async move {
+                            token.cancelled().await;
+                            cancelled.store(true, Ordering::SeqCst);
+                            let _ = release_rx.await;
+                        }
+                    })
+                    .expect("a fresh tracker admits the held task");
+                top_level_tracker.poison_admission_lock();
+
+                let effects = RecordingEffects::new();
+                let (logs, guard) = capture_logs();
+                let shutdown = task::spawn({
+                    let database = database.clone();
+                    let effects = effects.clone();
+                    let top_level_tracker = top_level_tracker.clone();
+                    async move {
+                        shutdown_generation(
+                            GenerationTeardown {
+                                web_controller: None,
+                                web_reaper_tracker: TaskTracker::new(),
+                                top_level_tracker,
+                                entry_tasks: Vec::new(),
+                            },
+                            generation_end,
+                            &database,
+                            &effects,
+                        )
+                        .await
+                    }
+                });
+
+                assert!(
+                    poll_until(READY_TIMEOUT, || cancelled.load(Ordering::SeqCst)).await,
+                    "{ending}: the drain should have cancelled the held task"
+                );
+                assert!(
+                    top_level_tracker.is_closed(),
+                    "{ending}: the drain closes the tracker through the poison"
+                );
+                assert!(
+                    matches!(
+                        top_level_tracker.spawn("late", |_token| async {}),
+                        Err(SpawnError::Closed)
+                    ),
+                    "{ending}: a registration during the wait is refused as closed"
+                );
+
+                // Watched for the whole window rather than looked at once: the
+                // seam reaching the store, or any marker past the two phases
+                // before the drain, would mean the sequence walked past a
+                // tracker it had not proved empty.
+                let advanced = || !effects.calls().is_empty() || phase_markers(&logs).len() > 2;
+                assert!(
+                    !poll_until(FORBIDDEN_WINDOW, advanced).await,
+                    "{ending}: the sequence advanced past the poisoned drain, markers {:#?}, \
+                     seam calls {:?}",
+                    phase_markers(&logs),
+                    effects.calls()
+                );
+
+                // The negative window above needed real time; what is left of
+                // the teardown is the ending's tail delay, and this test is
+                // not waiting that out.
+                tokio::time::pause();
+                release_tx.send(()).expect("the held task is waiting");
+                held.await.expect("the held task should not be aborted");
+                let health = tokio::time::timeout(GENERATION_TIMEOUT, shutdown)
+                    .await
+                    .unwrap_or_else(|_| panic!("{ending}: the teardown should have returned"))
+                    .unwrap_or_else(|e| panic!("{ending}: the teardown task panicked: {e}"))
+                    .unwrap_or_else(|e| panic!("{ending}: the teardown should not fail: {e:#}"));
+                tokio::time::resume();
+
+                assert_eq!(
+                    health,
+                    GenerationHealth::Degraded,
+                    "{ending}: a drain that recovered from a poisoned lock degrades the generation"
+                );
+                assert_eq!(
+                    top_level_tracker.pending_count(),
+                    0,
+                    "{ending}: the drain returns only over an empty tracker"
+                );
+                assert!(
+                    captured(&logs).contains("shutdown drain could not read the top-level tracker"),
+                    "{ending}: the poisoned lock should be reported, got: {}",
+                    captured(&logs)
+                );
+                assert!(
+                    effects.calls().contains(&EffectCall::ShutdownDatabase),
+                    "{ending}: the store is still shut down after a recovered drain"
+                );
+
+                let flow = act_on_generation_end(
+                    GenerationOutcome {
+                        ending: generation_end,
+                        health,
+                    },
+                    &effects,
+                );
+                assert_marker_sequence(&logs, &full_marker_sequence(generation_end), &ending);
+                assert_lifecycle_record(&sole_record(&logs, DEGRADED_RECORD), generation_end);
+
+                match generation_end {
+                    GenerationEnd::ReloadConfig => {
+                        assert_eq!(
+                            flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
+                            ControlFlow::Continue(()),
+                            "{ending}: a degraded reload still hands over to the next generation"
+                        );
+                    }
+                    GenerationEnd::Reboot => {
+                        assert_eq!(
+                            effects.calls(),
+                            vec![EffectCall::ShutdownDatabase, EffectCall::Reboot],
+                            "{ending}: the reboot is taken before the error is returned"
+                        );
+                        let error = flow.expect_err("a degraded reboot should fail the lifecycle");
+                        assert!(error.to_string().contains("degraded"), "got: {error:#}");
+                    }
+                    _ => {
+                        assert_eq!(
+                            effects.calls(),
+                            vec![EffectCall::ShutdownDatabase],
+                            "{ending}: a terminate takes no host action"
+                        );
+                        let error =
+                            flow.expect_err("a degraded terminate should fail the lifecycle");
+                        assert!(error.to_string().contains("degraded"), "got: {error:#}");
+                    }
+                }
+                drop(guard);
+            }
+        }
+
+        /// The reaper tracker is not waved through either: its `tcpdump`
+        /// children have to be reaped before the process exits.
+        ///
+        /// Everything after the reaper phase is what this watches: the
+        /// top-level drain has not even closed its tracker, no handle has been
+        /// read, and the store has not been shut down, until the reaper
+        /// tracker has emptied.
+        #[tokio::test]
+        async fn a_poisoned_web_reaper_drain_waits_and_degrades_the_generation() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            let web_reaper_tracker = TaskTracker::new();
+            let top_level_tracker = TaskTracker::new();
+            let (release_tx, release_rx) = oneshot::channel::<()>();
+            let reaping = Arc::new(AtomicBool::new(false));
+            let reaper = web_reaper_tracker
+                .spawn("pcap reaper", {
+                    let reaping = Arc::clone(&reaping);
+                    // Written the way the real reaper is: a `SIGKILL` followed
+                    // by a `wait()` must not be abandoned mid-reap, so it
+                    // ignores its cancellation token.
+                    move |_token| async move {
+                        reaping.store(true, Ordering::SeqCst);
+                        let _ = release_rx.await;
+                    }
+                })
+                .expect("a fresh tracker admits the reaper stand-in");
+            web_reaper_tracker.poison_admission_lock();
+
+            let handle = top_level_tracker
+                .spawn_observed("retention", |cancel| async move {
+                    cancel.cancelled().await;
+                    Ok(())
+                })
+                .expect("a fresh tracker admits the retention stand-in");
+
+            let effects = RecordingEffects::new();
+            let (logs, _guard) = capture_logs();
+            let shutdown = task::spawn({
+                let database = database.clone();
+                let effects = effects.clone();
+                let web_reaper_tracker = web_reaper_tracker.clone();
+                let top_level_tracker = top_level_tracker.clone();
+                async move {
+                    shutdown_generation(
+                        GenerationTeardown {
+                            web_controller: None,
+                            web_reaper_tracker,
+                            top_level_tracker,
+                            entry_tasks: vec![retained(handle, false)],
+                        },
+                        GenerationEnd::Terminate,
+                        &database,
+                        &effects,
+                    )
+                    .await
+                }
+            });
+
+            assert!(
+                poll_until(READY_TIMEOUT, || reaping.load(Ordering::SeqCst)).await,
+                "the reaper drain should have started its stand-in"
+            );
+            assert!(
+                web_reaper_tracker.is_closed(),
+                "the reaper drain closes its own tracker through the poison"
+            );
+            let advanced = || {
+                top_level_tracker.is_closed()
+                    || !effects.calls().is_empty()
+                    || phase_markers(&logs).len() > 1
+            };
+            assert!(
+                !poll_until(FORBIDDEN_WINDOW, advanced).await,
+                "the teardown left the reaper phase while a `tcpdump` child was still being \
+                 reaped, markers {:#?}",
+                phase_markers(&logs)
+            );
+
+            release_tx.send(()).expect("the reaper stand-in is waiting");
+            reaper.await.expect("the reaper should not be aborted");
+            let health = tokio::time::timeout(GENERATION_TIMEOUT, shutdown)
+                .await
+                .expect("the teardown should have returned")
+                .expect("the teardown task should not panic")
+                .expect("the teardown should not fail");
+
+            assert_eq!(
+                health,
+                GenerationHealth::Degraded,
+                "a recovered reaper drain degrades the generation too"
+            );
+            assert_eq!(web_reaper_tracker.pending_count(), 0);
+            assert!(
+                captured(&logs)
+                    .contains("shutdown drain could not read the web PCAP reaper tracker"),
+                "the poisoned reaper lock should be reported, got: {}",
+                captured(&logs)
+            );
+            assert_marker_sequence(&logs, &TEARDOWN_MARKERS, "reaper");
+            assert!(
+                effects.calls().contains(&EffectCall::ShutdownDatabase),
+                "the store is still shut down once the reaping is done"
+            );
+        }
+
+        /// Three degradation sources at once fold to one degraded outcome, and
+        /// each still reports itself exactly once.
+        ///
+        /// That is the whole of what the fold is: a monotonic OR that adds no
+        /// reporting of its own, and a `Degraded` that no later source can
+        /// clear. The lifecycle's own record is the single line the ending
+        /// leaves behind, not one per source.
+        #[tokio::test]
+        async fn every_degradation_source_folds_into_one_outcome() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            let web_reaper_tracker = TaskTracker::new();
+            web_reaper_tracker.poison_admission_lock();
+            let top_level_tracker = TaskTracker::new();
+            let handle = finished_stand_in(&top_level_tracker, Subsystem::Ingest, async {
+                bail!("ingest gave up")
+            })
+            .await;
+            let id = handle.id();
+            top_level_tracker.poison_admission_lock();
+
+            let effects = RecordingEffects::new();
+            let (logs, _guard) = capture_logs();
+            let health = shutdown_generation(
+                GenerationTeardown {
+                    web_controller: None,
+                    web_reaper_tracker,
+                    top_level_tracker,
+                    entry_tasks: vec![retained(handle, true)],
+                },
+                GenerationEnd::Terminate,
+                &database,
+                &effects,
+            )
+            .await
+            .expect("the teardown should not fail");
+
+            assert_eq!(health, GenerationHealth::Degraded);
+            // One record per source, and no more.
+            sole_record(
+                &logs,
+                "shutdown drain could not read the web PCAP reaper tracker",
+            );
+            sole_record(&logs, "shutdown drain could not read the top-level tracker");
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Ingest,
+                id,
+                "after_drain",
+                "error",
+            );
+
+            let error = act_on_generation_end(
+                GenerationOutcome {
+                    ending: GenerationEnd::Terminate,
+                    health,
+                },
+                &effects,
+            )
+            .expect_err("a degraded terminate should fail the lifecycle");
+            assert!(error.to_string().contains("degraded"), "got: {error:#}");
+            assert_lifecycle_record(
+                &sole_record(&logs, DEGRADED_RECORD),
+                GenerationEnd::Terminate,
+            );
+        }
+
+        /// The hazard the issue names, closed end to end.
+        ///
+        /// The stand-in entry task is built the way ingest's is: a subsystem
+        /// tracker that is a child of the token the top-level tracker handed
+        /// it, one nested handler holding a `Database` clone, and a
+        /// `drain_with_report` of its own over a tracker whose admission lock
+        /// is poisoned. Before this issue the entry task returned at its
+        /// preliminary `close()`, the top-level drain then truthfully reported
+        /// its own registry empty, and the store was shut down underneath a
+        /// handler still holding a database clone. Now the entry task waits,
+        /// the top-level drain waits on it, and the failure travels out
+        /// through the retained handle that already existed.
+        #[allow(clippy::too_many_lines)]
+        #[tokio::test]
+        async fn a_poisoned_subsystem_drain_degrades_the_generation_through_its_handle() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            let top_level_tracker = TaskTracker::new();
+            let (release_tx, release_rx) = oneshot::channel::<()>();
+            let handler_returned = Arc::new(AtomicBool::new(false));
+            let subsystem_armed = Arc::new(AtomicBool::new(false));
+            let entry = top_level_tracker
+                .spawn_observed(Subsystem::Ingest.to_string(), {
+                    let handler_returned = Arc::clone(&handler_returned);
+                    let subsystem_armed = Arc::clone(&subsystem_armed);
+                    let db = database.clone();
+                    move |token| async move {
+                        let tracker = TaskTracker::with_token(token.clone());
+                        tracker
+                            .spawn("ingest-conn-stand-in", {
+                                let handler_returned = Arc::clone(&handler_returned);
+                                move |token| async move {
+                                    token.cancelled().await;
+                                    let _ = release_rx.await;
+                                    // Touching the store on the way out is the
+                                    // point: it is what would race a store
+                                    // flushed too early.
+                                    db.sensors_store().expect("sensors store");
+                                    handler_returned.store(true, Ordering::SeqCst);
+                                }
+                            })
+                            .expect("the subsystem tracker admits its handler");
+                        // Poisoned only once the handler is registered, and
+                        // announced only once poisoned.
+                        tracker.poison_admission_lock();
+                        subsystem_armed.store(true, Ordering::SeqCst);
+
+                        token.cancelled().await;
+                        // The subsystem's own drain, with the preliminary
+                        // close that no longer short-circuits it.
+                        if let Err(e) = tracker.close() {
+                            error!("failed to close the ingest task tracker: {e}");
+                        }
+                        drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, "ingest")
+                            .await
+                            .context("failed to drain the ingest task tracker")?;
+                        Ok(())
+                    }
+                })
+                .expect("a fresh tracker admits the entry stand-in");
+            let entry_id = entry.id();
+
+            assert!(
+                poll_until(READY_TIMEOUT, || subsystem_armed.load(Ordering::SeqCst)).await,
+                "the subsystem tracker should be poisoned before shutdown begins"
+            );
+
+            let effects = RecordingEffects::new();
+            let (logs, _guard) = capture_logs();
+            let shutdown = task::spawn({
+                let database = database.clone();
+                let effects = effects.clone();
+                let top_level_tracker = top_level_tracker.clone();
+                async move {
+                    shutdown_generation(
+                        GenerationTeardown {
+                            web_controller: None,
+                            web_reaper_tracker: TaskTracker::new(),
+                            top_level_tracker,
+                            entry_tasks: vec![retained(entry, false)],
+                        },
+                        GenerationEnd::Terminate,
+                        &database,
+                        &effects,
+                    )
+                    .await
+                }
+            });
+
+            // The nested handler is still running, and nothing past the
+            // top-level drain may have happened.
+            let advanced = || !effects.calls().is_empty() || phase_markers(&logs).len() > 2;
+            assert!(
+                !poll_until(FORBIDDEN_WINDOW, advanced).await,
+                "the store was reached while an ingest handler was still running, markers {:#?}, \
+                 seam calls {:?}",
+                phase_markers(&logs),
+                effects.calls()
+            );
+            assert!(
+                !handler_returned.load(Ordering::SeqCst),
+                "the nested handler should still be holding its database clone"
+            );
+
+            release_tx.send(()).expect("the nested handler is waiting");
+            let health = tokio::time::timeout(GENERATION_TIMEOUT, shutdown)
+                .await
+                .expect("the teardown should have returned")
+                .expect("the teardown task should not panic")
+                .expect("the teardown should not fail");
+
+            assert!(
+                handler_returned.load(Ordering::SeqCst),
+                "the nested handler should have run to its end"
+            );
+            assert_eq!(
+                health,
+                GenerationHealth::Degraded,
+                "the subsystem's error reaches the outcome through its retained handle"
+            );
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Ingest,
+                entry_id,
+                "after_drain",
+                "error",
+            );
+            assert!(
+                effects.calls().contains(&EffectCall::ShutdownDatabase),
+                "the store is still shut down, once the handler has returned"
+            );
         }
 
         /// What the seam below found in the job store when it ran.
