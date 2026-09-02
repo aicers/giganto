@@ -148,6 +148,8 @@ impl BoundServer {
     /// accepting, and closing the tracker stops the handlers from registering
     /// more work. The entry task returns only once the drain is empty, so no
     /// publish task is left writing to a client when the generation moves on.
+    /// What runs after the loop is [`shutdown_publish`], called
+    /// unconditionally as the last statement here.
     ///
     /// # Errors
     ///
@@ -260,28 +262,51 @@ impl BoundServer {
             }
         }
 
-        // Admission rejection, the half the accept loop cannot do on its own:
-        // a closed tracker turns away every request handler, subscription, and
-        // relay a still-running handler might try to register.
-        tracker
-            .close()
-            .context("failed to close the publish task tracker")?;
-        // Same policy as the top level: report every round and keep waiting.
-        // `drain_with_report` closes and cancels again, both idempotent.
-        drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PUBLISH_DRAIN_LABEL)
-            .await
-            .context("failed to drain the publish task tracker")?;
-
-        // Only now, with every handler returned, is the listener torn down.
-        // Closing it earlier would kill the connections the subscriptions and
-        // request handlers are still writing their last frames on, and it is
-        // also what ends the connections that arrived after the accept loop
-        // left.
-        endpoint.close(0_u32.into(), &[]);
-        endpoint.wait_idle().await;
-
-        Ok(())
+        shutdown_publish(&tracker, &endpoint).await
     }
+}
+
+/// Everything the publish entry task does after it has left its accept loop.
+///
+/// Extracted from [`BoundServer::run`] purely so a test can drive it over a
+/// tracker of its own — a tracker built inside `run` is reachable from
+/// nowhere else, and the recovery a poisoned drain performs is what these
+/// statements have to survive. `run` calls it unconditionally as its last
+/// statement, so the two are the same sequence.
+///
+/// # Errors
+///
+/// Returns an error if the drain reported a poisoned tracker lock. The
+/// listener has been torn down first either way, so the address publish was
+/// pinned to is released for the next generation on the failing path exactly
+/// as on the healthy one.
+async fn shutdown_publish(tracker: &TaskTracker, endpoint: &Endpoint) -> Result<()> {
+    // Admission rejection, the half the accept loop cannot do on its own:
+    // a closed tracker turns away every request handler, subscription, and
+    // relay a still-running handler might try to register. Failing here is no
+    // longer fatal: `drain_with_report` closes the tracker itself, through a
+    // poisoned admission lock if it has to, so this close only shuts
+    // admission a little earlier than the drain would.
+    if let Err(e) = tracker.close() {
+        error!("failed to close the publish task tracker: {e}");
+    }
+    // Same policy as the top level: report every round and keep waiting.
+    // `drain_with_report` closes and cancels again, both idempotent. Its
+    // error is captured rather than propagated on the spot, because it means
+    // the tracker is empty and the teardown below still has to run.
+    let drained = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, PUBLISH_DRAIN_LABEL)
+        .await
+        .context("failed to drain the publish task tracker");
+
+    // Only now, with every handler returned, is the listener torn down.
+    // Closing it earlier would kill the connections the subscriptions and
+    // request handlers are still writing their last frames on, and it is
+    // also what ends the connections that arrived after the accept loop
+    // left.
+    endpoint.close(0_u32.into(), &[]);
+    endpoint.wait_idle().await;
+
+    drained
 }
 
 /// Serves one publish connection: the version handshake, the request-stream

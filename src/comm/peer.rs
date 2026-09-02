@@ -240,6 +240,9 @@ impl Peer {
     /// peer-identity sender out is what lets a test offer an identity on the
     /// real channel and see the entry task's `receiver.close()` refuse it.
     ///
+    /// What runs after the accept loop is [`shutdown_peer`], called
+    /// unconditionally as the last statement here.
+    ///
     /// # Errors
     ///
     /// Returns an error if either endpoint cannot be created, if the
@@ -399,51 +402,89 @@ impl Peer {
             }
         }
 
-        // Admission rejection, the half leaving the accept loop cannot do on
-        // its own: a closed tracker turns away every request handler and
-        // sensor-update fan-out a still-running connection handler might try
-        // to register. Closing does not cancel, so everything already tracked
-        // keeps running until it observes cancellation for itself.
-        tracker
-            .close()
-            .context("failed to close the peer task tracker")?;
-
-        // Closing the endpoints is what releases the awaits no token reaches:
-        // the `giganto_client` handshakes, the init-info frame exchanges, a
-        // `receive_peer_data` waiting on a frame that never arrives,
-        // `accept_bi`, an outbound dial, and an `update_peer_info` stream
-        // write the remote never reads. Closing an endpoint closes the
-        // connections on it too; the explicit sweep below covers a connection
-        // whose endpoint a test drives separately.
-        server_endpoint.close(0_u32.into(), b"shutting down");
-        client_endpoint.close(0_u32.into(), b"shutting down");
-        for connection in snapshot_connections(&peer_conn_info.peer_conns).await {
-            connection.close(0_u32.into(), b"shutting down");
-        }
-
-        // The peer-identity channel holds 100 entries and its receiver is a
-        // local of this task, so a `handle_request` blocked sending into a
-        // full channel nobody drains would hang the drain forever. Closing the
-        // receive side makes that send fail at once through the existing
-        // `Failed to enqueue peer connection attempt` path. Peers discovered
-        // during shutdown are not dialed; that loss is accepted.
-        receiver.close();
-
-        // State cleanup. Every connection handler removes its own `peer_conns`
-        // and `peers` entries before it returns, so what is left to the entry
-        // task is its own hold on peer state: dropping its `PeerConns` clone
-        // releases the last `peer_sender` outside the handlers, so the channel
-        // is closed rather than merely drained once they have returned.
-        drop(peer_conn_info);
-
-        // Same policy as the top level: report every round and keep waiting.
-        // `drain_with_report` closes and cancels again, both idempotent.
-        drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL)
-            .await
-            .context("failed to drain the peer task tracker")?;
-
-        Ok(())
+        shutdown_peer(
+            &tracker,
+            &server_endpoint,
+            &client_endpoint,
+            peer_conn_info,
+            &mut receiver,
+        )
+        .await
     }
+}
+
+/// Everything the peer entry task does after it has left its accept loop.
+///
+/// Extracted from [`Peer::run`] purely so a test can drive it over a tracker
+/// of its own — a tracker built inside `run` is reachable from nowhere else,
+/// and the recovery a poisoned drain performs is what these statements have to
+/// survive. `run` calls it unconditionally as its last statement, so the two
+/// are the same sequence.
+///
+/// Peer's teardown runs *before* its drain and has to stay there: the closes
+/// below are what release the awaits no cancellation token reaches, so a drain
+/// placed ahead of them would wait forever rather than fail. Nothing follows
+/// the drain, which is why peer needs no capture-and-return of its error.
+///
+/// # Errors
+///
+/// Returns an error if the drain reported a poisoned tracker lock, which by
+/// then means the peer tracker was observed empty.
+async fn shutdown_peer(
+    tracker: &TaskTracker,
+    server_endpoint: &Endpoint,
+    client_endpoint: &Endpoint,
+    peer_conn_info: PeerConns,
+    receiver: &mut Receiver<PeerIdentity>,
+) -> Result<()> {
+    // Admission rejection, the half leaving the accept loop cannot do on
+    // its own: a closed tracker turns away every request handler and
+    // sensor-update fan-out a still-running connection handler might try
+    // to register. Closing does not cancel, so everything already tracked
+    // keeps running until it observes cancellation for itself. Failing here
+    // is no longer fatal: `drain_with_report` closes the tracker itself,
+    // through a poisoned admission lock if it has to, so this close only
+    // shuts admission a little earlier than the drain would — and returning
+    // here would skip the endpoint teardown the drain below depends on.
+    if let Err(e) = tracker.close() {
+        error!("failed to close the peer task tracker: {e}");
+    }
+
+    // Closing the endpoints is what releases the awaits no token reaches:
+    // the `giganto_client` handshakes, the init-info frame exchanges, a
+    // `receive_peer_data` waiting on a frame that never arrives,
+    // `accept_bi`, an outbound dial, and an `update_peer_info` stream
+    // write the remote never reads. Closing an endpoint closes the
+    // connections on it too; the explicit sweep below covers a connection
+    // whose endpoint a test drives separately.
+    server_endpoint.close(0_u32.into(), b"shutting down");
+    client_endpoint.close(0_u32.into(), b"shutting down");
+    for connection in snapshot_connections(&peer_conn_info.peer_conns).await {
+        connection.close(0_u32.into(), b"shutting down");
+    }
+
+    // The peer-identity channel holds 100 entries and its receiver is a
+    // local of this task, so a `handle_request` blocked sending into a
+    // full channel nobody drains would hang the drain forever. Closing the
+    // receive side makes that send fail at once through the existing
+    // `Failed to enqueue peer connection attempt` path. Peers discovered
+    // during shutdown are not dialed; that loss is accepted.
+    receiver.close();
+
+    // State cleanup. Every connection handler removes its own `peer_conns`
+    // and `peers` entries before it returns, so what is left to the entry
+    // task is its own hold on peer state: dropping its `PeerConns` clone
+    // releases the last `peer_sender` outside the handlers, so the channel
+    // is closed rather than merely drained once they have returned.
+    drop(peer_conn_info);
+
+    // Same policy as the top level: report every round and keep waiting.
+    // `drain_with_report` closes and cancels again, both idempotent.
+    drain_with_report(tracker, DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL)
+        .await
+        .context("failed to drain the peer task tracker")?;
+
+    Ok(())
 }
 
 /// Prepares fresh peer server/client TLS configurations from `material`
@@ -4682,6 +4723,7 @@ pub mod tests {
     /// hang fast, or to establish that something is genuinely blocked before
     /// the step that is supposed to release it runs.
     mod shutdown {
+        use std::sync::atomic::{AtomicBool, Ordering};
         use std::{
             collections::{HashMap, HashSet},
             io::{self, Write},
@@ -4693,6 +4735,7 @@ pub mod tests {
         use anyhow::Result;
         use giganto_client::connection::{client_handshake, server_handshake};
         use giganto_client::frame::send_bytes;
+        use quinn::Endpoint;
         use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
         use tokio_util::sync::CancellationToken;
         use toml_edit::DocumentMut;
@@ -4701,7 +4744,7 @@ pub mod tests {
         use super::super::{
             PEER_DRAIN_LABEL, PEER_VERSION_REQ, PeerCode, PeerConns, PeerIdentity, PeerInfo, Peers,
             client_connection, receive_peer_data, request_init_info, response_init_info,
-            send_peer_data, server_connection, spawn_request_handler,
+            send_peer_data, server_connection, shutdown_peer, spawn_request_handler,
             update_to_new_peer_list_with_writer,
         };
         use super::fixtures::{
@@ -4717,6 +4760,7 @@ pub mod tests {
             DRAIN_REPORT_INTERVAL, DrainOutcome, TaskTracker, drain_with_report,
         };
         use crate::comm::peer::Peer;
+        use crate::server::config_server;
 
         /// A dial that shutdown has already made unservable must fail rather
         /// than hang; this caps how long a test waits to find that out.
@@ -5698,6 +5742,194 @@ pub mod tests {
             assert!(
                 output.contains("peer-request-127.0.0.1"),
                 "the report should name the peer task, got: {output}"
+            );
+        }
+
+        /// The peer shutdown tail, driven over a tracker the test poisoned
+        /// itself.
+        ///
+        /// The tail is what `run` calls as its last statement, so what holds
+        /// here holds for the entry task. A poisoned admission lock used to
+        /// return the entry task at its preliminary `close()` — before the
+        /// endpoint closes, the connection sweep, `receiver.close()` and the
+        /// drain — leaving the connection handlers and fan-outs running while
+        /// the generation moved on. Now the close is reported and the tail
+        /// carries on through the whole of its teardown.
+        #[tokio::test]
+        async fn the_peer_tail_waits_and_tears_down_through_a_poisoned_tracker() {
+            init_crypto();
+            let certs = create_certs();
+            let (server_endpoint, server_addr) = setup_server_endpoint_with_certs(&certs);
+            let (peer_conn_info, _config) = build_peer_conn_info(server_addr);
+            let (_sender, mut receiver) = mpsc::channel::<PeerIdentity>(1);
+
+            let tracker = TaskTracker::with_token(CancellationToken::new());
+            let (release_tx, release_rx) = oneshot::channel::<()>();
+            let handler_cancelled = Arc::new(AtomicBool::new(false));
+            let handler = tracker
+                .spawn("peer-server-conn-test", {
+                    let handler_cancelled = Arc::clone(&handler_cancelled);
+                    move |token| async move {
+                        token.cancelled().await;
+                        handler_cancelled.store(true, Ordering::SeqCst);
+                        let _ = release_rx.await;
+                    }
+                })
+                .expect("a fresh tracker admits the handler");
+
+            // Only now, with the handler registered: the production trigger
+            // poisons a tracker before any runtime exists, which is a tracker
+            // that can hold nothing.
+            tracker.poison_admission_lock();
+
+            let client_endpoint = init_client();
+            let tail = tokio::spawn({
+                let tracker = tracker.clone();
+                async move {
+                    let result = shutdown_peer(
+                        &tracker,
+                        &server_endpoint,
+                        &client_endpoint,
+                        peer_conn_info,
+                        &mut receiver,
+                    )
+                    .await;
+                    (result, server_endpoint, client_endpoint)
+                }
+            });
+
+            // Cancellation reaching the handler is the proof the tail did not
+            // return at its preliminary `close()`: nothing else in this test
+            // cancels, and the only `cancel_children` in the process is inside
+            // `drain_with_report`.
+            wait_until("the tail reaches the drain", || {
+                handler_cancelled.load(Ordering::SeqCst)
+            })
+            .await;
+            assert!(
+                !tail.is_finished(),
+                "the tail must not return while a nested handler is still running"
+            );
+            assert!(
+                tracker.is_closed(),
+                "the drain closes the tracker through the poison"
+            );
+
+            release_tx.send(()).expect("the handler is still waiting");
+            handler.await.expect("the handler should not be aborted");
+            let (result, server_endpoint, client_endpoint) = with_timeout("peer tail", tail)
+                .await
+                .expect("the tail should not panic");
+
+            result.expect_err("a poisoned tracker lock is reported to the entry task");
+            assert_eq!(
+                tracker.pending_count(),
+                0,
+                "the tail returns only once its tracker is empty"
+            );
+
+            // The pre-drain teardown ran despite the failed close: a closed
+            // endpoint hands back no more connections, and dropping it
+            // releases the address the next generation has to rebind.
+            assert!(
+                server_endpoint.accept().await.is_none(),
+                "the pre-drain endpoint teardown should have closed the listener"
+            );
+            drop((server_endpoint, client_endpoint));
+            // The endpoint's driver releases the UDP socket once the last
+            // handle is gone, which it does on its own schedule, so the
+            // rebind is retried until it succeeds rather than attempted once.
+            wait_until("the peer address is released", || {
+                Endpoint::server(
+                    config_server(&certs).expect("peer server config"),
+                    server_addr,
+                )
+                .is_ok()
+            })
+            .await;
+        }
+
+        /// Peer's teardown runs *before* its drain, and has to keep doing so.
+        ///
+        /// The tracked handler here is parked on `accept_bi`, one of the
+        /// awaits no cancellation token reaches: only the endpoint and
+        /// connection closes release it. The tail returning at all is the
+        /// assertion — move that teardown after the drain and the drain waits
+        /// on a task nothing can release, so this hangs rather than fails.
+        #[tokio::test]
+        async fn the_peer_tail_tears_its_connections_down_before_it_drains() {
+            init_crypto();
+            let (server_endpoint, server_addr) = setup_server_endpoint();
+            let peers = connect_client_server(&server_endpoint, server_addr).await;
+            let (mut peer_conn_info, _config) = build_peer_conn_info(server_addr);
+            let (sender, mut receiver) = mpsc::channel::<PeerIdentity>(1);
+            peer_conn_info.peer_sender = sender.clone();
+            peer_conn_info
+                .peer_conns
+                .write()
+                .await
+                .insert("parked-peer".to_string(), peers.server_conn.clone());
+
+            let tracker = TaskTracker::with_token(CancellationToken::new());
+            let parked_returned = Arc::new(AtomicBool::new(false));
+            let parked = tracker
+                .spawn("peer-server-conn-parked", {
+                    let conn = peers.server_conn.clone();
+                    let parked_returned = Arc::clone(&parked_returned);
+                    // Deliberately ignores its token, the way a handler parked
+                    // on a frame that never arrives does.
+                    move |_token| async move {
+                        let _ = conn.accept_bi().await;
+                        parked_returned.store(true, Ordering::SeqCst);
+                    }
+                })
+                .expect("a fresh tracker admits the parked handler");
+
+            let client_endpoint = init_client();
+            with_timeout(
+                "the peer tail should drain once its teardown released the parked await",
+                shutdown_peer(
+                    &tracker,
+                    &server_endpoint,
+                    &client_endpoint,
+                    peer_conn_info,
+                    &mut receiver,
+                ),
+            )
+            .await
+            .expect("a healthy tracker drains cleanly");
+
+            parked
+                .await
+                .expect("the parked handler should not be aborted");
+            assert!(
+                parked_returned.load(Ordering::SeqCst),
+                "the parked handler should have been released by the teardown, not aborted"
+            );
+            assert_eq!(tracker.pending_count(), 0);
+            // `receiver.close()` ran ahead of the drain too, so a send that
+            // arrives now is refused rather than queued against a receiver
+            // nobody polls.
+            assert!(
+                sender
+                    .send(peer_identity(server_addr, "after-shutdown"))
+                    .await
+                    .is_err(),
+                "the peer-identity receive side should have been closed before the drain"
+            );
+        }
+
+        /// `run_with_ready` reaches the tail unconditionally, which is what
+        /// carries the assertions above back to the entry task.
+        #[test]
+        fn peer_run_ends_in_the_shutdown_tail() {
+            let source = include_str!("peer.rs");
+            assert!(
+                source.contains(
+                    "shutdown_peer(\n            &tracker,\n            &server_endpoint,\n            \
+                     &client_endpoint,\n            peer_conn_info,\n            &mut receiver,\n        )\n        .await\n    }"
+                ),
+                "`run_with_ready` should end in one unconditional call to `shutdown_peer`"
             );
         }
     }
