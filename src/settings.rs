@@ -26,6 +26,7 @@ const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 const DEFAULT_NUM_OF_THREAD: i32 = 8;
 const DEFAULT_MAX_SUBCOMPACTIONS: u32 = 2;
 const DEFAULT_WEB_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -91,12 +92,29 @@ pub struct Config {
     // server, not a runtime-reloadable data setting.
     #[serde(with = "humantime_serde", default = "default_web_shutdown_timeout")]
     pub web_shutdown_timeout: Duration,
+
+    // How often a shutdown drain that is still waiting reports that tasks are
+    // still running. A reporting cadence, not a deadline: every drain in the
+    // process waits for each of its tracked tasks however long the task takes,
+    // and this only decides how often a shutdown that is waiting says so. Kept
+    // out of `visible` for the same reason `web_shutdown_timeout` is: it is
+    // process lifecycle configuration, resolved once as a generation starts and
+    // handed to every drain that generation performs, not a runtime-reloadable
+    // data setting.
+    #[serde(with = "humantime_serde", default = "default_drain_report_interval")]
+    pub drain_report_interval: Duration,
 }
 
 /// The default web graceful-shutdown timeout used when the configuration file
 /// omits `web_shutdown_timeout`.
 fn default_web_shutdown_timeout() -> Duration {
     DEFAULT_WEB_SHUTDOWN_TIMEOUT
+}
+
+/// The default drain reporting cadence used when the configuration file omits
+/// `drain_report_interval`.
+fn default_drain_report_interval() -> Duration {
+    DEFAULT_DRAIN_REPORT_INTERVAL
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,6 +199,7 @@ impl Settings {
             visible: new_config.clone(),
             compression: self.config.compression,
             web_shutdown_timeout: self.config.web_shutdown_timeout,
+            drain_report_interval: self.config.drain_report_interval,
         };
 
         let toml_str = toml::to_string(&temp_config)?;
@@ -213,8 +232,27 @@ fn backup_toml_file(path: &str) -> anyhow::Result<()> {
 }
 
 impl Config {
+    /// Validates the configuration `main` loaded, before any subsystem starts.
+    ///
+    /// The checks over the flattened `visible` table live in
+    /// [`ConfigVisible::validate`], which is also what the `setConfig` reload
+    /// path validates on its own. What is checked here is the rest of
+    /// [`Config`]: fields outside that table, which a reload never carries and
+    /// `ConfigVisible::validate` cannot see.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the flattened visible settings are invalid, or if
+    /// `drain_report_interval` is zero.
     pub fn validate(&self) -> anyhow::Result<()> {
         self.visible.validate()?;
+        // A zero cadence still drains — the drain waits for every task either
+        // way — but it spins the loop and writes one round per poll to the
+        // log. No upper bound is imposed: the cadence is a reporting interval,
+        // not a deadline, so a long one only makes a hanging shutdown quieter.
+        if self.drain_report_interval.is_zero() {
+            bail!("drain_report_interval must be greater than zero");
+        }
         Ok(())
     }
 }
@@ -504,6 +542,11 @@ export_dir = "{}"
             Duration::from_secs(30),
             "web_shutdown_timeout should default to 30 seconds"
         );
+        assert_eq!(
+            settings.config.drain_report_interval,
+            Duration::from_secs(5),
+            "drain_report_interval should default to 5 seconds"
+        );
     }
 
     #[test]
@@ -529,6 +572,65 @@ web_shutdown_timeout = "45s"
             Duration::from_secs(45),
             "a configured web_shutdown_timeout must override the 30s default"
         );
+    }
+
+    #[test]
+    fn test_load_settings_honors_configured_drain_report_interval() {
+        let data_dir = tempfile::tempdir().expect("Failed to create test_data dir");
+        let export_dir = tempfile::tempdir().expect("Failed to create test_export dir");
+        let config_content = format!(
+            r#"
+data_dir = "{}"
+export_dir = "{}"
+drain_report_interval = "500ms"
+"#,
+            data_dir.path().display(),
+            export_dir.path().display()
+        );
+
+        let (_dir, config_path) = create_config_file(&config_content);
+        let settings = Settings::load_or_restore(config_path.to_str().unwrap())
+            .expect("Failed to load settings");
+
+        assert_eq!(
+            settings.config.drain_report_interval,
+            Duration::from_millis(500),
+            "a configured drain_report_interval must override the 5s default"
+        );
+    }
+
+    /// A zero cadence still drains, but reports one round per poll, so the
+    /// check `main` runs before anything starts is what rejects it. The
+    /// `setConfig` reload path validates a `ConfigVisible` alone and never
+    /// carries a cadence, which is why this check lives on `Config`.
+    #[test]
+    fn test_validate_rejects_a_zero_drain_report_interval() {
+        let (_temp_file, _data_dir, _export_dir, config_visible) = create_test_config(false);
+        let config = Config {
+            peer_srv_addr: None,
+            peers: None,
+            visible: config_visible,
+            compression: false,
+            web_shutdown_timeout: DEFAULT_WEB_SHUTDOWN_TIMEOUT,
+            drain_report_interval: Duration::ZERO,
+        };
+
+        let err = config
+            .validate()
+            .expect_err("a zero drain_report_interval must be rejected");
+        assert!(
+            err.to_string()
+                .contains("drain_report_interval must be greater than zero"),
+            "Unexpected error message: {err:?}"
+        );
+
+        // Any non-zero cadence is accepted: no upper bound is imposed, because
+        // a long cadence only makes a hanging shutdown quieter.
+        let mut valid = config.clone();
+        valid.drain_report_interval = Duration::from_millis(1);
+        assert!(valid.validate().is_ok());
+        valid.drain_report_interval = Duration::from_hours(24);
+        assert!(valid.validate().is_ok());
     }
 
     #[test]
@@ -686,6 +788,62 @@ web_shutdown_timeout = "45s"
         );
 
         // Clean up the backup file created during the test
+        let backup_path = PathBuf::from(config_path).with_extension("toml.bak");
+        fs::remove_file(backup_path).expect("Failed to remove backup file");
+    }
+
+    /// A `setConfig` reload rebuilds the file from the reloaded visible
+    /// settings plus the fields that are not runtime-reloadable, so a cadence
+    /// the operator configured has to survive the rewrite rather than fall
+    /// back to the default.
+    #[test]
+    fn test_update_config_file_preserves_drain_report_interval() {
+        let data_dir = tempfile::tempdir().expect("Failed to create test_data dir");
+        let export_dir = tempfile::tempdir().expect("Failed to create test_export dir");
+        let config_content = format!(
+            r#"
+data_dir = "{}"
+export_dir = "{}"
+drain_report_interval = "500ms"
+"#,
+            data_dir.path().display(),
+            export_dir.path().display()
+        );
+
+        let (_dir, config_path) = create_config_file(&config_content);
+        let config_path = config_path.to_str().unwrap();
+        let mut settings = Settings::load(config_path).expect("Failed to load settings");
+        assert_eq!(
+            settings.config.drain_report_interval,
+            Duration::from_millis(500)
+        );
+
+        // A visible field changes, the way a `setConfig` mutation changes one.
+        let mut new_config = settings.config.visible.clone();
+        new_config.ack_transmission += 1;
+
+        settings
+            .update_config_file(&new_config)
+            .expect("Expected update_config_file to succeed");
+
+        assert_eq!(
+            settings.config.drain_report_interval,
+            Duration::from_millis(500),
+            "In-memory drain_report_interval should be preserved after update"
+        );
+
+        let reloaded_settings =
+            Settings::load(config_path).expect("Failed to reload settings from disk");
+        assert_eq!(
+            reloaded_settings.config.drain_report_interval,
+            Duration::from_millis(500),
+            "Persisted drain_report_interval should be preserved after update"
+        );
+        assert_eq!(
+            reloaded_settings.config.visible.ack_transmission, new_config.ack_transmission,
+            "the visible update the reload carried should have been written"
+        );
+
         let backup_path = PathBuf::from(config_path).with_extension("toml.bak");
         fs::remove_file(backup_path).expect("Failed to remove backup file");
     }
@@ -866,6 +1024,7 @@ web_shutdown_timeout = "45s"
             visible: config_visible,
             compression: false,
             web_shutdown_timeout: DEFAULT_WEB_SHUTDOWN_TIMEOUT,
+            drain_report_interval: DEFAULT_DRAIN_REPORT_INTERVAL,
         };
 
         // Case 1: Valid data directory

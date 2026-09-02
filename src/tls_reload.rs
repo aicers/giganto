@@ -551,6 +551,11 @@ mod listener_reload_contract_tests {
     use crate::server::{Certs, config_client, config_server};
 
     const SERVER_DNS: &str = "listener-reload.test";
+    /// The drain reporting cadence these tests hand to the listener entry
+    /// points, standing in for the one a generation resolves from its
+    /// settings. No test here waits a round out, so the value only has to be
+    /// non-zero.
+    const TEST_DRAIN_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
     static INSTALL_PROVIDER: Once = Once::new();
 
@@ -897,6 +902,7 @@ mod listener_reload_contract_tests {
                         1024,
                         tls_watch,
                         token,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await
                     .expect("ingest server should shut down cleanly");
@@ -1037,6 +1043,7 @@ mod listener_reload_contract_tests {
                         peer_idents,
                         tls_watch,
                         token,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await
             })
@@ -1185,6 +1192,7 @@ mod listener_reload_contract_tests {
                         1024,
                         tls_watch,
                         token,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await
                     .expect("ingest server should shut down cleanly");
@@ -1343,6 +1351,7 @@ mod listener_reload_contract_tests {
                         peer_idents,
                         tls_watch,
                         token,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await
             })

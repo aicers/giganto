@@ -83,6 +83,10 @@ const FIXED_CONN_DURATION_NANOS: i64 = 12_345;
 /// return. Generous enough that a slow machine does not fail the test, short
 /// enough that a task which never observes cancellation does.
 const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The drain reporting cadence these tests hand to the ingest entry points,
+/// standing in for the one a generation resolves from its settings. No test
+/// here waits a full round out, so the value only has to be non-zero.
+const TEST_DRAIN_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const STOREABLE_RAW_EVENT_KINDS: &[RawEventKind] = &[
     RawEventKind::Conn,
     RawEventKind::Dns,
@@ -249,6 +253,7 @@ fn spawn_server_with(
         ack_transmission_cnt,
         tls_watch,
         token.clone(),
+        TEST_DRAIN_REPORT_INTERVAL,
     ));
     TestServer {
         local_addr,
@@ -3179,7 +3184,14 @@ async fn the_ingest_tail_waits_and_tears_down_through_a_poisoned_tracker() {
     let tail = tokio::spawn({
         let tracker = tracker.clone();
         async move {
-            let result = shutdown_ingest(&tracker, &endpoint, sensor_state_handle, tx).await;
+            let result = shutdown_ingest(
+                &tracker,
+                &endpoint,
+                sensor_state_handle,
+                tx,
+                TEST_DRAIN_REPORT_INTERVAL,
+            )
+            .await;
             (result, endpoint)
         }
     });
@@ -3238,8 +3250,11 @@ async fn the_ingest_tail_waits_and_tears_down_through_a_poisoned_tracker() {
 fn ingest_run_ends_in_the_shutdown_tail() {
     let source = include_str!("../ingest.rs");
     assert!(
-        source
-            .contains("shutdown_ingest(&tracker, &endpoint, sensor_state_handle, tx).await\n    }"),
+        source.contains(
+            "shutdown_ingest(\n            &tracker,\n            &endpoint,\n            \
+             sensor_state_handle,\n            tx,\n            drain_report_interval,\n        \
+             )\n        .await\n    }"
+        ),
         "`run` should end in one unconditional call to `shutdown_ingest`"
     );
 }
