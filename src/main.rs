@@ -1630,6 +1630,7 @@ mod tests {
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
+            mpsc::{Receiver as BlockingReceiver, SyncSender},
         },
         time::Duration,
     };
@@ -1646,11 +1647,88 @@ mod tests {
     /// progress cannot hang the test, it fails it.
     const DRAIN_LOOP_TIMEOUT: Duration = Duration::from_mins(10);
 
-    struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
+    /// Upper bound on either side of a [`RecordGate`] handover.
+    ///
+    /// The two threads hand control across a pair of one-slot channels, so
+    /// this is what keeps a handover that never comes a failure rather than a
+    /// hang. It is a bound, not a wait: neither side reaches it when the
+    /// handover works.
+    const GATE_TIMEOUT: Duration = Duration::from_mins(1);
+
+    /// Parks the capturing writer on the first record carrying `marker`, until
+    /// another thread releases it.
+    ///
+    /// A record is written from inside whatever produced it, so a gate here is
+    /// somewhere to stand in the middle of a code path that offers no other
+    /// seam: the producer is held at its own logging statement, and whatever
+    /// the releasing thread does meanwhile is in place by the time the
+    /// producer resumes.
+    ///
+    /// Only the first matching record is held. The producer carries on logging
+    /// after the handover, and a gate that closed again would have no releaser
+    /// left to open it.
+    struct RecordGate {
+        /// The text identifying the record to park on.
+        marker: &'static str,
+        /// Signalled when that record reaches the writer.
+        reached: SyncSender<()>,
+        /// Awaited until the releasing thread has done its work.
+        ///
+        /// A `Receiver` is neither `Sync` nor `Clone` and a gate shared by a
+        /// `MakeWriter` has to be both, so the one receiver sits behind a lock
+        /// rather than being copied. Nothing contends for it: exactly one
+        /// write ever takes it.
+        released: Mutex<BlockingReceiver<()>>,
+        /// Whether the gate has already been crossed.
+        crossed: AtomicBool,
+    }
+
+    impl RecordGate {
+        /// Holds the caller on the first record carrying the marker, and lets
+        /// every other record straight through.
+        fn cross(&self, record: &[u8]) {
+            let is_marked =
+                std::str::from_utf8(record).is_ok_and(|record| record.contains(self.marker));
+            if is_marked && !self.crossed.swap(true, Ordering::SeqCst) {
+                self.reached
+                    .send(())
+                    .expect("the releasing thread should still be waiting for the record");
+                self.released
+                    .lock()
+                    .expect("lock")
+                    .recv_timeout(GATE_TIMEOUT)
+                    .expect("the releasing thread should have released the record");
+            }
+        }
+    }
+
+    /// The writer every log-capturing subscriber in these tests writes
+    /// through.
+    ///
+    /// A test that only reads the buffer afterwards leaves `gate` unset; one
+    /// that needs to act while a particular record is being written puts a
+    /// [`RecordGate`] there.
+    struct CaptureBuf {
+        buf: Arc<Mutex<Vec<u8>>>,
+        gate: Option<Arc<RecordGate>>,
+    }
+
+    impl CaptureBuf {
+        /// A writer that only captures.
+        fn new(buf: &Arc<Mutex<Vec<u8>>>) -> Self {
+            Self {
+                buf: Arc::clone(buf),
+                gate: None,
+            }
+        }
+    }
 
     impl Write for CaptureBuf {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("lock").write(buf)
+            if let Some(gate) = &self.gate {
+                gate.cross(buf);
+            }
+            self.buf.lock().expect("lock").write(buf)
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
@@ -1662,14 +1740,17 @@ mod tests {
         type Writer = CaptureBuf;
 
         fn make_writer(&'a self) -> CaptureBuf {
-            CaptureBuf(Arc::clone(&self.0))
+            CaptureBuf {
+                buf: Arc::clone(&self.buf),
+                gate: self.gate.clone(),
+            }
         }
     }
 
     #[test]
     fn stdout_fmt_layer_excludes_line_numbers() {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let writer = CaptureBuf(Arc::clone(&buf));
+        let writer = CaptureBuf::new(&buf);
 
         let layer = fmt::Layer::default()
             .with_ansi(false)
@@ -1697,7 +1778,7 @@ mod tests {
     #[test]
     fn file_fmt_layer_excludes_line_numbers() {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let writer = CaptureBuf(Arc::clone(&buf));
+        let writer = CaptureBuf::new(&buf);
 
         let layer = fmt::Layer::default()
             .with_ansi(false)
@@ -2212,15 +2293,27 @@ mod tests {
     /// spawn are polled on this same thread and their events land in this
     /// buffer.
     fn capture_logs() -> (Arc<Mutex<Vec<u8>>>, DefaultGuard) {
+        capture_logs_gated(None)
+    }
+
+    /// Installs that same subscriber over a writer the given gate holds, so a
+    /// test can stand in the middle of the path that logs.
+    ///
+    /// The format is what the assertions read — fields rather than prose, and
+    /// no timestamp or target in front of them — so the two entry points share
+    /// one builder rather than each carrying a copy to drift from.
+    fn capture_logs_gated(gate: Option<Arc<RecordGate>>) -> (Arc<Mutex<Vec<u8>>>, DefaultGuard) {
         let buf = Arc::new(Mutex::new(Vec::new()));
         let subscriber = fmt::fmt()
             .with_ansi(false)
             .without_time()
             .with_target(false)
-            .with_writer(CaptureBuf(Arc::clone(&buf)))
+            .with_writer(CaptureBuf {
+                buf: Arc::clone(&buf),
+                gate,
+            })
             .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        (buf, guard)
+        (buf, tracing::subscriber::set_default(subscriber))
     }
 
     fn captured(buf: &Arc<Mutex<Vec<u8>>>) -> String {
@@ -2290,7 +2383,7 @@ mod tests {
             future::Future,
             net::{Ipv4Addr, SocketAddr},
             path::Path,
-            sync::Once,
+            sync::{Once, mpsc::sync_channel},
         };
 
         use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
@@ -2588,6 +2681,9 @@ mod tests {
 
         /// The static message every abnormal entry-task record carries.
         const ABNORMAL_RECORD: &str = "entry task ended abnormally";
+        /// The message a configuration write that could not be persisted
+        /// leaves behind.
+        const CONFIG_FAILURE_RECORD: &str = "Failed to update configuration";
         /// The static message the record for a task that stopped carries.
         const CLEAN_RECORD: &str = "entry task stopped";
         /// The lifecycle-level record for a generation that ended degraded.
@@ -3283,7 +3379,7 @@ mod tests {
                     .send(new_config)
                     .await
                     .expect("the wait should still hold the receiver");
-                wait_for_logs(&logs, &["Failed to update configuration"]).await;
+                wait_for_logs(&logs, &[CONFIG_FAILURE_RECORD]).await;
                 notify_terminate.notify_one();
             });
 
@@ -3661,7 +3757,7 @@ mod tests {
                  while the reloads were still there to take"
             );
             assert_eq!(
-                records(&logs, "Failed to update configuration").len(),
+                records(&logs, CONFIG_FAILURE_RECORD).len(),
                 1,
                 "exactly one reload should have been taken before the check, got: {}",
                 captured(&logs)
@@ -3697,7 +3793,7 @@ mod tests {
                     .send(settings.config.visible.clone())
                     .await
                     .expect("the wait should still hold the receiver");
-                wait_for_logs(&logs, &["Failed to update configuration"]).await;
+                wait_for_logs(&logs, &[CONFIG_FAILURE_RECORD]).await;
 
                 // The path is writable now, so the next reload is persisted.
                 write_config_file(&settings);
@@ -3718,6 +3814,106 @@ mod tests {
                 "nothing ended abnormally, got: {}",
                 captured(&logs)
             );
+            fixture.settle().await;
+        }
+
+        /// A pending TLS reload outranks a finished entry handle in the check
+        /// round that a configuration write failure arms.
+        ///
+        /// The other precedence tests reach that round with nothing above the
+        /// handles ready, so what the check round does when a TLS reload is
+        /// pending in it has been the production arm order's claim rather than
+        /// a covered one. Reaching it is the whole difficulty: the failure
+        /// branch logs, clears `poll_config_reload` and re-enters the
+        /// selection with no await in between, so a permit installed from
+        /// another task could only land there by luck.
+        ///
+        /// A [`RecordGate`] on the failure record is what removes the luck.
+        /// The writer parks on the one record the branch emits; a plain OS
+        /// thread — not a task, because the parked writer is holding the
+        /// runtime thread — installs the TLS permit, and only then is the
+        /// writer released. The round that follows is therefore entered with
+        /// `poll_config_reload` false, a permit waiting on
+        /// `notify_tls_reload`, and a retention handle already known to have
+        /// finished.
+        ///
+        /// Everything the round is driven with is real: the configuration file
+        /// is never created, so `Settings::update_config_file` fails on the
+        /// backup that precedes the rewrite, and the live HTTPS server is
+        /// serving the material the reload rereads, so the TLS arm leaves its
+        /// no-op completion record without paying for a rebind.
+        #[tokio::test]
+        async fn a_tls_reload_outranks_a_finished_handle_in_the_armed_check() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            let id = fixture
+                .finish_entry_task(Subsystem::Retention, async { Ok(()) })
+                .await;
+            // One reload, so the single failure record the gate holds is also
+            // the only one the wait can produce.
+            fixture.queue_failing_reloads(1);
+            let web_addr = free_addr();
+            let mut web_controller = Some(live_web(&fixture, web_addr).await);
+
+            let (reached_tx, reached_rx) = sync_channel::<()>(1);
+            let (released_tx, released_rx) = sync_channel::<()>(1);
+            let gate = Arc::new(RecordGate {
+                marker: CONFIG_FAILURE_RECORD,
+                reached: reached_tx,
+                released: Mutex::new(released_rx),
+                crossed: AtomicBool::new(false),
+            });
+            let notify_tls_reload = Arc::clone(&fixture.notify_tls_reload);
+            let helper = std::thread::spawn(move || {
+                reached_rx
+                    .recv_timeout(GATE_TIMEOUT)
+                    .expect("the failure record should have reached the writer");
+                // `notify_one` leaves a permit behind whether or not the round
+                // that lost the race is still holding a waiter, so the arm the
+                // next round polls is ready on its first poll.
+                notify_tls_reload.notify_one();
+                released_tx
+                    .send(())
+                    .expect("the writer should still be holding the failure record");
+            });
+            let (logs, _guard) = capture_logs_gated(Some(gate));
+
+            let end = tokio::time::timeout(
+                GENERATION_TIMEOUT,
+                wait_with_live_web(&mut fixture, &mut web_controller, web_addr),
+            )
+            .await
+            .expect("the armed check should end the wait on the finished handle");
+
+            assert_eq!(end, GenerationEnd::EntryTaskExited(Subsystem::Retention));
+            let output = captured(&logs);
+            assert_eq!(
+                records(&logs, CONFIG_FAILURE_RECORD).len(),
+                1,
+                "the one queued reload should have failed exactly once, got: {output}"
+            );
+            assert_precedes(
+                &logs,
+                CONFIG_FAILURE_RECORD,
+                TLS_NOOP_RECORD,
+                "the reload should have run in the round the failed write armed",
+            );
+            assert_precedes(
+                &logs,
+                TLS_NOOP_RECORD,
+                ABNORMAL_RECORD,
+                "the pending TLS reload should outrank the finished handle",
+            );
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Retention,
+                id,
+                "serving",
+                "early_exit",
+            );
+
+            helper.join().expect("the helper thread should not panic");
+            shutdown_web(web_controller.take()).await;
             fixture.settle().await;
         }
 
@@ -3967,7 +4163,7 @@ mod tests {
                             "{case}"
                         );
                         assert!(
-                            output.contains("Failed to update configuration"),
+                            output.contains(CONFIG_FAILURE_RECORD),
                             "{case}: the check follows a write that failed, got: {output}"
                         );
                         assert_report_fields(
