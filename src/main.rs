@@ -2346,8 +2346,12 @@ mod tests {
     ///
     /// The format is what the assertions read — fields rather than prose, and
     /// no timestamp or target in front of them — so the two entry points share
-    /// one builder rather than each carrying a copy to drift from.
+    /// one builder rather than each carrying a copy to drift from. Both go on
+    /// top of the dispatcher `hold_callsite_interest_open` keeps registered, so
+    /// that a parallel test cannot cache one of the callsites asserted on here
+    /// off for the whole process.
     fn capture_logs_gated(gate: Option<Arc<RecordGate>>) -> (Arc<Mutex<Vec<u8>>>, DefaultGuard) {
+        crate::cancellation::hold_callsite_interest_open();
         let buf = Arc::new(Mutex::new(Vec::new()));
         let subscriber = fmt::fmt()
             .with_ansi(false)

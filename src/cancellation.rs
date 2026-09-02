@@ -995,6 +995,36 @@ fn report_pending_round(
     *reported_snapshot = Some(snapshot);
 }
 
+/// Keeps `tracing` from latching a callsite off for the whole process, for the
+/// tests that read the drain's own log lines back.
+///
+/// Those tests install their subscriber on the current thread, but whether a
+/// callsite is worth evaluating at all is cached process-wide, once, the first
+/// time that callsite is reached — and while only a single dispatcher is
+/// registered, `tracing` decides it from the subscriber of the thread that
+/// reached it and nothing else. The drain callsites are reached from tests all
+/// over this binary, most of which capture nothing, so a parallel run can cache
+/// one of them as "never" while a capturing test is midway through the drain
+/// that emits it. The capture then comes back missing exactly the lines the
+/// drain did emit, and the test fails on a shutdown that behaved correctly.
+///
+/// Registering one more dispatcher and never dropping it keeps the count above
+/// one, which sends that decision down the path that asks every live subscriber
+/// instead. A callsite some thread is capturing then caches as "sometimes",
+/// which defers the decision to each event and to the emitting thread's own
+/// subscriber — the thing a per-thread capture needs to be true. What is held
+/// open is interested in nothing itself, so it neither captures nor prints
+/// anything.
+///
+/// Callers install it before their own subscriber, so that the registration
+/// that follows is the one that lifts the count.
+#[cfg(test)]
+pub(crate) fn hold_callsite_interest_open() {
+    static HELD: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+    let _ =
+        HELD.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1046,8 +1076,11 @@ mod tests {
         }
     }
 
-    /// Installs a log-capturing subscriber for the current thread.
+    /// Installs a log-capturing subscriber for the current thread, over the
+    /// dispatcher [`hold_callsite_interest_open`] keeps registered so that a
+    /// parallel test cannot cache one of the callsites asserted on below off.
     fn capture_logs() -> (SharedLogBuffer, tracing::subscriber::DefaultGuard) {
+        hold_callsite_interest_open();
         let logs = SharedLogBuffer::default();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
@@ -1119,6 +1152,48 @@ mod tests {
     const TEST_DRAIN_LABEL: &str = "shutdown";
     /// Prefix of the per-round progress line `TEST_DRAIN_LABEL` produces.
     const DRAIN_ROUND_NEEDLE: &str = "shutdown drain round";
+
+    /// Message of the one callsite
+    /// [`a_callsite_reached_without_a_subscriber_still_reaches_a_capturing_one`]
+    /// emits, from both of the threads it runs.
+    const SHARED_CALLSITE_NEEDLE: &str = "a callsite two threads reach, one of them capturing";
+
+    /// Emits `SHARED_CALLSITE_NEEDLE` from a single callsite, so that two
+    /// threads calling this reach the same one. Two `warn!` invocations are two
+    /// callsites however alike they read, which is the whole of why this is a
+    /// function.
+    fn emit_shared_callsite() {
+        warn!("{SHARED_CALLSITE_NEEDLE}");
+    }
+
+    /// A capturing thread still sees a callsite that a thread capturing nothing
+    /// reached first.
+    ///
+    /// What this guards is not in the drain but in the capture the drain tests
+    /// read back: `tracing` caches per callsite, once and for the whole
+    /// process, whether that callsite is worth evaluating, and computes it from
+    /// the reaching thread alone while a single dispatcher is registered.
+    /// Without [`hold_callsite_interest_open`] the thread below caches the
+    /// shared callsite off for everyone, and every later capture of it — here,
+    /// and in the drain tests whose lines are emitted from tasks all over this
+    /// binary — comes back empty for a shutdown that behaved correctly.
+    #[test]
+    fn a_callsite_reached_without_a_subscriber_still_reaches_a_capturing_one() {
+        let (logs, _guard) = capture_logs();
+
+        // Reached first from a thread that has installed no subscriber, which
+        // is what every test in this binary that drains without capturing is.
+        std::thread::spawn(emit_shared_callsite)
+            .join()
+            .expect("the emitting thread should not panic");
+
+        emit_shared_callsite();
+        assert!(
+            logs.contents().contains(SHARED_CALLSITE_NEEDLE),
+            "the capturing thread sees the callsite, got: {}",
+            logs.contents()
+        );
+    }
 
     fn count_lines_containing(output: &str, needle: &str) -> usize {
         output.lines().filter(|line| line.contains(needle)).count()
@@ -2952,6 +3027,7 @@ mod tests {
             tokio::task::yield_now().await;
 
             let (writer, calls) = ReentrantPendingCountBuffer::new(tracker.clone());
+            hold_callsite_interest_open();
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
                 .without_time()

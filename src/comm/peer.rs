@@ -4814,10 +4814,13 @@ pub mod tests {
         }
 
         /// Installs a log-capturing subscriber for the current thread, the way
-        /// `src/cancellation.rs` does. A `#[tokio::test]` runs its tasks on
-        /// the calling thread, so the peer tasks spawned below are captured
-        /// too.
+        /// `src/cancellation.rs` does, over the dispatcher
+        /// `hold_callsite_interest_open` keeps registered so that a parallel
+        /// test cannot cache one of the callsites asserted on here off. A
+        /// `#[tokio::test]` runs its tasks on the calling thread, so the peer
+        /// tasks spawned below are captured too.
         fn capture_logs() -> (SharedLogBuffer, tracing::subscriber::DefaultGuard) {
+            crate::cancellation::hold_callsite_interest_open();
             let logs = SharedLogBuffer::default();
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
