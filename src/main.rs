@@ -41,7 +41,7 @@ use tracing_subscriber::{
 };
 
 use crate::{
-    cancellation::{DRAIN_REPORT_INTERVAL, SupervisedHandle, TaskTracker, drain_with_report},
+    cancellation::{DRAIN_REPORT_INTERVAL, ObservedHandle, TaskTracker, drain_with_report},
     comm::{
         new_ingest_sensors, new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors,
         new_stream_direct_channels,
@@ -427,7 +427,7 @@ impl ProcessContext {
     }
 }
 
-/// The subsystems whose entry tasks a generation supervises.
+/// The subsystems whose entry tasks a generation observes.
 ///
 /// One per long-running subsystem registered in the generation's top-level
 /// tracker and watched by [`wait_for_generation_end`]. The order the variants
@@ -483,7 +483,7 @@ enum GenerationEnd {
     EntryTaskExited(Subsystem),
 }
 
-/// Whether a generation reached its end with everything it supervised
+/// Whether a generation reached its end with everything it observed
 /// accounted for.
 ///
 /// Degraded is an internal outcome of one generation, never a lifecycle return
@@ -493,9 +493,9 @@ enum GenerationEnd {
 /// the same mapping.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GenerationHealth {
-    /// Everything the generation supervised was accounted for.
+    /// Everything the generation observed was accounted for.
     Clean,
-    /// Something the generation supervised ended abnormally. The rest of the
+    /// Something the generation observed ended abnormally. The rest of the
     /// teardown ran all the same, and the ending's action still stands.
     Degraded,
 }
@@ -660,8 +660,8 @@ async fn run_generation(
     // here is what says how it ended. Its child token reaches it through the
     // closure argument, which is the only thing its shutdown travels on.
     let retention = settings.config.visible.retention;
-    let retain_task_handle: SupervisedHandle<Result<()>> = top_level_tracker
-        .spawn_supervised("retention", {
+    let retain_task_handle: ObservedHandle<Result<()>> = top_level_tracker
+        .spawn_observed("retention", {
             let db = database.clone();
             let deletion_coordination = Arc::clone(&deletion_coordination);
             move |cancel| run_retention(ONE_DAY, retention, db, cancel, deletion_coordination)
@@ -675,14 +675,14 @@ async fn run_generation(
     // reports its own `Err` where it happens, but an early return and a panic
     // are outcomes only the handle carries. It is the one entry task that may
     // be absent, because peer runs only when an address is configured for it.
-    let peer_task_handle: Option<SupervisedHandle<Result<()>>> =
+    let peer_task_handle: Option<ObservedHandle<Result<()>>> =
         if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
             let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
             let notify_sensor = notify_sensor_change
                 .clone()
                 .expect("peer notify exists when peer server is configured");
             let handle = top_level_tracker
-                .spawn_supervised("peer", {
+                .spawn_observed("peer", {
                     let ingest_sensors = ingest_sensors.clone();
                     let peers = peers.clone();
                     let peer_idents = peer_idents.clone();
@@ -718,7 +718,7 @@ async fn run_generation(
     let publish_server =
         publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
     let publish_task_handle = top_level_tracker
-        .spawn_supervised("publish", {
+        .spawn_observed("publish", {
             let db = database.clone();
             let pcap_sensors = pcap_sensors.clone();
             let stream_direct_channels = stream_direct_channels.clone();
@@ -762,7 +762,7 @@ async fn run_generation(
     // and reading it back after the drain adds the outcome the drain cannot
     // see — a panic as a `JoinError`.
     let ingest_task_handle = top_level_tracker
-        .spawn_supervised("ingest", {
+        .spawn_observed("ingest", {
             let db = database.clone();
             let tls_watch = process.tls_watch.clone();
             move |token| async move {
@@ -841,7 +841,7 @@ async fn run_generation(
     // clones this generation still holds — its own handle, the schema's, the
     // listeners' — go here. That guarantee is exactly as wide as the tracker's
     // registry, and an accepted customer deletion is inside it: the resolver
-    // registers its supervisor on `top_level_tracker`, so the drain above has
+    // registers its observer on `top_level_tracker`, so the drain above has
     // already waited for it. Work that never entered the registry could still
     // hold a clone past this point.
     Ok(GenerationOutcome {
@@ -866,7 +866,7 @@ struct GenerationIntents {
     notify_power_off: Arc<Notify>,
 }
 
-/// The four entry tasks a generation supervises, each until something reads
+/// The four entry tasks a generation observes, each until something reads
 /// its handle back.
 ///
 /// A slot goes to `None` two ways: peer starts there when the subsystem is not
@@ -875,15 +875,15 @@ struct GenerationIntents {
 /// nothing that ended is dropped unobserved and nothing already read is polled
 /// twice.
 struct EntryTasks {
-    ingest: Option<SupervisedHandle<Result<()>>>,
-    publish: Option<SupervisedHandle<Result<()>>>,
-    peer: Option<SupervisedHandle<Result<()>>>,
-    retention: Option<SupervisedHandle<Result<()>>>,
+    ingest: Option<ObservedHandle<Result<()>>>,
+    publish: Option<ObservedHandle<Result<()>>>,
+    peer: Option<ObservedHandle<Result<()>>>,
+    retention: Option<ObservedHandle<Result<()>>>,
 }
 
 impl EntryTasks {
     /// The slot one subsystem's handle lives in.
-    fn slot(&mut self, subsystem: Subsystem) -> &mut Option<SupervisedHandle<Result<()>>> {
+    fn slot(&mut self, subsystem: Subsystem) -> &mut Option<ObservedHandle<Result<()>>> {
         match subsystem {
             Subsystem::Ingest => &mut self.ingest,
             Subsystem::Publish => &mut self.publish,
@@ -912,7 +912,7 @@ impl EntryTasks {
 
 /// One entry task handed to the teardown, and what the wait knew about it.
 struct RetainedEntryTask {
-    handle: SupervisedHandle<Result<()>>,
+    handle: ObservedHandle<Result<()>>,
     /// Whether the task had already finished when the wait ended.
     already_finished: bool,
 }
@@ -963,7 +963,7 @@ impl ObservationPhase {
 /// Peer runs only when an address is configured for it, and the `select!` arm
 /// that watches it has to be written either way, so the absent case is a
 /// future that stays pending rather than a fabricated handle.
-async fn watch_entry_task(handle: Option<&mut SupervisedHandle<Result<()>>>) -> EntryTaskOutput {
+async fn watch_entry_task(handle: Option<&mut ObservedHandle<Result<()>>>) -> EntryTaskOutput {
     match handle {
         Some(handle) => handle.await,
         None => std::future::pending().await,
@@ -990,7 +990,7 @@ async fn watch_entry_task(handle: Option<&mut SupervisedHandle<Result<()>>>) -> 
 /// web reaper drain and the tracker's own `close` — is still read as clean.
 /// Closing it would need a completion time stamped inside the task itself.
 fn report_entry_task_outcome(
-    handle: &SupervisedHandle<Result<()>>,
+    handle: &ObservedHandle<Result<()>>,
     phase: ObservationPhase,
     outcome: &EntryTaskOutput,
 ) -> bool {
@@ -2782,7 +2782,7 @@ mod tests {
             }
         }
 
-        /// Spawns a stand-in entry task and hands back its supervised handle.
+        /// Spawns a stand-in entry task and hands back its observed handle.
         ///
         /// The metadata the boundary reports — the name, the tracker-assigned
         /// id, the spawn instant — comes from the tracker, so a stand-in has
@@ -2793,12 +2793,12 @@ mod tests {
             tracker: &TaskTracker,
             subsystem: Subsystem,
             fut: Fut,
-        ) -> SupervisedHandle<Result<()>>
+        ) -> ObservedHandle<Result<()>>
         where
             Fut: Future<Output = Result<()>> + Send + 'static,
         {
             tracker
-                .spawn_supervised(subsystem.to_string(), move |_cancel| fut)
+                .spawn_observed(subsystem.to_string(), move |_cancel| fut)
                 .expect("a fresh tracker admits a stand-in entry task")
         }
 
@@ -2810,9 +2810,9 @@ mod tests {
         fn parking_stand_in(
             tracker: &TaskTracker,
             subsystem: Subsystem,
-        ) -> SupervisedHandle<Result<()>> {
+        ) -> ObservedHandle<Result<()>> {
             tracker
-                .spawn_supervised(subsystem.to_string(), |cancel| async move {
+                .spawn_observed(subsystem.to_string(), |cancel| async move {
                     cancel.cancelled().await;
                     Ok(())
                 })
@@ -2829,7 +2829,7 @@ mod tests {
             tracker: &TaskTracker,
             subsystem: Subsystem,
             fut: Fut,
-        ) -> SupervisedHandle<Result<()>>
+        ) -> ObservedHandle<Result<()>>
         where
             Fut: Future<Output = Result<()>> + Send + 'static,
         {
@@ -2843,7 +2843,7 @@ mod tests {
 
         /// One entry task the teardown is handed.
         fn retained(
-            handle: SupervisedHandle<Result<()>>,
+            handle: ObservedHandle<Result<()>>,
             already_finished: bool,
         ) -> RetainedEntryTask {
             RetainedEntryTask {
@@ -2882,7 +2882,7 @@ mod tests {
             intents: GenerationIntents,
             /// The tracker the stand-in entry tasks are registered in.
             ///
-            /// Nothing drains it: it is here because a supervised handle can
+            /// Nothing drains it: it is here because a observed handle can
             /// only come from a tracker, and the name, id and spawn instant
             /// the boundary reports are what the tracker stamps.
             tracker: TaskTracker,
@@ -4348,7 +4348,7 @@ mod tests {
 
             let top_level_tracker = TaskTracker::new();
             let handle = top_level_tracker
-                .spawn_supervised("retention", |cancel| async move {
+                .spawn_observed("retention", |cancel| async move {
                     cancel.cancelled().await;
                     Ok(())
                 })
@@ -4585,9 +4585,9 @@ mod tests {
         /// The registration guard removes the registry entry as the task
         /// returns, which is the very moment the boundary reads the handle, so
         /// nothing about the task is recoverable from the tracker by then. The
-        /// copy the supervised handle carries is what survives that.
+        /// copy the observed handle carries is what survives that.
         #[tokio::test]
-        async fn a_supervised_handle_names_a_task_the_registry_has_forgotten() {
+        async fn a_observed_handle_names_a_task_the_registry_has_forgotten() {
             let tracker = TaskTracker::new();
             let handle = finished_stand_in(&tracker, Subsystem::Peer, async { Ok(()) }).await;
             let id = handle.id();
@@ -4650,7 +4650,7 @@ mod tests {
                 let cleanup_started = Arc::new(AtomicBool::new(false));
                 let cleanup_finished = Arc::new(AtomicBool::new(false));
                 let retain_task_handle = tracker
-                    .spawn_supervised("retention", {
+                    .spawn_observed("retention", {
                         let db = database.clone();
                         let cleanup_started = Arc::clone(&cleanup_started);
                         let cleanup_finished = Arc::clone(&cleanup_finished);
@@ -5714,7 +5714,7 @@ mod tests {
         /// point while the job was still `InProgress` did not wait for the
         /// deletion, whatever the log says. The deletion is held past the
         /// start of the drain by a read guard on the sensor list — the
-        /// supervisor takes that lock for writing once the RocksDB deletes are
+        /// observer takes that lock for writing once the RocksDB deletes are
         /// done — and the drain's own `close` is what the test waits on, so no
         /// step here is timed.
         #[cfg(feature = "bootroot")]

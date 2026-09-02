@@ -40,7 +40,7 @@
 //! 3. `drain` only waits for tasks to exit; it does not report their returned
 //!    results or panics. Keep the [`tokio::task::JoinHandle`] returned by
 //!    [`TaskTracker::spawn`] when the result matters, or spawn through
-//!    [`TaskTracker::spawn_supervised`] when the report has to name the task
+//!    [`TaskTracker::spawn_observed`] when the report has to name the task
 //!    as well — the registry entry that holds its name is gone by the time
 //!    the handle resolves.
 //!
@@ -167,7 +167,7 @@ struct TaskMeta {
 ///
 /// [`TaskTracker::spawn`] hands back a bare [`JoinHandle`], and the registry
 /// entry holding a task's name and start time is removed the moment that task
-/// returns — which is the very moment a supervisor reads the handle back. The
+/// returns — which is the very moment a observer reads the handle back. The
 /// copy kept here is what survives deregistration, so a task can still be
 /// named and aged after the registry has forgotten it.
 ///
@@ -175,14 +175,14 @@ struct TaskMeta {
 /// it is [`Unpin`] so it can be polled from a `select!` arm, and it forwards
 /// [`is_finished`](Self::is_finished), [`abort`](Self::abort) and
 /// [`abort_handle`](Self::abort_handle).
-pub struct SupervisedHandle<T> {
+pub struct ObservedHandle<T> {
     handle: JoinHandle<T>,
     id: u64,
     name: Cow<'static, str>,
     started_at: Instant,
 }
 
-impl<T> SupervisedHandle<T> {
+impl<T> ObservedHandle<T> {
     /// The tracker-assigned id of the task this handle joins.
     #[must_use]
     pub fn id(&self) -> u64 {
@@ -223,7 +223,7 @@ impl<T> SupervisedHandle<T> {
     }
 }
 
-impl<T> Future for SupervisedHandle<T> {
+impl<T> Future for ObservedHandle<T> {
     type Output = Result<T, JoinError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -231,9 +231,9 @@ impl<T> Future for SupervisedHandle<T> {
     }
 }
 
-impl<T> fmt::Debug for SupervisedHandle<T> {
+impl<T> fmt::Debug for ObservedHandle<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SupervisedHandle")
+        f.debug_struct("ObservedHandle")
             .field("id", &self.id)
             .field("name", &self.name)
             .field("age", &self.age())
@@ -462,9 +462,9 @@ impl TaskTracker {
     ///
     /// The same admission, registration and cancellation as
     /// [`spawn`](Self::spawn); what differs is the return, a
-    /// [`SupervisedHandle`] carrying the task's id, its name and the instant
+    /// [`ObservedHandle`] carrying the task's id, its name and the instant
     /// the tracker stamped it. The registry entry is gone by the time the
-    /// handle resolves, so a supervisor that has to name a task in the report
+    /// handle resolves, so a observer that has to name a task in the report
     /// it writes at that moment cannot get any of it back from the tracker.
     ///
     /// Use this for a task whose ending is acted on rather than merely waited
@@ -476,11 +476,11 @@ impl TaskTracker {
     /// Returns [`SpawnError::Closed`] if the tracker has been closed, and
     /// [`SpawnError::LockPoisoned`] if an internal mutex is poisoned — the
     /// same two outcomes [`spawn`](Self::spawn) returns, for the same reasons.
-    pub fn spawn_supervised<F, Fut>(
+    pub fn spawn_observed<F, Fut>(
         &self,
         name: impl Into<Cow<'static, str>>,
         f: F,
-    ) -> Result<SupervisedHandle<Fut::Output>, SpawnError>
+    ) -> Result<ObservedHandle<Fut::Output>, SpawnError>
     where
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future + Send + 'static,
@@ -488,7 +488,7 @@ impl TaskTracker {
     {
         let name = name.into();
         let (handle, id, started_at) = self.admit(name.clone(), f)?;
-        Ok(SupervisedHandle {
+        Ok(ObservedHandle {
             handle,
             id,
             name,
@@ -1770,27 +1770,27 @@ mod tests {
             .expect("drain should succeed");
     }
 
-    /// The metadata a supervised handle carries outlives the registry entry
+    /// The metadata a observed handle carries outlives the registry entry
     /// it was copied from.
     ///
     /// The registration guard deregisters the task as it returns, which is the
-    /// very moment a supervisor reads the handle back, so nothing about the
+    /// very moment a observer reads the handle back, so nothing about the
     /// task is recoverable from the tracker by then.
     #[tokio::test]
-    async fn spawn_supervised_names_a_task_the_registry_has_forgotten() {
+    async fn spawn_observed_names_a_task_the_registry_has_forgotten() {
         let tracker = TaskTracker::new();
         let handle = tracker
-            .spawn_supervised("supervised", |_token| async { 7_u32 })
+            .spawn_observed("observed", |_token| async { 7_u32 })
             .expect("spawn should succeed");
 
-        assert_eq!(handle.name(), "supervised");
+        assert_eq!(handle.name(), "observed");
         let id = handle.id();
         assert_eq!(handle.await.expect("task should not panic"), 7);
 
         // Re-read after the task returned: the registry is empty, and the
         // handle still answers.
         let handle = tracker
-            .spawn_supervised(String::from("dynamic"), |_token| async { 8_u32 })
+            .spawn_observed(String::from("dynamic"), |_token| async { 8_u32 })
             .expect("spawn should succeed");
         assert_eq!(handle.id(), id + 1, "ids come from the same counter");
         assert_eq!(handle.name(), "dynamic", "a dynamic name is stored too");
@@ -1801,10 +1801,10 @@ mod tests {
         assert_eq!(handle.await.expect("task should not panic"), 8);
         assert_eq!(tracker.pending_count(), 0);
 
-        // The `Debug` rendering carries the same metadata, for a supervisor
+        // The `Debug` rendering carries the same metadata, for a observer
         // that logs the handle rather than its fields.
         let handle = tracker
-            .spawn_supervised("rendered", |_token| async {})
+            .spawn_observed("rendered", |_token| async {})
             .expect("spawn should succeed");
         let rendered = format!("{handle:?}");
         assert!(rendered.contains("rendered"), "got: {rendered}");
@@ -1812,12 +1812,12 @@ mod tests {
         handle.await.expect("task should not panic");
     }
 
-    /// A supervised handle stands in for the `JoinHandle` it owns.
+    /// A observed handle stands in for the `JoinHandle` it owns.
     ///
-    /// A supervisor needs all three: `is_finished` to check readiness without
+    /// A observer needs all three: `is_finished` to check readiness without
     /// awaiting, an abort handle to stop the task, and the join itself.
     #[tokio::test]
-    async fn a_supervised_handle_forwards_the_join_handle_api() {
+    async fn a_observed_handle_forwards_the_join_handle_api() {
         // The abort below leaves a tracked task that never returned, which the
         // registration guard reports. Capturing here keeps that report inside a
         // subscriber: a callsite first reached from a thread that has none is
@@ -1826,7 +1826,7 @@ mod tests {
         let (_logs, _guard) = capture_logs();
         let tracker = TaskTracker::new();
         let handle = tracker
-            .spawn_supervised("forwarding", |token| async move {
+            .spawn_observed("forwarding", |token| async move {
                 token.cancelled().await;
             })
             .expect("spawn should succeed");
@@ -1837,7 +1837,7 @@ mod tests {
         assert!(error.is_cancelled());
 
         let joined = tracker
-            .spawn_supervised("joining", |_token| async { 1_u8 })
+            .spawn_observed("joining", |_token| async { 1_u8 })
             .expect("spawn should succeed");
         assert_eq!(joined.await.expect("task should not panic"), 1);
     }
@@ -1845,7 +1845,7 @@ mod tests {
     /// The new entry point is additive: `spawn` keeps its signature and its
     /// return type, and the two share one id counter and one registry.
     #[tokio::test]
-    async fn spawn_is_unaffected_by_the_supervised_entry_point() {
+    async fn spawn_is_unaffected_by_the_observed_entry_point() {
         let tracker = TaskTracker::new();
         let (started_tx, started_rx) = oneshot::channel::<()>();
         let (release_tx, release_rx) = oneshot::channel::<()>();
@@ -1860,11 +1860,11 @@ mod tests {
             .await
             .expect("the plain task should have started");
 
-        let supervised = tracker
-            .spawn_supervised("supervised", |_token| async { 4_u8 })
+        let observed = tracker
+            .spawn_observed("observed", |_token| async { 4_u8 })
             .expect("spawn should succeed");
-        assert_eq!(supervised.name(), "supervised");
-        assert_eq!(supervised.await.expect("task should not panic"), 4);
+        assert_eq!(observed.name(), "observed");
+        assert_eq!(observed.await.expect("task should not panic"), 4);
 
         // Both are tracked by the one registry, so the drain waits for both.
         assert_eq!(tracker.pending_count(), 1);
@@ -1879,12 +1879,12 @@ mod tests {
         );
     }
 
-    /// A supervised handle is cancelled by the tracker like any other task.
+    /// A observed handle is cancelled by the tracker like any other task.
     #[tokio::test]
-    async fn a_supervised_task_is_cancelled_with_the_tracker() {
+    async fn a_observed_task_is_cancelled_with_the_tracker() {
         let tracker = TaskTracker::new();
         let handle = tracker
-            .spawn_supervised("cancelled-with-tracker", |token| async move {
+            .spawn_observed("cancelled-with-tracker", |token| async move {
                 token.cancelled().await;
                 "stopped"
             })

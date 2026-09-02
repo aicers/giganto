@@ -23,7 +23,7 @@
 
 ## When the process exits while it was serving
 
-Giganto supervises the ingest, publish, peer and retention subsystems. If
+Giganto observes the ingest, publish, peer and retention subsystems. If
 one of their entry tasks ends on its own, the node does not keep serving
 without it: it runs its usual shutdown sequence and then exits with a
 failure status, so a service manager configured to restart on failure

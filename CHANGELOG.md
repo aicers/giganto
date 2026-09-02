@@ -33,7 +33,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   deletion.
 - A subsystem entry task that ends on its own now takes the node down with it
   instead of leaving it serving without that subsystem. Ingest, publish, peer
-  and retention are all watched; whichever ends first names the shutdown, the
+  and retention are all observed; whichever ends first names the shutdown, the
   usual shutdown sequence runs, and the process exits with a failure status so
   a service manager configured to restart on failure does. A request to stop,
   reboot or power off still decides the shutdown ahead of an entry task that
