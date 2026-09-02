@@ -47,7 +47,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use self::implement::RequestStreamMessage;
-use crate::cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report};
+use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::{
     IngestSensors, PcapSensors, StreamDirectChannels,
     ingest::{NetworkKey, implement::EventFilter},
@@ -98,6 +98,10 @@ impl Server {
 
     /// Binds the publish listener and serves it until `token` is cancelled.
     ///
+    /// `drain_report_interval` is the process-wide drain reporting cadence,
+    /// resolved from the settings where the generation starts and handed down
+    /// unchanged; publish has no cadence of its own.
+    ///
     /// # Errors
     ///
     /// Returns an error if the listener cannot be bound, if the publish task
@@ -115,6 +119,7 @@ impl Server {
         peer_idents: PeerIdents,
         tls_watch: TlsWatch,
         token: CancellationToken,
+        drain_report_interval: Duration,
     ) -> Result<()> {
         self.bind()
             .context("failed to bind the publish listener")?
@@ -127,6 +132,7 @@ impl Server {
                 peer_idents,
                 tls_watch,
                 token,
+                drain_report_interval,
             )
             .await
     }
@@ -166,6 +172,7 @@ impl BoundServer {
         peer_idents: PeerIdents,
         mut tls_watch: TlsWatch,
         token: CancellationToken,
+        drain_report_interval: Duration,
     ) -> Result<()> {
         let local_addr = self.local_addr();
         let endpoint = self.endpoint;
@@ -262,7 +269,7 @@ impl BoundServer {
             }
         }
 
-        shutdown_publish(&tracker, &endpoint).await
+        shutdown_publish(&tracker, &endpoint, drain_report_interval).await
     }
 }
 
@@ -280,7 +287,11 @@ impl BoundServer {
 /// listener has been torn down first either way, so the address publish was
 /// pinned to is released for the next generation on the failing path exactly
 /// as on the healthy one.
-async fn shutdown_publish(tracker: &TaskTracker, endpoint: &Endpoint) -> Result<()> {
+async fn shutdown_publish(
+    tracker: &TaskTracker,
+    endpoint: &Endpoint,
+    drain_report_interval: Duration,
+) -> Result<()> {
     // Admission rejection, the half the accept loop cannot do on its own:
     // a closed tracker turns away every request handler, subscription, and
     // relay a still-running handler might try to register. Failing here is no
@@ -294,7 +305,7 @@ async fn shutdown_publish(tracker: &TaskTracker, endpoint: &Endpoint) -> Result<
     // `drain_with_report` closes and cancels again, both idempotent. Its
     // error is captured rather than propagated on the spot, because it means
     // the tracker is empty and the teardown below still has to run.
-    let drained = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, PUBLISH_DRAIN_LABEL)
+    let drained = drain_with_report(tracker, drain_report_interval, PUBLISH_DRAIN_LABEL)
         .await
         .context("failed to drain the publish task tracker");
 

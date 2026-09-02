@@ -56,6 +56,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the node takes at the end — starting the next generation, exiting, rebooting,
   or powering off. A shutdown that stalls now says which phase it stalled in
   instead of going quiet.
+- Added the `drain_report_interval` configuration key, which sets how often a
+  shutdown that is still waiting for tasks to finish reports that they are
+  still running, default `5s`. It is a reporting cadence, not a timeout:
+  shutdown waits for every task however long it takes, and this only decides
+  how often it says so. A value of zero is rejected at startup.
 - Added `rev` support to `scripts/fetch-theme.sh` and `docs/theme.toml` so
   docs-theme can be fetched from a commit SHA for pre-release testing.
   `version` and `rev` are mutually exclusive source selectors: set

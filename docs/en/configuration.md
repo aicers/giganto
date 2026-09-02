@@ -18,6 +18,10 @@
   When shutdown begins the server stops accepting new requests and waits up to
   this duration for already-accepted requests to finish before terminating any
   still in flight, default `30s`
+- `drain_report_interval`: How often a shutdown drain reports that tasks are
+  still running. It is a reporting cadence, not a timeout: the drain waits for
+  every task however long it takes, and this only decides how often a shutdown
+  that is still waiting says so. Must be greater than zero, default `5s`
 - `peer_srv_addr`: Node-to-node communication address, no default
 - `peers`: Connected cluster nodes, no default
 
@@ -40,6 +44,7 @@ ack_transmission = 1024
 
 compression = false
 web_shutdown_timeout = "30s"
+drain_report_interval = "5s"
 ```
 
 ## Cluster Configuration Example

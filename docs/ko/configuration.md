@@ -17,6 +17,10 @@
 - `web_shutdown_timeout`: HTTPS GraphQL 서버의 정상 종료 대기 시간. 종료가
   시작되면 서버는 새 요청 수신을 멈추고, 이미 수락된 요청이 끝날 때까지 이
   시간만큼 기다린 뒤 여전히 진행 중인 요청을 종료합니다. 기본값 `30s`
+- `drain_report_interval`: 종료 과정에서 아직 실행 중인 작업이 남아 있음을
+  보고하는 주기. 타임아웃이 아니라 보고 주기입니다. 배출(drain)은 모든 작업이
+  끝날 때까지 시간에 상관없이 기다리며, 이 값은 아직 기다리는 중이라는 사실을
+  얼마나 자주 알릴지만 결정합니다. 0보다 커야 하며, 기본값 `5s`
 - `peer_srv_addr`: 노드 간 통신 수신 주소, 기본값 없음
 - `peers`: (클러스터) 연동 노드 목록, 기본값 없음
 
@@ -39,6 +43,7 @@ ack_transmission = 1024
 
 compression = false
 web_shutdown_timeout = "30s"
+drain_report_interval = "5s"
 ```
 
 ## 클러스터 설정 예시

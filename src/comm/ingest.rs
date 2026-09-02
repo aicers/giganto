@@ -25,7 +25,7 @@ pub mod implement;
 mod tests;
 
 use std::sync::OnceLock;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use generation::SequenceGenerator;
@@ -57,7 +57,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use x509_parser::nom::AsBytes;
 
-use crate::cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report};
+use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::publish::send_direct_stream;
 use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
 use crate::datetime::DateTime;
@@ -117,6 +117,10 @@ impl Server {
 
     /// Binds the ingest listener and serves it until `token` is cancelled.
     ///
+    /// `drain_report_interval` is the process-wide drain reporting cadence,
+    /// resolved from the settings where the generation starts and handed down
+    /// unchanged; ingest has no cadence of its own.
+    ///
     /// # Errors
     ///
     /// Returns an error if the listener cannot be bound, if the ingest task
@@ -134,6 +138,7 @@ impl Server {
         ack_transmission_cnt: u16,
         tls_watch: TlsWatch,
         token: CancellationToken,
+        drain_report_interval: Duration,
     ) -> Result<()> {
         self.bind()
             .context("failed to bind the ingest listener")?
@@ -147,6 +152,7 @@ impl Server {
                 ack_transmission_cnt,
                 tls_watch,
                 token,
+                drain_report_interval,
             )
             .await
     }
@@ -188,6 +194,7 @@ impl BoundServer {
         ack_transmission_cnt: u16,
         mut tls_watch: TlsWatch,
         token: CancellationToken,
+        drain_report_interval: Duration,
     ) -> Result<()> {
         let local_addr = self.local_addr();
         let endpoint = self.endpoint;
@@ -308,7 +315,14 @@ impl BoundServer {
             }
         }
 
-        shutdown_ingest(&tracker, &endpoint, sensor_state_handle, tx).await
+        shutdown_ingest(
+            &tracker,
+            &endpoint,
+            sensor_state_handle,
+            tx,
+            drain_report_interval,
+        )
+        .await
     }
 }
 
@@ -331,6 +345,7 @@ async fn shutdown_ingest(
     endpoint: &Endpoint,
     sensor_state_handle: JoinHandle<Result<()>>,
     tx: Sender<SensorInfo>,
+    drain_report_interval: Duration,
 ) -> Result<()> {
     // Admission rejection, the half the accept loop cannot do on its own:
     // a closed tracker turns away every connection and stream handler a
@@ -349,7 +364,7 @@ async fn shutdown_ingest(
     // `drain_with_report` closes and cancels again, both idempotent. Its
     // error is captured rather than propagated on the spot, because it means
     // the tracker is empty and the teardown below still has to run.
-    let drained = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, INGEST_DRAIN_LABEL)
+    let drained = drain_with_report(tracker, drain_report_interval, INGEST_DRAIN_LABEL)
         .await
         .context("failed to drain the ingest task tracker");
 

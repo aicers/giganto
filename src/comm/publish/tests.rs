@@ -2753,6 +2753,12 @@ mod fixtures {
     /// How long a cancelled publish entry task is given to drain and return.
     pub(super) const SERVER_SHUTDOWN_TIMEOUT: StdDuration = StdDuration::from_secs(10);
 
+    /// The drain reporting cadence a test publish server is started with,
+    /// standing in for the one a generation resolves from its settings. No
+    /// test here waits a round out over a live server, so the value only has
+    /// to be non-zero.
+    pub(super) const TEST_DRAIN_REPORT_INTERVAL: StdDuration = StdDuration::from_secs(5);
+
     /// Binds the production publish listener and runs it under a cancellation
     /// token.
     ///
@@ -2784,6 +2790,7 @@ mod fixtures {
             peer_idents,
             tls_watch,
             token.clone(),
+            TEST_DRAIN_REPORT_INTERVAL,
         ));
 
         (local_addr, ServerHandle { token, handle })
@@ -7654,14 +7661,14 @@ mod shutdown {
     use tokio_util::sync::CancellationToken;
 
     use super::fixtures::{
-        LogCapture, SERVER_SHUTDOWN_TIMEOUT, TestClient, TestHarness, assert_log_contains,
-        build_filter_for_sensor, build_ingest_sensors, build_peer_idents, build_peers_for_sensor,
-        build_range_request, build_test_certs, build_test_tls_watch, init_client, init_crypto,
-        open_range_stream, recv_with_timeout, registered_target_sensors, setup_test_harness,
-        spawn_server, start_log_capture, start_semi_supervised_subscription,
+        LogCapture, SERVER_SHUTDOWN_TIMEOUT, TEST_DRAIN_REPORT_INTERVAL, TestClient, TestHarness,
+        assert_log_contains, build_filter_for_sensor, build_ingest_sensors, build_peer_idents,
+        build_peers_for_sensor, build_range_request, build_test_certs, build_test_tls_watch,
+        init_client, init_crypto, open_range_stream, recv_with_timeout, registered_target_sensors,
+        setup_test_harness, spawn_server, start_log_capture, start_semi_supervised_subscription,
     };
     use super::{NODE1, NODE2, PROTOCOL_VERSION, SENSOR_SEMI_SUPERVISED_ONE};
-    use crate::cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report};
+    use crate::cancellation::{TaskTracker, drain_with_report};
     use crate::comm::publish::{
         PUBLISH_DRAIN_LABEL, PUBLISH_VERSION_REQ, Server, shutdown_publish,
     };
@@ -7710,6 +7717,7 @@ mod shutdown {
                 peer_idents,
                 build_test_tls_watch(&certs),
                 CancellationToken::new(),
+                TEST_DRAIN_REPORT_INTERVAL,
             )
             .await
             .expect_err("a publish listener that cannot bind must report it");
@@ -8706,13 +8714,15 @@ mod shutdown {
 
         let drain = tokio::spawn({
             let tracker = tracker.clone();
-            async move { drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PUBLISH_DRAIN_LABEL).await }
+            async move {
+                drain_with_report(&tracker, TEST_DRAIN_REPORT_INTERVAL, PUBLISH_DRAIN_LABEL).await
+            }
         });
 
         // Virtual time advances only while every task is idle, so this lets
         // exactly two rounds expire and releases the straggler while the third
         // is in flight. Nothing waits out a real interval.
-        tokio::time::sleep(DRAIN_REPORT_INTERVAL * 2 + DRAIN_REPORT_INTERVAL / 2).await;
+        tokio::time::sleep(TEST_DRAIN_REPORT_INTERVAL * 2 + TEST_DRAIN_REPORT_INTERVAL / 2).await;
         release_tx
             .send(())
             .expect("the drain should still be waiting on the straggler");
@@ -9385,7 +9395,8 @@ mod shutdown {
         let tail = tokio::spawn({
             let tracker = tracker.clone();
             async move {
-                let result = shutdown_publish(&tracker, &endpoint).await;
+                let result =
+                    shutdown_publish(&tracker, &endpoint, TEST_DRAIN_REPORT_INTERVAL).await;
                 (result, endpoint)
             }
         });
@@ -9441,7 +9452,9 @@ mod shutdown {
     fn publish_run_ends_in_the_shutdown_tail() {
         let source = include_str!("../publish.rs");
         assert!(
-            source.contains("shutdown_publish(&tracker, &endpoint).await\n    }"),
+            source.contains(
+                "shutdown_publish(&tracker, &endpoint, drain_report_interval).await\n    }"
+            ),
             "`run` should end in one unconditional call to `shutdown_publish`"
         );
     }

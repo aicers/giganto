@@ -30,7 +30,7 @@ use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
 use crate::{
-    cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report},
+    cancellation::{TaskTracker, drain_with_report},
     comm::IngestSensors,
     graphql::status::{
         CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR, TomlPeers, insert_toml_peers,
@@ -203,6 +203,10 @@ impl Peer {
     /// Serves the peer subsystem until `token` is cancelled, then drains
     /// every task it admitted.
     ///
+    /// `drain_report_interval` is the process-wide drain reporting cadence,
+    /// resolved from the settings where the generation starts and handed down
+    /// unchanged; peer has no cadence of its own.
+    ///
     /// # Errors
     ///
     /// Returns an error if either endpoint cannot be created, if the
@@ -218,6 +222,7 @@ impl Peer {
         config_path: String,
         tls_watch: TlsWatch,
         token: CancellationToken,
+        drain_report_interval: Duration,
     ) -> Result<()> {
         self.run_with_ready(
             ingest_sensors,
@@ -227,6 +232,7 @@ impl Peer {
             config_path,
             tls_watch,
             token,
+            drain_report_interval,
             None,
         )
         .await
@@ -258,6 +264,7 @@ impl Peer {
         config_path: String,
         mut tls_watch: TlsWatch,
         token: CancellationToken,
+        drain_report_interval: Duration,
         ready: Option<oneshot::Sender<(SocketAddr, SharedClientConfig, Sender<PeerIdentity>)>>,
     ) -> Result<()> {
         let server_endpoint = Endpoint::server(self.server_config, self.local_address)
@@ -408,6 +415,7 @@ impl Peer {
             &client_endpoint,
             peer_conn_info,
             &mut receiver,
+            drain_report_interval,
         )
         .await
     }
@@ -436,6 +444,7 @@ async fn shutdown_peer(
     client_endpoint: &Endpoint,
     peer_conn_info: PeerConns,
     receiver: &mut Receiver<PeerIdentity>,
+    drain_report_interval: Duration,
 ) -> Result<()> {
     // Admission rejection, the half leaving the accept loop cannot do on
     // its own: a closed tracker turns away every request handler and
@@ -480,7 +489,7 @@ async fn shutdown_peer(
 
     // Same policy as the top level: report every round and keep waiting.
     // `drain_with_report` closes and cancels again, both idempotent.
-    drain_with_report(tracker, DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL)
+    drain_with_report(tracker, drain_report_interval, PEER_DRAIN_LABEL)
         .await
         .context("failed to drain the peer task tracker")?;
 
@@ -1441,6 +1450,11 @@ pub mod tests {
         };
 
         pub(super) const PROTOCOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+        /// The drain reporting cadence peer tests hand to the entry points
+        /// and to [`drain_with_report`], standing in for the one a generation
+        /// resolves from its settings. No test here waits a full round out,
+        /// so the value only has to be non-zero.
+        pub(super) const TEST_DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
         pub(super) const TEST_TIMEOUT: Duration = Duration::from_secs(10);
         /// Caps one dial attempt (QUIC connect + protocol handshake).
         /// Short enough that a genuine server hang fails fast across all
@@ -2045,6 +2059,7 @@ pub mod tests {
                 config_path,
                 tls_watch,
                 token,
+                TEST_DRAIN_REPORT_INTERVAL,
                 Some(ready),
             )
             .await
@@ -3660,6 +3675,7 @@ pub mod tests {
                 "missing-config.toml".to_string(),
                 tls_watch,
                 CancellationToken::new(),
+                TEST_DRAIN_REPORT_INTERVAL,
             )
             .await
             .unwrap_err();
@@ -4071,6 +4087,7 @@ pub mod tests {
                 config_path,
                 tls_watch,
                 token,
+                TEST_DRAIN_REPORT_INTERVAL,
                 Some(ready_tx),
             )
             .await
@@ -4161,6 +4178,7 @@ pub mod tests {
             config_path,
             tls_watch,
             token,
+            TEST_DRAIN_REPORT_INTERVAL,
             Some(ready_tx),
         ));
 
@@ -4586,6 +4604,7 @@ pub mod tests {
             config_path,
             tls_watch,
             token,
+            TEST_DRAIN_REPORT_INTERVAL,
             Some(ready_tx),
         ));
 
@@ -4680,6 +4699,7 @@ pub mod tests {
             config_path,
             tls_watch,
             token,
+            TEST_DRAIN_REPORT_INTERVAL,
             Some(ready_tx),
         ));
 
@@ -4748,17 +4768,15 @@ pub mod tests {
             update_to_new_peer_list_with_writer,
         };
         use super::fixtures::{
-            ConnectedPeers, PROTOCOL_VERSION, TEST_TIMEOUT, TempConfig, TestClient,
-            accept_incoming, build_peer_conn_info, build_peer_conn_info_with_sensors,
+            ConnectedPeers, PROTOCOL_VERSION, TEST_DRAIN_REPORT_INTERVAL, TEST_TIMEOUT, TempConfig,
+            TestClient, accept_incoming, build_peer_conn_info, build_peer_conn_info_with_sensors,
             connect_client_server, create_certs, create_node2_certs, init_client, init_crypto,
             init_shared_client_config, peer_identity, peer_info, run_peer_with_ready,
             setup_server_endpoint, setup_server_endpoint_with_certs,
             small_stream_window_client_endpoint, test_connect_name, test_connect_name_node2,
             wait_for_peer_info, with_timeout,
         };
-        use crate::cancellation::{
-            DRAIN_REPORT_INTERVAL, DrainOutcome, TaskTracker, drain_with_report,
-        };
+        use crate::cancellation::{DrainOutcome, TaskTracker, drain_with_report};
         use crate::comm::peer::Peer;
         use crate::server::config_server;
 
@@ -5348,7 +5366,7 @@ pub mod tests {
 
             with_timeout(
                 "peer drain timeout",
-                drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL),
+                drain_with_report(&tracker, TEST_DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL),
             )
             .await
             .expect("the drain should complete once the receive side is closed");
@@ -5732,7 +5750,7 @@ pub mod tests {
 
             with_timeout(
                 "peer drain timeout",
-                drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL),
+                drain_with_report(&tracker, TEST_DRAIN_REPORT_INTERVAL, PEER_DRAIN_LABEL),
             )
             .await
             .expect("the drain should complete even after a panic");
@@ -5795,6 +5813,7 @@ pub mod tests {
                         &client_endpoint,
                         peer_conn_info,
                         &mut receiver,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await;
                     (result, server_endpoint, client_endpoint)
@@ -5897,6 +5916,7 @@ pub mod tests {
                     &client_endpoint,
                     peer_conn_info,
                     &mut receiver,
+                    TEST_DRAIN_REPORT_INTERVAL,
                 ),
             )
             .await
@@ -5930,7 +5950,8 @@ pub mod tests {
             assert!(
                 source.contains(
                     "shutdown_peer(\n            &tracker,\n            &server_endpoint,\n            \
-                     &client_endpoint,\n            peer_conn_info,\n            &mut receiver,\n        )\n        .await\n    }"
+                     &client_endpoint,\n            peer_conn_info,\n            &mut receiver,\n            \
+                     drain_report_interval,\n        )\n        .await\n    }"
                 ),
                 "`run_with_ready` should end in one unconditional call to `shutdown_peer`"
             );

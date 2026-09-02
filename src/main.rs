@@ -41,7 +41,7 @@ use tracing_subscriber::{
 };
 
 use crate::{
-    cancellation::{DRAIN_REPORT_INTERVAL, ObservedHandle, TaskTracker, drain_with_report},
+    cancellation::{ObservedHandle, TaskTracker, drain_with_report},
     comm::{
         new_ingest_sensors, new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors,
         new_stream_direct_channels,
@@ -662,6 +662,11 @@ async fn run_generation(
 
     let web_addr = settings.config.visible.graphql_srv_addr;
     let web_shutdown_timeout = settings.config.web_shutdown_timeout;
+    // Resolved once, here, and handed to every drain this generation performs:
+    // the top-level one, the web PCAP reaper's, and each subsystem's. One
+    // process-wide cadence, so a shutdown reports at one rhythm whichever
+    // tracker is still waiting.
+    let drain_report_interval = settings.config.drain_report_interval;
     let mut web_controller: Option<WebController> = match web::serve(
         schema.clone(),
         web_addr,
@@ -722,6 +727,7 @@ async fn run_generation(
                                 cfg_path,
                                 tls_watch,
                                 token,
+                                drain_report_interval,
                             )
                             .await;
                         if let Err(e) = &result {
@@ -761,6 +767,7 @@ async fn run_generation(
                         peer_idents,
                         tls_watch,
                         token,
+                        drain_report_interval,
                     )
                     .await;
                 // Reported here, the way ingest's and peer's are, rather than
@@ -801,6 +808,7 @@ async fn run_generation(
                         ack_transmission_cnt,
                         tls_watch,
                         token,
+                        drain_report_interval,
                     )
                     .await;
                 // Reported here, the way the peer subsystem reports its own,
@@ -857,6 +865,7 @@ async fn run_generation(
         generation_end,
         &database,
         effects,
+        drain_report_interval,
     )
     .await?;
 
@@ -1336,11 +1345,15 @@ struct GenerationTeardown {
 /// drain, and the retained-handle observation — are folded into one outcome by
 /// [`GenerationHealth::merge`], a monotonic OR, so which phase found it makes
 /// no difference to what is returned.
+///
+/// `drain_report_interval` is the configured cadence both drains report on. It
+/// changes nothing about the order or about how long any phase waits.
 async fn shutdown_generation(
     teardown: GenerationTeardown,
     generation_end: GenerationEnd,
     database: &storage::Database,
     effects: &dyn LifecycleEffects,
+    drain_report_interval: Duration,
 ) -> Result<GenerationHealth> {
     let GenerationTeardown {
         web_controller,
@@ -1360,9 +1373,9 @@ async fn shutdown_generation(
     // nothing but the reaping: a long-running job registered there would
     // serialize the whole of subsystem cancellation behind it, which is why
     // long-running web-origin work goes in the top-level tracker instead.
-    let mut health = drain_web_reaper_tracker(&web_reaper_tracker).await;
+    let mut health = drain_web_reaper_tracker(&web_reaper_tracker, drain_report_interval).await;
     info!("{SHUTDOWN_PHASE}: web reaper drain returned ({generation_end:?})");
-    health = health.merge(drain_top_level_tracker(&top_level_tracker).await);
+    health = health.merge(drain_top_level_tracker(&top_level_tracker, drain_report_interval).await);
     info!("{SHUTDOWN_PHASE}: top-level drain returned ({generation_end:?})");
     for retained in entry_tasks {
         health = health.merge(GenerationHealth::degraded_if(
@@ -1630,9 +1643,16 @@ async fn reload_https_server<S>(
 /// it and to hand the caller a value it has to look at, because a generation
 /// that recovered that way must not end as a silent success.
 ///
+/// `report_interval` is the configured drain reporting cadence, resolved once
+/// where the generation starts. It paces what the drain says while it waits,
+/// nothing about how long it waits.
+///
 /// [`LockPoisonedError`]: cancellation::LockPoisonedError
-async fn drain_top_level_tracker(tracker: &TaskTracker) -> GenerationHealth {
-    if let Err(e) = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, TOP_LEVEL_DRAIN_LABEL).await {
+async fn drain_top_level_tracker(
+    tracker: &TaskTracker,
+    report_interval: Duration,
+) -> GenerationHealth {
+    if let Err(e) = drain_with_report(tracker, report_interval, TOP_LEVEL_DRAIN_LABEL).await {
         error!("shutdown drain could not read the top-level tracker: {e}");
         return GenerationHealth::Degraded;
     }
@@ -1659,9 +1679,15 @@ async fn drain_top_level_tracker(tracker: &TaskTracker) -> GenerationHealth {
 /// is reported is how the drain got there — and, as at the top level, it is
 /// handed back as a value the caller has to look at rather than a log line it
 /// may not read.
-async fn drain_web_reaper_tracker(tracker: &TaskTracker) -> GenerationHealth {
-    if let Err(e) = drain_with_report(tracker, DRAIN_REPORT_INTERVAL, WEB_REAPER_DRAIN_LABEL).await
-    {
+///
+/// `report_interval` is the same configured cadence the top-level drain takes:
+/// one process-wide rhythm, so a shutdown that is waiting sounds the same
+/// whichever tracker it is waiting on.
+async fn drain_web_reaper_tracker(
+    tracker: &TaskTracker,
+    report_interval: Duration,
+) -> GenerationHealth {
+    if let Err(e) = drain_with_report(tracker, report_interval, WEB_REAPER_DRAIN_LABEL).await {
         error!("shutdown drain could not read the web PCAP reaper tracker: {e}");
         return GenerationHealth::Degraded;
     }
@@ -1691,6 +1717,11 @@ mod tests {
     /// have been released. Also virtual time: a loop that fails to make
     /// progress cannot hang the test, it fails it.
     const DRAIN_LOOP_TIMEOUT: Duration = Duration::from_mins(10);
+
+    /// The drain reporting cadence these tests hand to the shutdown path,
+    /// standing in for the one a generation resolves from its settings. No
+    /// test here waits a round out, so the value only has to be non-zero.
+    const TEST_DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
     /// Upper bound on either side of a [`RecordGate`] handover.
     ///
@@ -2374,9 +2405,12 @@ mod tests {
         let (logs, _guard) = capture_logs();
         let tracker = TaskTracker::new();
 
-        let health = tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker(&tracker))
-            .await
-            .expect("an empty tracker should drain on the first round");
+        let health = tokio::time::timeout(
+            DRAIN_LOOP_TIMEOUT,
+            drain_top_level_tracker(&tracker, TEST_DRAIN_REPORT_INTERVAL),
+        )
+        .await
+        .expect("an empty tracker should drain on the first round");
 
         assert_eq!(health, GenerationHealth::Clean);
         assert!(tracker.is_closed());
@@ -2385,6 +2419,99 @@ mod tests {
         assert!(
             output.is_empty(),
             "draining an empty tracker should log nothing, got: {output}"
+        );
+    }
+
+    /// The cadence the configuration file sets is the one the rounds land on.
+    ///
+    /// Resolving `drain_report_interval` and pacing a drain on it are covered
+    /// apart — in `settings` and in `cancellation` — so what is missing between
+    /// them is that the value a generation reads off its settings is what
+    /// reaches the drain. Both durations a generation reads there are
+    /// `Duration`, and either would compile in the other's place, so this loads
+    /// a file that configures a cadence well below `web_shutdown_timeout` and
+    /// drives the wrapper [`shutdown_generation`] calls with what resolves from
+    /// it. Two rounds fit in the span virtual time advances below; neither the
+    /// five-second default nor the web timeout would have produced one.
+    #[tokio::test(start_paused = true)]
+    async fn a_configured_cadence_paces_the_top_level_drain() {
+        use std::fs;
+
+        use tempfile::tempdir;
+
+        /// What the configuration file below sets, written out rather than
+        /// read back off the settings: the span virtual time advances has to
+        /// be the one the file asks for, so that a drain paced on anything
+        /// else — the five-second default, or the web timeout the same file
+        /// sets — reports no round at all and fails the test.
+        const CONFIGURED_CADENCE: Duration = Duration::from_millis(500);
+
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "data_dir = \"{}\"\nexport_dir = \"{}\"\n\
+                 web_shutdown_timeout = \"30s\"\ndrain_report_interval = \"500ms\"\n",
+                dir.path().join("data").display(),
+                dir.path().join("export").display()
+            ),
+        )
+        .expect("write config");
+        let settings =
+            Settings::load(config_path.to_str().expect("config path utf8")).expect("load settings");
+        let report_interval = settings.config.drain_report_interval;
+        assert_eq!(
+            report_interval, CONFIGURED_CADENCE,
+            "a configured drain_report_interval must resolve to what the file sets"
+        );
+
+        let (logs, _guard) = capture_logs();
+        let tracker = TaskTracker::new();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let straggler = tracker
+            .spawn("top-level-straggler", |_token| async move {
+                // Deaf to its token on purpose: what is under test is the
+                // cadence the rounds land on, not the task's cooperation.
+                let _ = release_rx.await;
+            })
+            .expect("register the straggling task");
+
+        let drain = tokio::spawn({
+            let tracker = tracker.clone();
+            async move { drain_top_level_tracker(&tracker, report_interval).await }
+        });
+
+        // Virtual time advances only while every task is idle, so this lets
+        // exactly two configured rounds expire and releases the straggler while
+        // the third is in flight. Nothing waits out a real interval.
+        sleep(CONFIGURED_CADENCE * 2 + CONFIGURED_CADENCE / 2).await;
+        release_tx
+            .send(())
+            .expect("the drain should still be waiting on the straggler");
+
+        let health = tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain)
+            .await
+            .expect("the drain should finish once the straggler returns")
+            .expect("the drain task should not panic");
+
+        assert_eq!(health, GenerationHealth::Clean);
+        straggler
+            .await
+            .expect("the straggler should not have been aborted");
+
+        let output = captured(&logs);
+        assert!(
+            output.contains("shutdown drain round 1: 1 task(s) still pending"),
+            "the first round should land one configured interval in, got: {output}"
+        );
+        assert!(
+            output.contains("shutdown drain round 2: 1 task(s) still pending"),
+            "the second round should land one configured interval later, got: {output}"
+        );
+        assert!(
+            !output.contains("shutdown drain round 3"),
+            "only two rounds fit in the span virtual time advanced, got: {output}"
         );
     }
 
@@ -2410,9 +2537,12 @@ mod tests {
             .expect("current-thread runtime should build");
         let (logs, _guard) = capture_logs();
         let health = runtime.block_on(async {
-            tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_top_level_tracker(&tracker))
-                .await
-                .expect("the wrapper returns once the drain has")
+            tokio::time::timeout(
+                DRAIN_LOOP_TIMEOUT,
+                drain_top_level_tracker(&tracker, TEST_DRAIN_REPORT_INTERVAL),
+            )
+            .await
+            .expect("the wrapper returns once the drain has")
         });
 
         assert_eq!(
@@ -2452,9 +2582,12 @@ mod tests {
             .expect("current-thread runtime should build");
         let (logs, _guard) = capture_logs();
         let health = runtime.block_on(async {
-            tokio::time::timeout(DRAIN_LOOP_TIMEOUT, drain_web_reaper_tracker(&tracker))
-                .await
-                .expect("the wrapper returns once the drain has")
+            tokio::time::timeout(
+                DRAIN_LOOP_TIMEOUT,
+                drain_web_reaper_tracker(&tracker, TEST_DRAIN_REPORT_INTERVAL),
+            )
+            .await
+            .expect("the wrapper returns once the drain has")
         });
 
         assert_eq!(health, GenerationHealth::Degraded);
@@ -2619,6 +2752,7 @@ mod tests {
                     },
                     compression: false,
                     web_shutdown_timeout: Duration::from_secs(30),
+                    drain_report_interval: Duration::from_secs(5),
                 },
                 cfg_path: path_string(&dir.join("config.toml")),
             }
@@ -3620,6 +3754,7 @@ mod tests {
                 GenerationEnd::Reboot,
                 &database,
                 &effects,
+                TEST_DRAIN_REPORT_INTERVAL,
             )
             .await
             .expect("the teardown should not fail");
@@ -3698,6 +3833,7 @@ mod tests {
                 GenerationEnd::ReloadConfig,
                 &database,
                 &effects,
+                TEST_DRAIN_REPORT_INTERVAL,
             )
             .await
             .expect("the teardown should not fail");
@@ -4407,12 +4543,15 @@ mod tests {
                 let effects = RecordingEffects::new();
                 let (logs, guard) = capture_logs();
 
-                let health =
-                    shutdown_generation(empty_teardown(), generation_end, &database, &effects)
-                        .await
-                        .unwrap_or_else(|e| {
-                            panic!("{ending}: the teardown should not fail: {e:#}")
-                        });
+                let health = shutdown_generation(
+                    empty_teardown(),
+                    generation_end,
+                    &database,
+                    &effects,
+                    TEST_DRAIN_REPORT_INTERVAL,
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{ending}: the teardown should not fail: {e:#}"));
                 assert_eq!(
                     health,
                     GenerationHealth::Clean,
@@ -4486,13 +4625,18 @@ mod tests {
                 let effects = RecordingEffects::failing();
                 let (logs, guard) = capture_logs();
 
-                let error =
-                    shutdown_generation(empty_teardown(), generation_end, &database, &effects)
-                        .await
-                        .err()
-                        .unwrap_or_else(|| {
-                            panic!("{ending}: a failed database shutdown should end the teardown")
-                        });
+                let error = shutdown_generation(
+                    empty_teardown(),
+                    generation_end,
+                    &database,
+                    &effects,
+                    TEST_DRAIN_REPORT_INTERVAL,
+                )
+                .await
+                .err()
+                .unwrap_or_else(|| {
+                    panic!("{ending}: a failed database shutdown should end the teardown")
+                });
 
                 assert!(
                     error.to_string().contains(SHUTDOWN_FAILURE),
@@ -4591,6 +4735,7 @@ mod tests {
                         generation_end,
                         &database,
                         &effects,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await
                     .unwrap_or_else(|e| panic!("{case}: the teardown should not fail: {e:#}"));
@@ -4676,6 +4821,7 @@ mod tests {
                 GenerationEnd::Terminate,
                 &database,
                 &effects,
+                TEST_DRAIN_REPORT_INTERVAL,
             )
             .await
             .expect("the teardown should not fail");
@@ -4722,6 +4868,7 @@ mod tests {
                 GenerationEnd::Terminate,
                 &database,
                 &effects,
+                TEST_DRAIN_REPORT_INTERVAL,
             )
             .await
             .expect("the teardown should not fail");
@@ -4762,6 +4909,7 @@ mod tests {
                     generation_end,
                     &database,
                     &effects,
+                    TEST_DRAIN_REPORT_INTERVAL,
                 )
                 .await
                 .unwrap_or_else(|e| panic!("{ending}: the teardown should not fail: {e:#}"));
@@ -4820,6 +4968,7 @@ mod tests {
                 GenerationEnd::Reboot,
                 &database,
                 &effects,
+                TEST_DRAIN_REPORT_INTERVAL,
             )
             .await
             .expect_err("a failed database shutdown should end the teardown");
@@ -4999,6 +5148,7 @@ mod tests {
                             generation_end,
                             &database,
                             &effects,
+                            TEST_DRAIN_REPORT_INTERVAL,
                         )
                         .await
                     }
@@ -5122,6 +5272,7 @@ mod tests {
                         GenerationEnd::Terminate,
                         &database,
                         &effects,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await
                 }
@@ -6081,6 +6232,7 @@ mod tests {
                             generation_end,
                             &database,
                             &effects,
+                            TEST_DRAIN_REPORT_INTERVAL,
                         )
                         .await
                     }
@@ -6203,6 +6355,7 @@ mod tests {
                             generation_end,
                             &database,
                             &effects,
+                            TEST_DRAIN_REPORT_INTERVAL,
                         )
                         .await
                     }
@@ -6368,6 +6521,7 @@ mod tests {
                         GenerationEnd::Terminate,
                         &database,
                         &effects,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await
                 }
@@ -6455,6 +6609,7 @@ mod tests {
                 GenerationEnd::Terminate,
                 &database,
                 &effects,
+                TEST_DRAIN_REPORT_INTERVAL,
             )
             .await
             .expect("the teardown should not fail");
@@ -6544,7 +6699,7 @@ mod tests {
                         if let Err(e) = tracker.close() {
                             error!("failed to close the ingest task tracker: {e}");
                         }
-                        drain_with_report(&tracker, DRAIN_REPORT_INTERVAL, "ingest")
+                        drain_with_report(&tracker, TEST_DRAIN_REPORT_INTERVAL, "ingest")
                             .await
                             .context("failed to drain the ingest task tracker")?;
                         Ok(())
@@ -6575,6 +6730,7 @@ mod tests {
                         GenerationEnd::Terminate,
                         &database,
                         &effects,
+                        TEST_DRAIN_REPORT_INTERVAL,
                     )
                     .await
                 }

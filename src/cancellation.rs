@@ -772,13 +772,6 @@ impl fmt::Debug for TaskTracker {
     }
 }
 
-/// How often a drain that is still waiting reports its progress.
-///
-/// A reporting cadence, not a deadline: the drain is retried until the tracker
-/// is empty, and this only decides how often a shutdown that is waiting says
-/// so. Making it configurable belongs to the settings work in #1569.
-pub const DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
-
 /// Closes and cancels `tracker`, then drains it repeatedly until every tracked
 /// task has returned.
 ///
