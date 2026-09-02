@@ -31,6 +31,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   range deletes. Worker failures, including task panics, are recorded as
   failed jobs, and terminal status writes are retried without repeating data
   deletion.
+- A subsystem entry task that ends on its own now takes the node down with it
+  instead of leaving it serving without that subsystem. Ingest, publish, peer
+  and retention are all observed; whichever ends first names the shutdown, the
+  usual shutdown sequence runs, and the process exits with a failure status so
+  a service manager configured to restart on failure does. A request to stop,
+  reboot or power off still decides the shutdown ahead of an entry task that
+  ended, as does a queued configuration reload, since the next generation is
+  what restarts the subsystem that died.
+- Shutdown now reports every abnormal entry-task outcome as one structured
+  record at `ERROR`, `entry task ended abnormally`, carrying the task's name
+  and id, whether it was observed while the node was serving or read back
+  after the drain, whether it exited early, returned an error, panicked or was
+  cancelled, and how long it had been running. A task that stopped because
+  shutdown cancelled it is reported at `INFO` instead. An abnormal outcome
+  seen while the node was already shutting down no longer disappears into a
+  clean exit: the node finishes its teardown and still reboots or powers off
+  if that was asked for, logs `generation ended degraded`, and then exits with
+  a failure status. A configuration reload is the one ending that still
+  succeeds, since the next generation starts regardless.
 - Shutdown now reports the phase it has reached at `INFO`: the web server
   stopping, the packet-capture reaper finishing, the subsystems draining, the
   entry-task results being read, the database being shut down, and the action

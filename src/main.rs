@@ -30,7 +30,7 @@ use tokio::{
         Notify,
         mpsc::{self},
     },
-    task::{self, JoinHandle},
+    task,
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
@@ -41,7 +41,7 @@ use tracing_subscriber::{
 };
 
 use crate::{
-    cancellation::{DRAIN_REPORT_INTERVAL, TaskTracker, drain_with_report},
+    cancellation::{DRAIN_REPORT_INTERVAL, ObservedHandle, TaskTracker, drain_with_report},
     comm::{
         new_ingest_sensors, new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors,
         new_stream_direct_channels,
@@ -265,16 +265,17 @@ impl LifecycleEffects for HostEffects {
 /// # Errors
 ///
 /// Returns an error if a generation failed, if the store could not be shut
-/// down, if the host refused a reboot or a power-off, or if the ingest entry
-/// task ended on its own.
+/// down, if the host refused a reboot or a power-off, if an entry task ended
+/// on its own, or if a generation ended degraded on an ending other than a
+/// configuration reload.
 async fn run_lifecycle(
     settings: &mut Settings,
     process: &ProcessContext,
     effects: &dyn LifecycleEffects,
 ) -> Result<()> {
     loop {
-        let generation_end = run_generation(settings, process, effects).await?;
-        match act_on_generation_end(generation_end, effects)? {
+        let outcome = run_generation(settings, process, effects).await?;
+        match act_on_generation_end(outcome, effects)? {
             ControlFlow::Continue(()) => {}
             ControlFlow::Break(()) => return Ok(()),
         }
@@ -288,46 +289,79 @@ async fn run_lifecycle(
 /// step of the observable shutdown sequence and the only one that reaches
 /// outside the process. Everything before it is identical for every ending.
 ///
+/// The four steps run in the order written below, and that order is the
+/// contract. The action goes first because the drain proved the tracker empty
+/// and the store was flushed with its background work stopped, so an operator
+/// who asked for a reboot still gets one even though something died on the way
+/// out — the opposite of a failed database shutdown, which suppresses the host
+/// action entirely because there the store's on-disk state is unknown. The two
+/// records that follow are separate lines rather than one, because a returned
+/// error is not itself a log record and a degraded generation whose host
+/// action also failed has two things to say. The error returned is the host
+/// action's: the host did not go down, which is the more actionable of the two.
+///
 /// # Errors
 ///
-/// Returns an error if the host refused the reboot or the power-off, or if the
-/// generation ended because the ingest entry task did: nobody asked for that
-/// one, so the process manager is told the exit was not wanted.
+/// Returns an error if the host refused the reboot or the power-off, if the
+/// generation ended because an entry task did — nobody asked for that one, so
+/// the process manager is told the exit was not wanted — or if the generation
+/// ended degraded on any ending but a configuration reload.
 fn act_on_generation_end(
-    generation_end: GenerationEnd,
+    outcome: GenerationOutcome,
     effects: &dyn LifecycleEffects,
 ) -> Result<ControlFlow<()>> {
-    match generation_end {
+    let GenerationOutcome { ending, health } = outcome;
+
+    let action = match ending {
         GenerationEnd::ReloadConfig => {
-            info!(
-                "{SHUTDOWN_PHASE}: final action, starting the next generation ({generation_end:?})"
-            );
-            Ok(ControlFlow::Continue(()))
+            info!("{SHUTDOWN_PHASE}: final action, starting the next generation ({ending:?})");
+            Ok(())
         }
         GenerationEnd::Terminate => {
-            info!(
-                "{SHUTDOWN_PHASE}: final action, returning from the lifecycle ({generation_end:?})"
-            );
-            Ok(ControlFlow::Break(()))
+            info!("{SHUTDOWN_PHASE}: final action, returning from the lifecycle ({ending:?})");
+            Ok(())
         }
         GenerationEnd::Reboot => {
-            info!("{SHUTDOWN_PHASE}: final action, rebooting the host ({generation_end:?})");
-            effects.reboot()?;
-            Ok(ControlFlow::Break(()))
+            info!("{SHUTDOWN_PHASE}: final action, rebooting the host ({ending:?})");
+            effects.reboot()
         }
         GenerationEnd::PowerOff => {
-            info!("{SHUTDOWN_PHASE}: final action, powering the host off ({generation_end:?})");
-            effects.power_off()?;
-            Ok(ControlFlow::Break(()))
+            info!("{SHUTDOWN_PHASE}: final action, powering the host off ({ending:?})");
+            effects.power_off()
         }
         // The generation has already drained and closed itself down; what is
         // left is to tell the process manager that this exit was not asked
         // for, so a unit configured to restart on failure does. What failed
-        // was reported where it happened.
-        GenerationEnd::IngestExited => {
-            info!("{SHUTDOWN_PHASE}: final action, failing the lifecycle ({generation_end:?})");
-            Err(anyhow!("the ingest subsystem ended before the daemon did"))
+        // was reported at the shutdown coordination boundary.
+        GenerationEnd::EntryTaskExited(_) => {
+            info!("{SHUTDOWN_PHASE}: final action, failing the lifecycle ({ending:?})");
+            Ok(())
         }
+    };
+
+    let degraded = health == GenerationHealth::Degraded;
+    if degraded {
+        error!(ending = ?ending, "generation ended degraded");
+    }
+    if let Err(e) = &action {
+        let cause = format!("{e:#}");
+        error!(ending = ?ending, error = %cause, "generation end action failed");
+    }
+    action?;
+
+    match ending {
+        GenerationEnd::EntryTaskExited(subsystem) => Err(anyhow!(
+            "the {subsystem} subsystem ended before the daemon did"
+        )),
+        // The one row a degradation does not fail. A handle that came back
+        // badly is a task that ended, and ending is what gives up what the
+        // next generation needs: the listeners are unbound, the drain reported
+        // the tracker empty, the store was shut down, and the last `Database`
+        // clone goes as the generation returns. So the handoff holds, and the
+        // failure is logged rather than propagated.
+        GenerationEnd::ReloadConfig => Ok(ControlFlow::Continue(())),
+        _ if degraded => Err(anyhow!("the generation ended degraded ({ending:?})")),
+        _ => Ok(ControlFlow::Break(())),
     }
 }
 
@@ -393,6 +427,33 @@ impl ProcessContext {
     }
 }
 
+/// The subsystems whose entry tasks a generation observes.
+///
+/// One per long-running subsystem registered in the generation's top-level
+/// tracker and watched by [`wait_for_generation_end`]. The order the variants
+/// are written in is the order that wait polls them and the order the teardown
+/// reads back what it was handed, so two subsystems that die together always
+/// produce the same choice of which one the generation names as its ending.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Subsystem {
+    Ingest,
+    Publish,
+    Peer,
+    Retention,
+}
+
+impl std::fmt::Display for Subsystem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Ingest => "ingest",
+            Self::Publish => "publish",
+            Self::Peer => "peer",
+            Self::Retention => "retention",
+        };
+        f.write_str(name)
+    }
+}
+
 /// Why a generation ended.
 ///
 /// Four of these are intents that arrive from outside; the fifth is a
@@ -410,19 +471,48 @@ enum GenerationEnd {
     Reboot,
     /// The host was asked to power off.
     PowerOff,
-    /// The ingest entry task ended while the generation was still serving.
+    /// This subsystem's entry task ended while the generation was still
+    /// serving.
     ///
     /// Nobody asked for this one. An entry task returns on its own only when
     /// it cannot do its job — a listener whose address is taken — or when it
-    /// panics, and a node that keeps serving GraphQL and publish while
-    /// ingesting nothing is not a node anyone asked for either. So the early
-    /// exit ends the generation through the same shutdown sequence as the
-    /// intents, and the lifecycle reports it as a failure rather than
-    /// returning cleanly. Ingest is the only entry task the tracker watches
-    /// for now: peer and publish are registered in the tracker but their
-    /// handles are not kept, so an early exit of either goes unwatched until
-    /// the entry-task supervision issue retains them.
-    IngestExited,
+    /// panics, and a node that keeps serving everything but the subsystem that
+    /// died is not a node anyone asked for either. So the early exit ends the
+    /// generation through the same shutdown sequence as the intents, and the
+    /// lifecycle reports it as a failure rather than returning cleanly.
+    EntryTaskExited(Subsystem),
+}
+
+/// Whether a generation reached its end with everything it observed
+/// accounted for.
+///
+/// Degraded is an internal outcome of one generation, never a lifecycle return
+/// value: what it means for the process is decided by
+/// [`act_on_generation_end`], from the ending it is paired with. Nothing here
+/// names what degraded the generation, so a second producer can raise it on
+/// the same mapping.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenerationHealth {
+    /// Everything the generation observed was accounted for.
+    Clean,
+    /// Something the generation observed ended abnormally. The rest of the
+    /// teardown ran all the same, and the ending's action still stands.
+    Degraded,
+}
+
+/// What one generation ended as.
+///
+/// The ending on its own could not carry a degradation: an `Err` out of
+/// [`run_generation`] short-circuits on `?` and is exactly what makes the
+/// lifecycle skip the final action, and a degraded generation must still take
+/// it. So a degraded outcome is a value, and `Err` keeps its one meaning —
+/// the failures that suppress the action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GenerationOutcome {
+    /// Why the generation ended.
+    ending: GenerationEnd,
+    /// Whether it got there with everything accounted for.
+    health: GenerationHealth,
 }
 
 /// Runs one generation and reports why it ended.
@@ -436,20 +526,22 @@ enum GenerationEnd {
 /// a handle surviving into the next generation would fail its `Database::open`.
 ///
 /// [`run_lifecycle`] keeps only the loop and acts on the returned
-/// [`GenerationEnd`].
+/// [`GenerationOutcome`].
 ///
 /// # Errors
 ///
 /// Returns an error if the data directory fails compression validation or
 /// migration, if the database cannot be opened, if the node certificate
 /// carries no usable node name, if the peer subsystem cannot be built, or if
-/// the teardown could not shut the store down.
+/// the teardown could not shut the store down. A generation that ended
+/// degraded is not one of them: that is carried out as a value, because the
+/// ending's final action must still be taken.
 #[allow(clippy::too_many_lines)]
 async fn run_generation(
     settings: &mut Settings,
     process: &ProcessContext,
     effects: &dyn LifecycleEffects,
-) -> Result<GenerationEnd> {
+) -> Result<GenerationOutcome> {
     info!("Data store started");
     let (db_path, db_options) = db_path_and_option(
         &settings.config.visible.data_dir,
@@ -568,8 +660,8 @@ async fn run_generation(
     // here is what says how it ended. Its child token reaches it through the
     // closure argument, which is the only thing its shutdown travels on.
     let retention = settings.config.visible.retention;
-    let retain_task_handle: JoinHandle<Result<()>> = top_level_tracker
-        .spawn("retention", {
+    let retain_task_handle: ObservedHandle<Result<()>> = top_level_tracker
+        .spawn_observed("retention", {
             let db = database.clone();
             let deletion_coordination = Arc::clone(&deletion_coordination);
             move |cancel| run_retention(ONE_DAY, retention, db, cancel, deletion_coordination)
@@ -578,56 +670,55 @@ async fn run_generation(
 
     // Peer is tracked the way retention and ingest are: the tracker hands it
     // the generation's cancellation token and waits for its entry task in the
-    // drain below. Unlike theirs, its handle is dropped. Peer reports its own
-    // failure where it happens and the tracker's registry guard names a panic
-    // or an abort, so the only outcome a retained handle would add is a normal
-    // early exit, and supervising that belongs to the issue that retains and
-    // reports on every entry task's handle.
-    if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
-        let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
-        let notify_sensor = notify_sensor_change
-            .clone()
-            .expect("peer notify exists when peer server is configured");
-        top_level_tracker
-            .spawn("peer", {
-                let ingest_sensors = ingest_sensors.clone();
-                let peers = peers.clone();
-                let peer_idents = peer_idents.clone();
-                let cfg_path = settings.cfg_path.clone();
-                let tls_watch = process.tls_watch.clone();
-                move |token| async move {
-                    let result = peer_server
-                        .run(
-                            ingest_sensors,
-                            peers,
-                            peer_idents,
-                            notify_sensor,
-                            cfg_path,
-                            tls_watch,
-                            token,
-                        )
-                        .await;
-                    if let Err(e) = &result {
-                        error!("Peer subsystem terminated unexpectedly: {e:#}");
+    // drain below. Its handle is kept so the wait below watches it and the
+    // teardown reads back whatever it was not handed — the peer subsystem
+    // reports its own `Err` where it happens, but an early return and a panic
+    // are outcomes only the handle carries. It is the one entry task that may
+    // be absent, because peer runs only when an address is configured for it.
+    let peer_task_handle: Option<ObservedHandle<Result<()>>> =
+        if let Some(peer_srv_addr) = settings.config.peer_srv_addr {
+            let peer_server = peer::Peer::new(peer_srv_addr, &certs.clone(), tls.generation)?;
+            let notify_sensor = notify_sensor_change
+                .clone()
+                .expect("peer notify exists when peer server is configured");
+            let handle = top_level_tracker
+                .spawn_observed("peer", {
+                    let ingest_sensors = ingest_sensors.clone();
+                    let peers = peers.clone();
+                    let peer_idents = peer_idents.clone();
+                    let cfg_path = settings.cfg_path.clone();
+                    let tls_watch = process.tls_watch.clone();
+                    move |token| async move {
+                        let result = peer_server
+                            .run(
+                                ingest_sensors,
+                                peers,
+                                peer_idents,
+                                notify_sensor,
+                                cfg_path,
+                                tls_watch,
+                                token,
+                            )
+                            .await;
+                        if let Err(e) = &result {
+                            error!("Peer subsystem terminated unexpectedly: {e:#}");
+                        }
+                        result
                     }
-                    result
-                }
-            })
-            .context("failed to register the peer entry task")?;
-    }
+                })
+                .context("failed to register the peer entry task")?;
+            Some(handle)
+        } else {
+            None
+        };
 
-    // Publish is tracked the way peer is: the tracker hands it the
-    // generation's cancellation token and waits for its entry task in the
-    // drain below, and its handle is dropped. Publish reports its own failure
-    // where it happens and the tracker's registry guard names a panic or an
-    // abort, so the only outcome a retained handle would add is a normal early
-    // exit. Acting on that — a node that keeps serving without publish —
-    // belongs to the entry-task supervision issue, which is also why no
-    // `GenerationEnd` variant watches this task the way one watches ingest.
+    // Publish is tracked the way peer is, and its handle is kept for the same
+    // reason: the wait below ends the generation when this task ends, and the
+    // teardown reads the handle back when something else ended it first.
     let publish_server =
         publish::Server::new(settings.config.visible.publish_srv_addr, &certs.clone());
-    top_level_tracker
-        .spawn("publish", {
+    let publish_task_handle = top_level_tracker
+        .spawn_observed("publish", {
             let db = database.clone();
             let pcap_sensors = pcap_sensors.clone();
             let stream_direct_channels = stream_direct_channels.clone();
@@ -664,13 +755,14 @@ async fn run_generation(
         ingest::Server::new(settings.config.visible.ingest_srv_addr, &certs.clone());
     // Ingest is tracked the way retention is: the tracker hands it the
     // generation's cancellation token, and the drain below waits for the entry
-    // task to return before the generation lets go of the database handle. The handle is kept because the tracker cannot stand in
-    // for it: the wait below watches it so an entry task that ends on its own
-    // takes the generation down with it rather than leaving a node serving
-    // everything but ingest, and reading it back after the drain adds the
-    // outcome the drain cannot see — a panic as a `JoinError`.
-    let mut ingest_task_handle = top_level_tracker
-        .spawn("ingest", {
+    // task to return before the generation lets go of the database handle. The
+    // handle is kept because the tracker cannot stand in for it: the wait below
+    // watches it so an entry task that ends on its own takes the generation
+    // down with it rather than leaving a node serving everything but ingest,
+    // and reading it back after the drain adds the outcome the drain cannot
+    // see — a panic as a `JoinError`.
+    let ingest_task_handle = top_level_tracker
+        .spawn_observed("ingest", {
             let db = database.clone();
             let tls_watch = process.tls_watch.clone();
             move |token| async move {
@@ -705,34 +797,38 @@ async fn run_generation(
         notify_reboot,
         notify_power_off,
     };
+    let mut entry_tasks = EntryTasks {
+        ingest: Some(ingest_task_handle),
+        publish: Some(publish_task_handle),
+        peer: peer_task_handle,
+        retention: Some(retain_task_handle),
+    };
     let generation_end = wait_for_generation_end(
         settings,
         process,
         &mut intents,
-        &mut ingest_task_handle,
+        &mut entry_tasks,
         &mut web_controller,
         &schema,
         web_addr,
         web_shutdown_timeout,
     )
     .await;
+    // Read here rather than inside the teardown: what an `Ok(())` means
+    // depends on whether the handle had already finished at the moment the
+    // wait ended, and the drain that runs later is what cancels the rest.
+    let retained_entry_tasks = entry_tasks.into_retained();
 
     // Every ending is shut down the same way, so the whole sequence is one
     // call rather than a step per arm. Nothing is cancelled here: the only
     // cancellation of the top-level tracker is the close-then-cancel inside
     // the drain, so the tracker is never left cancelled but still admitting.
-    shutdown_generation(
+    let health = shutdown_generation(
         GenerationTeardown {
             web_controller: web_controller.take(),
             web_reaper_tracker,
             top_level_tracker,
-            retain_task_handle,
-            // Handed over only when the wait ended on something else. If the
-            // entry task is what ended it, its arm has already read the handle
-            // back and reported it, and a `JoinHandle` polled again after it
-            // has completed is not a handle that resolves a second time.
-            ingest_task_handle: (generation_end != GenerationEnd::IngestExited)
-                .then_some(ingest_task_handle),
+            entry_tasks: retained_entry_tasks,
         },
         generation_end,
         &database,
@@ -745,10 +841,13 @@ async fn run_generation(
     // clones this generation still holds — its own handle, the schema's, the
     // listeners' — go here. That guarantee is exactly as wide as the tracker's
     // registry, and an accepted customer deletion is inside it: the resolver
-    // registers its supervisor on `top_level_tracker`, so the drain above has
+    // registers its observer on `top_level_tracker`, so the drain above has
     // already waited for it. Work that never entered the registry could still
     // hold a clone past this point.
-    Ok(generation_end)
+    Ok(GenerationOutcome {
+        ending: generation_end,
+        health,
+    })
 }
 
 /// The three shutdown intents a generation owns.
@@ -767,20 +866,253 @@ struct GenerationIntents {
     notify_power_off: Arc<Notify>,
 }
 
+/// The four entry tasks a generation observes, each until something reads
+/// its handle back.
+///
+/// A slot goes to `None` two ways: peer starts there when the subsystem is not
+/// configured, and any of the four is taken out by the arm that read it. What
+/// is left when the wait returns is exactly what the teardown is handed, so
+/// nothing that ended is dropped unobserved and nothing already read is polled
+/// twice.
+struct EntryTasks {
+    ingest: Option<ObservedHandle<Result<()>>>,
+    publish: Option<ObservedHandle<Result<()>>>,
+    peer: Option<ObservedHandle<Result<()>>>,
+    retention: Option<ObservedHandle<Result<()>>>,
+}
+
+impl EntryTasks {
+    /// The slot one subsystem's handle lives in.
+    fn slot(&mut self, subsystem: Subsystem) -> &mut Option<ObservedHandle<Result<()>>> {
+        match subsystem {
+            Subsystem::Ingest => &mut self.ingest,
+            Subsystem::Publish => &mut self.publish,
+            Subsystem::Peer => &mut self.peer,
+            Subsystem::Retention => &mut self.retention,
+        }
+    }
+
+    /// Everything the wait did not read, in the order the teardown reads it.
+    ///
+    /// Each handle carries whether it had already finished at this moment —
+    /// the moment the wait returned. Cancellation happens inside the drain, so
+    /// a handle that was finished already cannot have finished because of it,
+    /// and the `Ok(())` it carries is an early exit rather than a clean stop.
+    fn into_retained(self) -> Vec<RetainedEntryTask> {
+        [self.ingest, self.publish, self.peer, self.retention]
+            .into_iter()
+            .flatten()
+            .map(|handle| RetainedEntryTask {
+                already_finished: handle.is_finished(),
+                handle,
+            })
+            .collect()
+    }
+}
+
+/// One entry task handed to the teardown, and what the wait knew about it.
+struct RetainedEntryTask {
+    handle: ObservedHandle<Result<()>>,
+    /// Whether the task had already finished when the wait ended.
+    already_finished: bool,
+}
+
+/// What awaiting an entry task's handle yields.
+type EntryTaskOutput = std::result::Result<Result<()>, task::JoinError>;
+
+/// Where in the shutdown an entry task's outcome was observed.
+///
+/// Two and no others: the generation was still serving, or the handle was read
+/// back after the drain.
+///
+/// Only the second carries whether the handle had already finished when the
+/// wait ended, because that is the only phase the answer changes anything in:
+/// a task read by its own arm ended before anything cancelled it, so an
+/// `Ok(())` observed while serving is an early exit whatever else is true.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObservationPhase {
+    Serving,
+    AfterDrain { already_finished: bool },
+}
+
+impl ObservationPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Serving => "serving",
+            Self::AfterDrain { .. } => "after_drain",
+        }
+    }
+
+    /// Whether an `Ok(())` observed in this phase can only have come from the
+    /// drain's cancellation.
+    ///
+    /// Cancellation happens inside the drain, so a handle that was already
+    /// finished when the wait ended cannot have finished because of it.
+    fn stopped_on_cancellation(self) -> bool {
+        matches!(
+            self,
+            Self::AfterDrain {
+                already_finished: false
+            }
+        )
+    }
+}
+
+/// Awaits an entry task's handle, or never resolves when there is none.
+///
+/// Peer runs only when an address is configured for it, and the `select!` arm
+/// that watches it has to be written either way, so the absent case is a
+/// future that stays pending rather than a fabricated handle.
+async fn watch_entry_task(handle: Option<&mut ObservedHandle<Result<()>>>) -> EntryTaskOutput {
+    match handle {
+        Some(handle) => handle.await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Reports one entry task's outcome, and says whether it was abnormal.
+///
+/// This is the single report at the shutdown coordination boundary. It does
+/// not replace the two others that exist for their own reasons — what a
+/// subsystem logs where its own failure happens, and the tracker registration
+/// guard's abnormal-completion warning — so an operator sees the same failure
+/// from more than one angle, which is intended.
+///
+/// Both shapes carry all five fields, always: the abnormal one at `error!` and
+/// a task that was cancelled and stopped at `info!`. Only a cause is optional,
+/// because an early exit and a clean stop have none. What tells a clean stop
+/// from an early exit is the phase, which carries at
+/// [`AfterDrain`](ObservationPhase::AfterDrain) whether the handle had already
+/// finished when the wait ended.
+///
+/// One window is left. A task that finishes on its own between the wait
+/// returning and the drain cancelling — the span covering web shutdown, the
+/// web reaper drain and the tracker's own `close` — is still read as clean.
+/// Closing it would need a completion time stamped inside the task itself.
+fn report_entry_task_outcome(
+    handle: &ObservedHandle<Result<()>>,
+    phase: ObservationPhase,
+    outcome: &EntryTaskOutput,
+) -> bool {
+    // Recorded with `?` so a dynamic name and a rendered duration cannot break
+    // the line-oriented log format, the way the registration guard records
+    // the same two.
+    let name = handle.name();
+    let id = handle.id();
+    let age = handle.age();
+    // The one shape an `Ok(())` can be normal in: a handle read back after the
+    // drain, from a task that was still running when the wait ended and so can
+    // only have stopped because the drain cancelled it.
+    let stopped_on_cancellation = phase.stopped_on_cancellation();
+    let phase = phase.as_str();
+
+    match outcome {
+        Ok(Ok(())) if stopped_on_cancellation => {
+            info!(
+                name = ?name,
+                id,
+                phase,
+                outcome = "clean",
+                age = ?age,
+                "entry task stopped"
+            );
+            false
+        }
+        Ok(Ok(())) => {
+            error!(
+                name = ?name,
+                id,
+                phase,
+                outcome = "early_exit",
+                age = ?age,
+                "entry task ended abnormally"
+            );
+            true
+        }
+        Ok(Err(e)) => {
+            let cause = format!("{e:#}");
+            error!(
+                name = ?name,
+                id,
+                phase,
+                outcome = "error",
+                age = ?age,
+                error = %cause,
+                "entry task ended abnormally"
+            );
+            true
+        }
+        Err(e) if e.is_panic() => {
+            error!(
+                name = ?name,
+                id,
+                phase,
+                outcome = "panic",
+                age = ?age,
+                error = %e,
+                "entry task ended abnormally"
+            );
+            true
+        }
+        Err(e) => {
+            error!(
+                name = ?name,
+                id,
+                phase,
+                outcome = "cancelled",
+                age = ?age,
+                error = %e,
+                "entry task ended abnormally"
+            );
+            true
+        }
+    }
+}
+
+/// Takes the handle whose arm ended the wait, reports it, and names the
+/// ending.
+///
+/// The handle is taken rather than left behind: it has been read, and a
+/// `JoinHandle` polled again after it has completed is not a handle that
+/// resolves a second time. Everything still in [`EntryTasks`] goes to the
+/// teardown.
+fn end_on_entry_task(
+    entry_tasks: &mut EntryTasks,
+    subsystem: Subsystem,
+    outcome: &EntryTaskOutput,
+) -> GenerationEnd {
+    let handle = entry_tasks
+        .slot(subsystem)
+        .take()
+        .expect("the arm that ended the wait polled a handle that was there");
+    // The report's answer is not needed here: an arm that ended the wait ended
+    // it on an outcome that is abnormal by definition, and the
+    // `EntryTaskExited` returned below is what carries that into the lifecycle
+    // result.
+    let _abnormal = report_entry_task_outcome(&handle, ObservationPhase::Serving, outcome);
+    GenerationEnd::EntryTaskExited(subsystem)
+}
+
 /// Serves until a shutdown intent arrives or a subsystem entry task ends, and
 /// reports which it was.
 ///
-/// This is the whole of a generation's steady state. Five of the six arms end
-/// the generation; the sixth, a TLS reload, rebinds the HTTPS server in place
-/// and keeps serving, which is why the wait is a loop rather than a single
-/// `select!`. A configuration reload that cannot be persisted also keeps
-/// serving, on the configuration the generation started with.
+/// This is the whole of a generation's steady state. Every arm but two ends
+/// the generation; a TLS reload rebinds the HTTPS server in place and keeps
+/// serving, which is why the wait is a loop rather than a single `select!`,
+/// and a configuration reload that cannot be persisted also keeps serving, on
+/// the configuration the generation started with.
 ///
-/// The ingest arm is why the entry task's handle is borrowed here rather than
-/// only read back after the drain: an entry task that ends on its own is an
-/// event the generation has to act on, not one it can discover at shutdown.
-/// Borrowing leaves the handle with the caller, so an arm that loses the race
-/// has taken nothing from it.
+/// One selection covers both the wait and the readiness check that follows a
+/// configuration write that failed. The check is that same selection with the
+/// configuration reload taken out for one round and an immediately ready arm
+/// put in below the handles, so the precedence an operator gets is written
+/// once rather than restated in a second block that could drift from it.
+///
+/// The entry-task arms are why the handles are borrowed here rather than only
+/// read back after the drain: an entry task that ends on its own is an event
+/// the generation has to act on, not one it can discover at shutdown.
+/// Borrowing leaves the handles with the caller, so an arm that loses the race
+/// has taken nothing from them.
 ///
 /// Shutting the generation's own machinery down is the caller's, not this
 /// function's: every arm that ends a generation is torn down the same way, so
@@ -790,7 +1122,7 @@ async fn wait_for_generation_end<S>(
     settings: &mut Settings,
     process: &ProcessContext,
     intents: &mut GenerationIntents,
-    ingest_task: &mut JoinHandle<Result<()>>,
+    entry_tasks: &mut EntryTasks,
     web_controller: &mut Option<WebController>,
     schema: &S,
     web_addr: std::net::SocketAddr,
@@ -799,31 +1131,70 @@ async fn wait_for_generation_end<S>(
 where
     S: async_graphql::Executor + Clone,
 {
+    // `poll_config_reload` is what makes the readiness check below a check.
+    //
+    // A configuration reload whose write failed does not end the generation
+    // and can be ready again at once — several senders parked in `send` refill
+    // a channel of capacity 1 as soon as one is taken — so on its own it would
+    // keep the entry-task arms beneath it from ever being polled. And the
+    // condition that fails a configuration write, a full disk or a path gone
+    // read-only, is the same one that kills subsystems, so detection must not
+    // depend on an entry-task arm winning. Clearing this flag takes the
+    // configuration reload out of the next round, and the last arm — ready on
+    // its first poll, and enabled only for that round — is what makes that
+    // round a single pass over readiness rather than a second place the wait
+    // can park. Only the three terminal intents and a pending TLS reload
+    // outrank the handles in it, and when none of those is ready it falls
+    // straight back to the full selection.
+    let mut poll_config_reload = true;
     loop {
+        // `biased`, so the order the arms are written in is the policy.
+        //
+        // The three terminal intents come first because an explicit request to
+        // stop is the strongest thing that can arrive; their order among
+        // themselves only has to be fixed, since all three run the same
+        // teardown and differ only in the tail.
+        //
+        // The TLS reload sits directly below them because it is the one arm
+        // with a deadline. giganto does not rotate certificates itself: an
+        // operator replaces the files and sends SIGHUP, at a cadence that may
+        // be as short as an hour, so this arm is a recurring operation rather
+        // than a one-off. `Notify` stores at most one permit, so several
+        // signals collapse into one reload and the reload rereads whatever
+        // files are current when it runs — the collapse costs nothing, and the
+        // reload is only ever delayed. But a short-lived certificate delayed
+        // far enough expires, an expired certificate under mTLS cuts both
+        // directions, and the GraphQL endpoint it takes down is the very path
+        // a configuration reload arrives on. Repeated SIGHUP can therefore
+        // delay the arms below; at that cadence the frequency does not arise,
+        // and the delay is accepted.
+        //
+        // The configuration reload sits above the entry-task arms because an
+        // entry-task exit ends the generation, and a generation that starts
+        // from the new configuration also restarts the subsystem that died.
+        // `recv` is cancel safe, so losing a poll consumes no message, but the
+        // receiver is dropped with the generation, so an update that was never
+        // applied is discarded. Taking the entry-task exit first would throw
+        // away the recovery the operator asked for.
+        //
+        // The entry-task arms are next and in a fixed order, so two subsystems
+        // dying together always produce the same choice of which one the
+        // generation names as its ending. Precedence decides which ending is
+        // reported, not which outcomes are: a handle left unpolled because a
+        // higher arm won is handed to the teardown and reported there.
         select! {
-            Some(new_config) = intents.reload_rx.recv() => {
-                match settings.update_config_file(&new_config) {
-                    Ok(()) => break GenerationEnd::ReloadConfig,
-                    Err(e) => {
-                        warn!("Failed to update configuration: {e:#}, run with previous config");
-                    }
-                }
-            },
+            biased;
             () = process.notify_terminate.notified() => {
                 info!("Termination signal: daemon exit");
-                break GenerationEnd::Terminate;
+                return GenerationEnd::Terminate;
             }
             () = intents.notify_reboot.notified() => {
                 info!("Restarting the system...");
-                break GenerationEnd::Reboot;
+                return GenerationEnd::Reboot;
             }
             () = intents.notify_power_off.notified() => {
                 info!("Power off the system...");
-                break GenerationEnd::PowerOff;
-            }
-            outcome = &mut *ingest_task => {
-                report_early_ingest_exit(&outcome);
-                break GenerationEnd::IngestExited;
+                return GenerationEnd::PowerOff;
             }
             () = process.notify_tls_reload.notified() => {
                 reload_https_server(
@@ -834,6 +1205,45 @@ where
                     web_addr,
                     web_shutdown_timeout,
                 ).await;
+                // Back to the full selection, with no readiness check of its
+                // own. Checking after a reload would let a configuration
+                // update that arrived during its `await` lose to a finished
+                // entry handle and be discarded, which is exactly what putting
+                // the configuration reload above the entry-task arms is for.
+                //
+                // Restoring the flag is what that costs: a reload that wins
+                // during a check round drops that check rather than deferring
+                // it, so the next configuration message can be taken before
+                // the handles are looked at. It converges, because every
+                // failed write arms the check again.
+                poll_config_reload = true;
+            }
+            Some(new_config) = intents.reload_rx.recv(), if poll_config_reload => {
+                match settings.update_config_file(&new_config) {
+                    Ok(()) => return GenerationEnd::ReloadConfig,
+                    Err(e) => {
+                        warn!("Failed to update configuration: {e:#}, run with previous config");
+                        poll_config_reload = false;
+                    }
+                }
+            }
+            outcome = watch_entry_task(entry_tasks.ingest.as_mut()) => {
+                return end_on_entry_task(entry_tasks, Subsystem::Ingest, &outcome);
+            }
+            outcome = watch_entry_task(entry_tasks.publish.as_mut()) => {
+                return end_on_entry_task(entry_tasks, Subsystem::Publish, &outcome);
+            }
+            outcome = watch_entry_task(entry_tasks.peer.as_mut()) => {
+                return end_on_entry_task(entry_tasks, Subsystem::Peer, &outcome);
+            }
+            outcome = watch_entry_task(entry_tasks.retention.as_mut()) => {
+                return end_on_entry_task(entry_tasks, Subsystem::Retention, &outcome);
+            }
+            // Enabled only for the round that follows a configuration write
+            // that failed, and ready on its first poll, so that round is a
+            // pass over the arms above rather than a wait on them.
+            () = std::future::ready(()), if !poll_config_reload => {
+                poll_config_reload = true;
             }
         }
     }
@@ -842,10 +1252,10 @@ where
 /// Everything a generation hands to its teardown.
 ///
 /// The teardown takes ownership of all of it: the web controller it shuts
-/// down, the two trackers it drains, and the two handles it reads back. They
-/// travel together because the teardown is one unit — grouping them is also
-/// what keeps its parameter list within reach of a test that builds one by
-/// hand.
+/// down, the two trackers it drains, and the entry-task handles it reads back.
+/// They travel together because the teardown is one unit — grouping them is
+/// also what keeps its parameter list within reach of a test that builds one
+/// by hand.
 struct GenerationTeardown {
     /// The HTTPS GraphQL server, or `None` when the bind failed and the
     /// generation carried on without one.
@@ -855,13 +1265,13 @@ struct GenerationTeardown {
     /// The generation's own tracker, holding every subsystem and every
     /// long-running piece of web-origin work.
     top_level_tracker: TaskTracker,
-    /// The retention entry task.
-    retain_task_handle: JoinHandle<Result<()>>,
-    /// The ingest entry task, or `None` when the generation ended because that
-    /// very task returned: the wait has already read the handle back, and a
-    /// `JoinHandle` polled again after it has completed is not a handle that
-    /// resolves a second time.
-    ingest_task_handle: Option<JoinHandle<Result<()>>>,
+    /// The entry tasks the wait did not read back, in the order they are read.
+    ///
+    /// The one whose arm ended the wait is not here: it has already been read
+    /// and reported, and a `JoinHandle` polled again after it has completed is
+    /// not a handle that resolves a second time. Everything else is, including
+    /// a handle that had finished but lost to a higher arm.
+    entry_tasks: Vec<RetainedEntryTask>,
 }
 
 /// Runs the whole teardown of a generation, in the one order every ending
@@ -892,22 +1302,21 @@ struct GenerationTeardown {
 /// # Errors
 ///
 /// Returns an error if the database could not be shut down. A retained handle
-/// that came back badly is reported, not returned: the drain has already
-/// waited for that task, and its failure does not suppress the later database
-/// shutdown phase or the ending's requested action. A database-shutdown
-/// failure returns before that action.
+/// that came back badly is not one: it is reported, it makes the returned
+/// outcome degraded, and it suppresses neither the later database shutdown
+/// phase nor the ending's requested action. A database-shutdown failure
+/// returns before that action.
 async fn shutdown_generation(
     teardown: GenerationTeardown,
     generation_end: GenerationEnd,
     database: &storage::Database,
     effects: &dyn LifecycleEffects,
-) -> Result<()> {
+) -> Result<GenerationHealth> {
     let GenerationTeardown {
         web_controller,
         web_reaper_tracker,
         top_level_tracker,
-        retain_task_handle,
-        ingest_task_handle,
+        entry_tasks,
     } = teardown;
 
     shutdown_web(web_controller).await;
@@ -925,22 +1334,53 @@ async fn shutdown_generation(
     info!("{SHUTDOWN_PHASE}: web reaper drain returned ({generation_end:?})");
     drain_top_level_tracker_or_log(&top_level_tracker).await;
     info!("{SHUTDOWN_PHASE}: top-level drain returned ({generation_end:?})");
-    report_retention_outcome(retain_task_handle).await;
-    if let Some(ingest_task_handle) = ingest_task_handle {
-        observe_ingest_shutdown(ingest_task_handle).await;
+    let mut health = GenerationHealth::Clean;
+    for retained in entry_tasks {
+        if observe_entry_task(retained).await {
+            health = GenerationHealth::Degraded;
+        }
     }
     info!("{SHUTDOWN_PHASE}: retained handles read ({generation_end:?})");
-    finish_generation(generation_end, database, effects).await
+    finish_generation(generation_end, database, effects).await?;
+    Ok(health)
+}
+
+/// Reads one retained entry task back and reports how it ended.
+///
+/// A drain waits for tracked tasks to exit but says nothing about how they
+/// exited, so this is where the generation accounts for a handle it was
+/// handed. All four endings reach the log: the value the task returned, the
+/// error it returned, a panic, and an abort nobody asked for. Only the first
+/// two are anything the task could have reported on its own; a panic and an
+/// abort leave no return value behind, so this is the only place they can be
+/// seen at all. Awaiting costs nothing — the drain has already waited for this
+/// task — and it is what makes the report the last observation before the
+/// database shutdown.
+///
+/// Returns whether the outcome was abnormal, which is what degrades the
+/// generation.
+async fn observe_entry_task(retained: RetainedEntryTask) -> bool {
+    let RetainedEntryTask {
+        mut handle,
+        already_finished,
+    } = retained;
+    let outcome = (&mut handle).await;
+    report_entry_task_outcome(
+        &handle,
+        ObservationPhase::AfterDrain { already_finished },
+        &outcome,
+    )
 }
 
 /// Runs the retention entry task, reporting a failure the moment it happens.
 ///
 /// The handle the generation retains carries whatever this returns to
-/// [`report_retention_outcome`], but that accounting runs only when the
-/// generation ends — which, for a node that is simply left running, is days or
-/// months after a retention pass failed. Retention that stops deleting is the
-/// failure an operator has to hear about at once, not at the post-mortem, so
-/// it is reported here as well, the way the peer subsystem reports its own.
+/// [`report_entry_task_outcome`], which classes the outcome but says nothing
+/// about which pass failed or why. The cause is only here, so it is reported
+/// here as well, the way ingest, publish and peer report their own. The
+/// duplication is intended: the boundary record is what an operator greps for
+/// across the four subsystems, and this line is what says what retention was
+/// doing.
 ///
 /// # Errors
 ///
@@ -965,28 +1405,6 @@ async fn run_retention(
         error!("Retention terminated unexpectedly: {e:#}");
     }
     result
-}
-
-/// Reports how the retention entry task ended.
-///
-/// A drain waits for tracked tasks to exit but says nothing about how they
-/// exited, so the handle kept at spawn time is where the generation accounts
-/// for its retention task. All four endings are reported: the value it
-/// returned, the error it returned, a panic, and an abort it never asked for.
-/// Only the first two are anything [`run_retention`] could have reported on
-/// its own; a panic and an abort leave no return value behind, so this is the
-/// only place they can be seen at all. Awaiting the handle here costs
-/// nothing — the drain has already waited for this task — and it is what makes
-/// the report the last retention observation before database shutdown.
-async fn report_retention_outcome(retain_task_handle: JoinHandle<Result<()>>) {
-    match retain_task_handle.await {
-        Ok(Ok(())) => info!("Retention stopped"),
-        // [`run_retention`] already reported this one when it happened, so
-        // this line is the shutdown restating it, not news.
-        Ok(Err(e)) => error!("Retention had already terminated unexpectedly: {e:#}"),
-        Err(e) if e.is_panic() => error!("Retention panicked: {e}"),
-        Err(e) => error!("Retention did not run to completion: {e}"),
-    }
 }
 
 /// Shuts the store down, then runs the tail the ending asks for.
@@ -1023,7 +1441,9 @@ async fn finish_generation(
     }
 
     match generation_end {
-        GenerationEnd::ReloadConfig | GenerationEnd::Terminate | GenerationEnd::IngestExited => {
+        GenerationEnd::ReloadConfig
+        | GenerationEnd::Terminate
+        | GenerationEnd::EntryTaskExited(_) => {
             sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
         }
         // The host is about to go down, so the pause that precedes handing it
@@ -1167,36 +1587,6 @@ async fn reload_https_server<S>(
         Err(e) => {
             error!("HTTPS reload: failed to start new GraphQL server: {e:#}");
         }
-    }
-}
-
-/// Reports how the ingest entry task ended once the generation is shutting
-/// down.
-///
-/// The task reports its own `Err` where it happens, so what is left for the
-/// handle to add is the outcome only a `JoinError` carries: a panic, or an
-/// abort. The top-level drain waits for the task to return but looks at
-/// neither, so this is where it becomes visible. It runs after the drain, so
-/// the handle is already resolved and this only reads it back.
-async fn observe_ingest_shutdown(handle: JoinHandle<Result<()>>) {
-    if let Err(e) = handle.await {
-        error!("Ingest task did not join: {e}");
-    }
-}
-
-/// Reports an ingest entry task that ended while the generation was still
-/// serving.
-///
-/// Nothing here is expected: the task returns on its own only when it cannot
-/// keep the listener, and the caller ends the generation on it either way. An
-/// `Err` has already been reported by the task itself, where the context that
-/// produced it was still at hand, so repeating it here would only say the same
-/// thing twice; the other two outcomes have gone unsaid until now.
-fn report_early_ingest_exit(outcome: &std::result::Result<Result<()>, task::JoinError>) {
-    match outcome {
-        Ok(Ok(())) => error!("Ingest subsystem returned before the daemon was asked to stop"),
-        Ok(Err(_)) => {}
-        Err(e) => error!("Ingest task did not join: {e}"),
     }
 }
 
@@ -1351,68 +1741,6 @@ mod tests {
 
         let result = create_graphql_client(cert_pem.as_bytes(), key_pem.as_bytes());
         assert!(result.is_ok());
-    }
-
-    /// Every ending the retention handle can carry reaches the log.
-    ///
-    /// The drain that precedes this report says only that the task exited, so
-    /// if the report loses an ending, that ending is lost outright.
-    #[tokio::test]
-    async fn report_retention_outcome_reports_every_ending() {
-        let (logs, guard) = capture_logs();
-        report_retention_outcome(tokio::spawn(async { Ok(()) })).await;
-        let output = captured(&logs);
-        assert!(
-            output.contains("Retention stopped"),
-            "a clean stop should be reported, got: {output}"
-        );
-        drop(guard);
-
-        let (logs, guard) = capture_logs();
-        report_retention_outcome(tokio::spawn(async {
-            Err(anyhow!("retention cleanup failed"))
-        }))
-        .await;
-        let output = captured(&logs);
-        assert!(
-            output.contains("Retention had already terminated unexpectedly")
-                && output.contains("retention cleanup failed"),
-            "a returned error should be restated with its cause, got: {output}"
-        );
-        drop(guard);
-
-        let (logs, guard) = capture_logs();
-        report_retention_outcome(tokio::spawn(async {
-            panic!("retention panicked");
-        }))
-        .await;
-        let output = captured(&logs);
-        assert!(
-            output.contains("Retention panicked"),
-            "a panic should be reported, got: {output}"
-        );
-        drop(guard);
-
-        let (logs, _guard) = capture_logs();
-        let (started_tx, started_rx) = oneshot::channel::<()>();
-        let (block_tx, block_rx) = oneshot::channel::<()>();
-        let aborted: JoinHandle<Result<()>> = tokio::spawn(async move {
-            let _ = started_tx.send(());
-            let _ = block_rx.await;
-            Ok(())
-        });
-        // Aborted while it is parked on `block_rx`, so the handle carries the
-        // cancellation of a task that was running — the shape a retention task
-        // aborted from outside the lifecycle would arrive in.
-        started_rx.await.expect("the task should have started");
-        aborted.abort();
-        report_retention_outcome(aborted).await;
-        drop(block_tx);
-        let output = captured(&logs);
-        assert!(
-            output.contains("Retention did not run to completion"),
-            "an abort nobody asked for should be reported, got: {output}"
-        );
     }
 
     mod reload_https_server_tests {
@@ -1959,6 +2287,7 @@ mod tests {
         use std::{
             collections::HashSet,
             fs,
+            future::Future,
             net::{Ipv4Addr, SocketAddr},
             path::Path,
             sync::Once,
@@ -1967,9 +2296,10 @@ mod tests {
         use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
         use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair};
         use tempfile::tempdir;
+        use tokio::task::JoinHandle;
 
         use super::*;
-        use crate::settings::Config;
+        use crate::{cancellation::DrainOutcome, settings::Config};
 
         static INSTALL_PROVIDER: Once = Once::new();
 
@@ -2175,7 +2505,7 @@ mod tests {
             GenerationEnd::ReloadConfig,
             GenerationEnd::Reboot,
             GenerationEnd::PowerOff,
-            GenerationEnd::IngestExited,
+            GenerationEnd::EntryTaskExited(Subsystem::Ingest),
         ];
 
         /// The five teardown phases, in the one order every ending shares.
@@ -2194,7 +2524,23 @@ mod tests {
                 GenerationEnd::Terminate => "final action, returning from the lifecycle",
                 GenerationEnd::Reboot => "final action, rebooting the host",
                 GenerationEnd::PowerOff => "final action, powering the host off",
-                GenerationEnd::IngestExited => "final action, failing the lifecycle",
+                GenerationEnd::EntryTaskExited(_) => "final action, failing the lifecycle",
+            }
+        }
+
+        /// The outcome of a generation that ended cleanly.
+        fn clean(ending: GenerationEnd) -> GenerationOutcome {
+            GenerationOutcome {
+                ending,
+                health: GenerationHealth::Clean,
+            }
+        }
+
+        /// The outcome of a generation something abnormal was observed in.
+        fn degraded(ending: GenerationEnd) -> GenerationOutcome {
+            GenerationOutcome {
+                ending,
+                health: GenerationHealth::Degraded,
             }
         }
 
@@ -2238,6 +2584,113 @@ mod tests {
                     "{ending}: expected a marker for {needle:?}, got: {markers:#?}"
                 );
             }
+        }
+
+        /// The static message every abnormal entry-task record carries.
+        const ABNORMAL_RECORD: &str = "entry task ended abnormally";
+        /// The static message the record for a task that stopped carries.
+        const CLEAN_RECORD: &str = "entry task stopped";
+        /// The lifecycle-level record for a generation that ended degraded.
+        const DEGRADED_RECORD: &str = "generation ended degraded";
+        /// The lifecycle-level record for an ending whose action failed.
+        const FAILED_ACTION_RECORD: &str = "generation end action failed";
+
+        /// Every captured line carrying `needle`.
+        fn records(logs: &Arc<Mutex<Vec<u8>>>, needle: &str) -> Vec<String> {
+            captured(logs)
+                .lines()
+                .filter(|line| line.contains(needle))
+                .map(ToString::to_string)
+                .collect()
+        }
+
+        /// The one record carrying `needle`, or a failure naming what was
+        /// there instead.
+        ///
+        /// Exactly one is the point: the boundary emits a single record per
+        /// abnormal outcome, so a duplicate is as much a failure as a missing
+        /// one.
+        fn sole_record(logs: &Arc<Mutex<Vec<u8>>>, needle: &str) -> String {
+            let found = records(logs, needle);
+            assert_eq!(
+                found.len(),
+                1,
+                "expected exactly one {needle:?} record, got: {found:#?}"
+            );
+            found[0].clone()
+        }
+
+        fn abnormal_report(logs: &Arc<Mutex<Vec<u8>>>) -> String {
+            sole_record(logs, ABNORMAL_RECORD)
+        }
+
+        /// Asserts `first` reached the log before `second`, both of them
+        /// having reached it at all.
+        ///
+        /// The presence check is what makes this an ordering assertion.
+        /// `str::find` answers with an `Option`, and `None` sorts below every
+        /// `Some`, so comparing the two answers directly would hold for a
+        /// `first` that never appeared — which is the very failure an
+        /// assertion that the higher-precedence arm ran first is there to
+        /// catch.
+        fn assert_precedes(logs: &Arc<Mutex<Vec<u8>>>, first: &str, second: &str, case: &str) {
+            let output = captured(logs);
+            let first_at = output
+                .find(first)
+                .unwrap_or_else(|| panic!("{case}: expected {first:?} in: {output}"));
+            let second_at = output
+                .find(second)
+                .unwrap_or_else(|| panic!("{case}: expected {second:?} in: {output}"));
+            assert!(
+                first_at < second_at,
+                "{case}: expected {first:?} before {second:?}, got: {output}"
+            );
+        }
+
+        /// Asserts a per-task record carries the five fields, with these
+        /// values.
+        ///
+        /// The fields are read as fields rather than as substrings of prose,
+        /// which is what makes the record greppable for an operator and stable
+        /// for a test.
+        fn assert_report_fields(
+            record: &str,
+            subsystem: Subsystem,
+            id: u64,
+            phase: &str,
+            outcome: &str,
+        ) {
+            for field in [
+                format!("name=\"{subsystem}\""),
+                format!("id={id} "),
+                format!("phase=\"{phase}\""),
+                format!("outcome=\"{outcome}\""),
+            ] {
+                assert!(
+                    record.contains(&field),
+                    "expected the field {field:?} in: {record}"
+                );
+            }
+            // A `Duration` rendered with `?`: one number and one unit, the way
+            // the tracker's own `age` field renders.
+            let age = Regex::new(r"age=[0-9]+(\.[0-9]+)?(ns|µs|ms|s)\b").expect("valid regex");
+            assert!(
+                age.is_match(record),
+                "expected a Duration-shaped age in: {record}"
+            );
+        }
+
+        /// Asserts a lifecycle-level record is told apart from a per-task one
+        /// by the fields it carries.
+        fn assert_lifecycle_record(record: &str, ending: GenerationEnd) {
+            assert!(
+                record.contains(&format!("ending={ending:?}")),
+                "expected the ending in: {record}"
+            );
+            assert!(
+                !record.contains("name=") && !record.contains("id="),
+                "a lifecycle record names no task: {record}"
+            );
         }
 
         /// One operation of the lifecycle's effects seam.
@@ -2329,25 +2782,92 @@ mod tests {
             }
         }
 
-        /// A teardown with nothing left to do but run its phases.
+        /// Spawns a stand-in entry task and hands back its observed handle.
         ///
-        /// No web controller, a fresh empty tracker for each of the two
-        /// trackers, a retention handle that has already returned and no
-        /// ingest handle: what is left is the sequence itself.
-        fn teardown_with_retention(
-            retain_task_handle: JoinHandle<Result<()>>,
-        ) -> GenerationTeardown {
+        /// The metadata the boundary reports — the name, the tracker-assigned
+        /// id, the spawn instant — comes from the tracker, so a stand-in has
+        /// to be registered in one to be reportable at all. The token is
+        /// ignored: a stand-in that has to observe cancellation spawns
+        /// through the tracker itself.
+        fn stand_in<Fut>(
+            tracker: &TaskTracker,
+            subsystem: Subsystem,
+            fut: Fut,
+        ) -> ObservedHandle<Result<()>>
+        where
+            Fut: Future<Output = Result<()>> + Send + 'static,
+        {
+            tracker
+                .spawn_observed(subsystem.to_string(), move |_cancel| fut)
+                .expect("a fresh tracker admits a stand-in entry task")
+        }
+
+        /// A stand-in that parks until the tracker cancels it, then stops.
+        ///
+        /// The shape a real entry task has, and the default the wait borrows:
+        /// it stays pending for as long as the test needs, and a teardown
+        /// driven with the same tracker still gets it back.
+        fn parking_stand_in(
+            tracker: &TaskTracker,
+            subsystem: Subsystem,
+        ) -> ObservedHandle<Result<()>> {
+            tracker
+                .spawn_observed(subsystem.to_string(), |cancel| async move {
+                    cancel.cancelled().await;
+                    Ok(())
+                })
+                .expect("a fresh tracker admits a stand-in entry task")
+        }
+
+        /// A stand-in that has already finished, and is known to have.
+        ///
+        /// The wait's own readiness check is what a test would otherwise race,
+        /// so the task is joined here — through a clone of its abort handle,
+        /// which resolves only once the task is done — before the handle is
+        /// handed on.
+        async fn finished_stand_in<Fut>(
+            tracker: &TaskTracker,
+            subsystem: Subsystem,
+            fut: Fut,
+        ) -> ObservedHandle<Result<()>>
+        where
+            Fut: Future<Output = Result<()>> + Send + 'static,
+        {
+            let handle = stand_in(tracker, subsystem, fut);
+            assert!(
+                poll_until(READY_TIMEOUT, || handle.is_finished()).await,
+                "the stand-in for {subsystem} should have finished"
+            );
+            handle
+        }
+
+        /// One entry task the teardown is handed.
+        fn retained(
+            handle: ObservedHandle<Result<()>>,
+            already_finished: bool,
+        ) -> RetainedEntryTask {
+            RetainedEntryTask {
+                handle,
+                already_finished,
+            }
+        }
+
+        /// A teardown with nothing left to do but run its phases and read the
+        /// handles it is given.
+        ///
+        /// No web controller and a fresh empty tracker for each of the two
+        /// trackers: what is left is the sequence itself.
+        fn teardown_with_entry_tasks(entry_tasks: Vec<RetainedEntryTask>) -> GenerationTeardown {
             GenerationTeardown {
                 web_controller: None,
                 web_reaper_tracker: TaskTracker::new(),
                 top_level_tracker: TaskTracker::new(),
-                retain_task_handle,
-                ingest_task_handle: None,
+                entry_tasks,
             }
         }
 
         fn empty_teardown() -> GenerationTeardown {
-            teardown_with_retention(task::spawn(async { Ok(()) }))
+            teardown_with_entry_tasks(Vec::new())
         }
 
         /// Everything [`wait_for_generation_end`] waits on, and the handles a
@@ -2360,18 +2880,125 @@ mod tests {
             settings: Settings,
             process: ProcessContext,
             intents: GenerationIntents,
-            /// Stands in for the ingest entry task the wait watches.
+            /// The tracker the stand-in entry tasks are registered in.
             ///
-            /// The wait needs a handle to borrow, and the tests that drive the
-            /// other arms need that handle to stay pending, so the default is
-            /// a task that never returns. A test that wants the ingest arm
-            /// replaces it.
-            ingest_task: JoinHandle<Result<()>>,
+            /// Nothing drains it: it is here because a observed handle can
+            /// only come from a tracker, and the name, id and spawn instant
+            /// the boundary reports are what the tracker stamps.
+            tracker: TaskTracker,
+            /// Stands in for the four entry tasks the wait watches.
+            ///
+            /// The wait needs handles to borrow, and the tests that drive the
+            /// other arms need those handles to stay pending, so the default
+            /// is four tasks that never return. A test that wants one of the
+            /// entry-task arms replaces that slot.
+            entry_tasks: EntryTasks,
             reload_tx: mpsc::Sender<ConfigVisible>,
             notify_terminate: Arc<Notify>,
             notify_reboot: Arc<Notify>,
             notify_power_off: Arc<Notify>,
             notify_tls_reload: Arc<Notify>,
+        }
+
+        impl WaitFixture {
+            /// Replaces one entry task with a stand-in of the test's own, and
+            /// returns the id the tracker gave it.
+            fn replace_entry_task<Fut>(&mut self, subsystem: Subsystem, fut: Fut) -> u64
+            where
+                Fut: Future<Output = Result<()>> + Send + 'static,
+            {
+                let handle = stand_in(&self.tracker, subsystem, fut);
+                let id = handle.id();
+                *self.entry_tasks.slot(subsystem) = Some(handle);
+                id
+            }
+
+            /// Replaces one entry task with a stand-in already known to have
+            /// finished.
+            async fn finish_entry_task<Fut>(&mut self, subsystem: Subsystem, fut: Fut) -> u64
+            where
+                Fut: Future<Output = Result<()>> + Send + 'static,
+            {
+                let handle = finished_stand_in(&self.tracker, subsystem, fut).await;
+                let id = handle.id();
+                *self.entry_tasks.slot(subsystem) = Some(handle);
+                id
+            }
+
+            /// Stops the stand-in entry tasks the test is done with.
+            ///
+            /// A tracked task the runtime drops without it having returned is
+            /// reported by the tracker's registration guard, and by then the
+            /// test's log capture is gone. That report is the first thing to
+            /// reach its callsite from a thread with no subscriber at all,
+            /// which caches the callsite as uninteresting process-wide — and
+            /// the tests that assert on that very report then read an empty
+            /// log. So a fixture drains its tracker, the way a generation
+            /// drains its own.
+            async fn settle(&mut self) {
+                drop(self.take_retained());
+                let outcome = self
+                    .tracker
+                    .cancel_and_drain(DRAIN_LOOP_TIMEOUT)
+                    .await
+                    .expect("the fixture tracker should not be poisoned");
+                assert_eq!(
+                    outcome,
+                    DrainOutcome::Drained,
+                    "the stand-in entry tasks should have stopped"
+                );
+            }
+
+            /// Takes the entry tasks the wait left behind, the way the
+            /// generation hands them to its teardown.
+            fn take_retained(&mut self) -> Vec<RetainedEntryTask> {
+                std::mem::replace(
+                    &mut self.entry_tasks,
+                    EntryTasks {
+                        ingest: None,
+                        publish: None,
+                        peer: None,
+                        retention: None,
+                    },
+                )
+                .into_retained()
+            }
+
+            /// Queues `count` configuration reloads whose write will fail.
+            ///
+            /// Production's channel holds one message and senders parked in
+            /// `send` refill it as soon as one is taken, so the arm can be
+            /// ready round after round. A channel that already holds `count`
+            /// messages puts the wait in that same position without depending
+            /// on a sender task being scheduled between two polls of the arm —
+            /// and what is left in the receiver when the wait ends is then
+            /// exactly what the wait did not take.
+            fn queue_failing_reloads(&mut self, count: usize) {
+                let (tx, rx) = mpsc::channel::<ConfigVisible>(count);
+                for _ in 0..count {
+                    tx.try_send(self.settings.config.visible.clone())
+                        .expect("the queue should have room for every reload");
+                }
+                // The sender is kept so an emptied channel leaves the arm
+                // pending, the way a live GraphQL handler does, rather than
+                // closing it.
+                self.reload_tx = tx;
+                self.intents.reload_rx = rx;
+            }
+
+            /// Replaces one entry task with a stand-in the test aborts, so the
+            /// handle carries a cancellation `JoinError`.
+            async fn abort_entry_task(&mut self, subsystem: Subsystem) -> u64 {
+                let handle = stand_in(&self.tracker, subsystem, std::future::pending());
+                handle.abort_handle().abort();
+                assert!(
+                    poll_until(READY_TIMEOUT, || handle.is_finished()).await,
+                    "the aborted stand-in for {subsystem} should have finished"
+                );
+                let id = handle.id();
+                *self.entry_tasks.slot(subsystem) = Some(handle);
+                id
+            }
         }
 
         fn wait_fixture(dir: &Path) -> WaitFixture {
@@ -2381,6 +3008,16 @@ mod tests {
             let (reload_tx, reload_rx) = mpsc::channel::<ConfigVisible>(1);
             let notify_reboot = Arc::new(Notify::new());
             let notify_power_off = Arc::new(Notify::new());
+            // Peer is present by default so its arm is exercised alongside the
+            // other three; the shape production takes when peer is not
+            // configured has a test of its own.
+            let tracker = TaskTracker::new();
+            let entry_tasks = EntryTasks {
+                ingest: Some(parking_stand_in(&tracker, Subsystem::Ingest)),
+                publish: Some(parking_stand_in(&tracker, Subsystem::Publish)),
+                peer: Some(parking_stand_in(&tracker, Subsystem::Peer)),
+                retention: Some(parking_stand_in(&tracker, Subsystem::Retention)),
+            };
 
             WaitFixture {
                 settings: test_settings(dir),
@@ -2390,7 +3027,8 @@ mod tests {
                     notify_reboot: Arc::clone(&notify_reboot),
                     notify_power_off: Arc::clone(&notify_power_off),
                 },
-                ingest_task: task::spawn(std::future::pending::<Result<()>>()),
+                tracker,
+                entry_tasks,
                 reload_tx,
                 notify_terminate,
                 notify_reboot,
@@ -2398,6 +3036,74 @@ mod tests {
                 notify_tls_reload,
             }
         }
+
+        /// The teardown a wait fixture hands over, drained on the tracker its
+        /// stand-ins are registered in.
+        ///
+        /// That tracker is what the drain cancels, so the stand-ins that were
+        /// still parked when the wait ended return rather than holding the
+        /// teardown open.
+        fn fixture_teardown(fixture: &mut WaitFixture) -> GenerationTeardown {
+            GenerationTeardown {
+                web_controller: None,
+                web_reaper_tracker: TaskTracker::new(),
+                top_level_tracker: fixture.tracker.clone(),
+                entry_tasks: fixture.take_retained(),
+            }
+        }
+
+        /// The record a TLS reload leaves when the material it reread is the
+        /// material the live server is already serving.
+        const TLS_NOOP_RECORD: &str = "HTTPS reload: no TLS material changes detected";
+
+        /// A live HTTPS server built from the fixture's current TLS material.
+        async fn live_web(fixture: &WaitFixture, web_addr: SocketAddr) -> WebController {
+            let tls = tls_reload::get_current_tls_material(&fixture.process.tls_watch);
+            web::serve(
+                test_schema(),
+                web_addr,
+                tls.cert_pem.clone(),
+                tls.key_pem.clone(),
+                tls.ca_pem.clone(),
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("the test server should start")
+        }
+
+        /// Runs the wait against a live HTTPS server the reload has nothing to
+        /// rebind for.
+        ///
+        /// `reload_https_server` returns as soon as it finds unchanged
+        /// material behind a live controller, so the arm still runs and still
+        /// leaves its completion record — without the bind, serve and
+        /// graceful shutdown a restart costs, which a test that repeats the
+        /// arm would otherwise pay for on every round.
+        async fn wait_with_live_web(
+            fixture: &mut WaitFixture,
+            web_controller: &mut Option<WebController>,
+            web_addr: SocketAddr,
+        ) -> GenerationEnd {
+            let schema = test_schema();
+            wait_for_generation_end(
+                &mut fixture.settings,
+                &fixture.process,
+                &mut fixture.intents,
+                &mut fixture.entry_tasks,
+                web_controller,
+                &schema,
+                web_addr,
+                Duration::from_secs(30),
+            )
+            .await
+        }
+
+        /// How many times a precedence assertion is repeated in one test.
+        ///
+        /// Each round is one selection over two simultaneously ready arms, so
+        /// an unbiased choice would have to fall the same way every time: at
+        /// this count that is about one chance in thirty million.
+        const PRECEDENCE_ROUNDS: usize = 25;
 
         /// Runs the wait with no HTTPS server and an address nothing binds.
         ///
@@ -2410,7 +3116,7 @@ mod tests {
                 &mut fixture.settings,
                 &fixture.process,
                 &mut fixture.intents,
-                &mut fixture.ingest_task,
+                &mut fixture.entry_tasks,
                 &mut web_controller,
                 &schema,
                 ephemeral_addr(),
@@ -2432,6 +3138,7 @@ mod tests {
                 wait_without_web(&mut fixture).await,
                 GenerationEnd::Terminate
             );
+            fixture.settle().await;
         }
 
         #[tokio::test]
@@ -2442,6 +3149,7 @@ mod tests {
             fixture.notify_reboot.notify_one();
 
             assert_eq!(wait_without_web(&mut fixture).await, GenerationEnd::Reboot);
+            fixture.settle().await;
         }
 
         #[tokio::test]
@@ -2455,55 +3163,79 @@ mod tests {
                 wait_without_web(&mut fixture).await,
                 GenerationEnd::PowerOff
             );
+            fixture.settle().await;
         }
 
-        /// The ingest entry task ending is not an intent, but it ends the
-        /// wait all the same.
+        /// An entry task ending is not an intent, but it ends the wait all the
+        /// same — for each of the four, and for each class of outcome.
         ///
-        /// Nothing is notified here: the only thing that happens is that the
-        /// task the wait borrows returns. A wait that ignored it would leave
-        /// the generation serving with nothing behind its ingest port.
+        /// Nothing is notified here: the only thing that happens is that one
+        /// of the tasks the wait borrows returns. A wait that ignored it would
+        /// leave the generation serving with nothing behind that subsystem's
+        /// port. The outcome class is varied across the four so the serving
+        /// phase covers all four of them.
         #[tokio::test]
-        async fn an_ingest_entry_task_that_ends_ends_the_wait() {
-            let dir = tempdir().expect("tempdir");
-            let mut fixture = wait_fixture(dir.path());
-            fixture.ingest_task = task::spawn(async { Err(anyhow!("the listener is gone")) });
+        async fn an_entry_task_that_ends_ends_the_wait() {
+            for (subsystem, outcome) in [
+                (Subsystem::Ingest, "early_exit"),
+                (Subsystem::Publish, "error"),
+                (Subsystem::Peer, "panic"),
+                (Subsystem::Retention, "cancelled"),
+            ] {
+                let dir = tempdir().expect("tempdir");
+                let mut fixture = wait_fixture(dir.path());
+                // Installed before the stand-in is built: a panic and an abort
+                // are both reported by the registration guard the moment they
+                // happen, which is before the wait is even entered.
+                let (logs, guard) = capture_logs();
+                let id = match outcome {
+                    "early_exit" => fixture.replace_entry_task(subsystem, async { Ok(()) }),
+                    "error" => fixture.replace_entry_task(subsystem, async {
+                        Err(anyhow!("the listener is gone"))
+                    }),
+                    "panic" => fixture
+                        .replace_entry_task(subsystem, async { panic!("the entry task panicked") }),
+                    _ => fixture.abort_entry_task(subsystem).await,
+                };
 
-            let (logs, _guard) = capture_logs();
-            assert_eq!(
-                wait_without_web(&mut fixture).await,
-                GenerationEnd::IngestExited
-            );
+                assert_eq!(
+                    wait_without_web(&mut fixture).await,
+                    GenerationEnd::EntryTaskExited(subsystem),
+                    "{subsystem}/{outcome}"
+                );
 
-            // The task reports its own `Err`; a stand-in cannot, so what this
-            // asserts is the silence that keeps the real one from being
-            // reported twice.
-            let output = captured(&logs);
-            assert!(
-                !output.contains("Ingest subsystem returned before"),
-                "an entry task that returned an error is not one that returned cleanly, got: {output}"
-            );
+                let report = abnormal_report(&logs);
+                assert_report_fields(&report, subsystem, id, "serving", outcome);
+                fixture.settle().await;
+                drop(guard);
+            }
         }
 
-        /// A panicking entry task ends the wait too, and says what the task
-        /// itself could not.
+        /// The peer arm is the one that may not be there at all.
+        ///
+        /// With peer unconfigured its slot is empty, which must leave the
+        /// other three arms working rather than fabricate a handle or take
+        /// the selection down.
         #[tokio::test]
-        async fn a_panicking_ingest_entry_task_ends_the_wait() {
+        async fn an_absent_peer_entry_task_leaves_the_other_arms_watching() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
-            fixture.ingest_task = task::spawn(async { panic!("the ingest entry task panicked") });
+            fixture.entry_tasks.peer = None;
+            let id = fixture.replace_entry_task(Subsystem::Publish, async { Ok(()) });
 
             let (logs, _guard) = capture_logs();
             assert_eq!(
                 wait_without_web(&mut fixture).await,
-                GenerationEnd::IngestExited
+                GenerationEnd::EntryTaskExited(Subsystem::Publish)
             );
-
-            let output = captured(&logs);
-            assert!(
-                output.contains("Ingest task did not join"),
-                "a panic is the outcome only the handle carries, got: {output}"
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Publish,
+                id,
+                "serving",
+                "early_exit",
             );
+            fixture.settle().await;
         }
 
         #[tokio::test]
@@ -2527,6 +3259,7 @@ mod tests {
             // The reload is what the next generation starts from, so the wait
             // must leave the persisted settings behind it.
             assert_eq!(fixture.settings.config.visible.ack_transmission, 2048);
+            fixture.settle().await;
         }
 
         /// A reload that cannot be written down is not a shutdown.
@@ -2559,6 +3292,7 @@ mod tests {
                 fixture.settings.config.visible.ack_transmission, 1024,
                 "a reload that was not persisted must not change the in-memory configuration"
             );
+            fixture.settle().await;
         }
 
         /// A TLS reload rebinds the HTTPS server and keeps serving.
@@ -2581,7 +3315,7 @@ mod tests {
                     &mut fixture.settings,
                     &fixture.process,
                     &mut fixture.intents,
-                    &mut fixture.ingest_task,
+                    &mut fixture.entry_tasks,
                     &mut web_controller,
                     &schema,
                     web_addr,
@@ -2600,6 +3334,686 @@ mod tests {
                 "the reload should have left a live server behind"
             );
             shutdown_web(web_controller.take()).await;
+            fixture.settle().await;
+        }
+
+        /// A terminal intent decides the ending over a queued configuration
+        /// reload, every time.
+        ///
+        /// The reload is queued once and never consumed: `recv` is cancel
+        /// safe, so an arm that is not polled takes no message, which is what
+        /// lets the same queued message lose round after round.
+        #[tokio::test]
+        async fn a_terminal_intent_outranks_a_queued_configuration_reload() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            write_config_file(&fixture.settings);
+            let before = fixture.settings.config.visible.ack_transmission;
+
+            let mut new_config = fixture.settings.config.visible.clone();
+            new_config.ack_transmission = before + 1;
+            fixture
+                .reload_tx
+                .send(new_config)
+                .await
+                .expect("the wait should still hold the receiver");
+
+            for round in 0..PRECEDENCE_ROUNDS {
+                fixture.notify_terminate.notify_one();
+                assert_eq!(
+                    wait_without_web(&mut fixture).await,
+                    GenerationEnd::Terminate,
+                    "round {round}"
+                );
+            }
+
+            assert_eq!(
+                fixture.settings.config.visible.ack_transmission, before,
+                "the queued reload should never have been taken"
+            );
+            fixture.settle().await;
+        }
+
+        /// A terminal intent decides the ending over an entry handle that has
+        /// already finished, every time — and that handle is still read at the
+        /// teardown boundary afterwards.
+        ///
+        /// Precedence decides which ending the generation reports, not which
+        /// outcomes get reported: the handle that lost is handed over, read
+        /// after the drain, and reported there as an early exit rather than a
+        /// clean stop, which is what degrades the generation.
+        #[tokio::test(start_paused = true)]
+        async fn a_terminal_intent_outranks_a_finished_entry_handle() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            let id = fixture
+                .finish_entry_task(Subsystem::Ingest, async { Ok(()) })
+                .await;
+
+            for round in 0..PRECEDENCE_ROUNDS {
+                fixture.notify_reboot.notify_one();
+                assert_eq!(
+                    wait_without_web(&mut fixture).await,
+                    GenerationEnd::Reboot,
+                    "round {round}"
+                );
+            }
+            assert!(
+                fixture.entry_tasks.ingest.is_some(),
+                "the arm that lost took nothing from the handle"
+            );
+
+            let database = test_database(&fixture.settings.config.visible.data_dir);
+            let effects = RecordingEffects::new();
+            let (logs, _guard) = capture_logs();
+            let health = shutdown_generation(
+                fixture_teardown(&mut fixture),
+                GenerationEnd::Reboot,
+                &database,
+                &effects,
+            )
+            .await
+            .expect("the teardown should not fail");
+
+            assert_eq!(health, GenerationHealth::Degraded);
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Ingest,
+                id,
+                "after_drain",
+                "early_exit",
+            );
+            // The three that were still parked stopped because the drain
+            // cancelled them, so they are the clean shape.
+            assert_eq!(
+                records(&logs, CLEAN_RECORD).len(),
+                3,
+                "got: {}",
+                captured(&logs)
+            );
+            // The degradation does not cancel the intent's action: the host is
+            // still asked to reboot, and the failure is what the lifecycle
+            // returns afterwards.
+            assert!(
+                act_on_generation_end(degraded(GenerationEnd::Reboot), &effects).is_err(),
+                "a degraded reboot should fail the lifecycle"
+            );
+            assert_eq!(
+                effects.calls(),
+                vec![EffectCall::ShutdownDatabase, EffectCall::Reboot]
+            );
+            // Four retained handles, and the six markers still in the one
+            // order every ending shares.
+            assert_marker_sequence(
+                &logs,
+                &full_marker_sequence(GenerationEnd::Reboot),
+                "Reboot with four retained handles",
+            );
+        }
+
+        /// A queued configuration reload decides the ending over an entry
+        /// handle that has already finished, every time.
+        ///
+        /// The reload is what restarts the subsystem that died, so taking the
+        /// entry-task exit first would throw away the recovery the operator
+        /// asked for. The handle is still reported after the drain.
+        #[tokio::test(start_paused = true)]
+        async fn a_configuration_reload_outranks_a_finished_entry_handle() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            write_config_file(&fixture.settings);
+            let id = fixture
+                .finish_entry_task(Subsystem::Publish, async { Ok(()) })
+                .await;
+
+            for round in 0..PRECEDENCE_ROUNDS {
+                let new_config = fixture.settings.config.visible.clone();
+                fixture
+                    .reload_tx
+                    .send(new_config)
+                    .await
+                    .expect("the wait should still hold the receiver");
+                assert_eq!(
+                    wait_without_web(&mut fixture).await,
+                    GenerationEnd::ReloadConfig,
+                    "round {round}"
+                );
+            }
+            assert!(fixture.entry_tasks.publish.is_some());
+
+            let database = test_database(&fixture.settings.config.visible.data_dir);
+            let effects = RecordingEffects::new();
+            let (logs, _guard) = capture_logs();
+            let health = shutdown_generation(
+                fixture_teardown(&mut fixture),
+                GenerationEnd::ReloadConfig,
+                &database,
+                &effects,
+            )
+            .await
+            .expect("the teardown should not fail");
+
+            assert_eq!(health, GenerationHealth::Degraded);
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Publish,
+                id,
+                "after_drain",
+                "early_exit",
+            );
+            // The one row a degradation does not fail: the next generation
+            // still starts, and the failure is logged rather than propagated.
+            assert_eq!(
+                act_on_generation_end(degraded(GenerationEnd::ReloadConfig), &effects)
+                    .expect("a degraded reload should not fail the lifecycle"),
+                ControlFlow::Continue(())
+            );
+        }
+
+        /// A TLS reload runs before a queued configuration reload, and the
+        /// generation still ends as a configuration reload.
+        ///
+        /// The two are ready together; the reload is the arm with a deadline,
+        /// so it goes first, and the configuration reload it delayed is taken
+        /// on the next turn of the loop.
+        #[tokio::test]
+        async fn a_tls_reload_outranks_a_queued_configuration_reload() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            write_config_file(&fixture.settings);
+            let web_addr = free_addr();
+            let mut web_controller = Some(live_web(&fixture, web_addr).await);
+
+            for round in 0..PRECEDENCE_ROUNDS {
+                let new_config = fixture.settings.config.visible.clone();
+                fixture
+                    .reload_tx
+                    .send(new_config)
+                    .await
+                    .expect("the wait should still hold the receiver");
+                fixture.notify_tls_reload.notify_one();
+
+                let (logs, guard) = capture_logs();
+                assert_eq!(
+                    wait_with_live_web(&mut fixture, &mut web_controller, web_addr).await,
+                    GenerationEnd::ReloadConfig,
+                    "round {round}"
+                );
+                assert_eq!(
+                    records(&logs, TLS_NOOP_RECORD).len(),
+                    1,
+                    "round {round}: the TLS reload should have run first, got: {}",
+                    captured(&logs)
+                );
+                drop(guard);
+            }
+            shutdown_web(web_controller.take()).await;
+            fixture.settle().await;
+        }
+
+        /// A TLS reload runs before an entry handle that has already finished,
+        /// and the generation then ends on that handle.
+        #[tokio::test]
+        async fn a_tls_reload_outranks_a_finished_entry_handle() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            let web_addr = free_addr();
+            let mut web_controller = Some(live_web(&fixture, web_addr).await);
+
+            for round in 0..PRECEDENCE_ROUNDS {
+                let id = fixture
+                    .finish_entry_task(Subsystem::Retention, async { Ok(()) })
+                    .await;
+                fixture.notify_tls_reload.notify_one();
+
+                let (logs, guard) = capture_logs();
+                assert_eq!(
+                    wait_with_live_web(&mut fixture, &mut web_controller, web_addr).await,
+                    GenerationEnd::EntryTaskExited(Subsystem::Retention),
+                    "round {round}"
+                );
+                assert_precedes(
+                    &logs,
+                    TLS_NOOP_RECORD,
+                    ABNORMAL_RECORD,
+                    &format!("round {round}: the TLS reload should have run first"),
+                );
+                assert_report_fields(
+                    &abnormal_report(&logs),
+                    Subsystem::Retention,
+                    id,
+                    "serving",
+                    "early_exit",
+                );
+                drop(guard);
+            }
+            shutdown_web(web_controller.take()).await;
+            fixture.settle().await;
+        }
+
+        /// A terminal intent ready alongside a TLS reload ends the generation
+        /// at once, and no reload runs.
+        ///
+        /// The TLS permit is never consumed, which is what says the arm was
+        /// not merely lost but never reached.
+        #[tokio::test]
+        async fn a_terminal_intent_outranks_a_tls_reload() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+
+            let (logs, _guard) = capture_logs();
+            for round in 0..PRECEDENCE_ROUNDS {
+                fixture.notify_tls_reload.notify_one();
+                fixture.notify_power_off.notify_one();
+                assert_eq!(
+                    wait_without_web(&mut fixture).await,
+                    GenerationEnd::PowerOff,
+                    "round {round}"
+                );
+            }
+
+            let output = captured(&logs);
+            assert!(
+                !output.contains("HTTPS reload"),
+                "no TLS reload should have run, got: {output}"
+            );
+            fixture.settle().await;
+        }
+
+        /// A finished entry handle is detected while failing configuration
+        /// reloads are still queued.
+        ///
+        /// The configuration file is never created, so every write fails on
+        /// the backup that precedes it — a failure of the path, not of timing.
+        /// That arm does not end the generation and refills at once, so
+        /// without the check that follows it the entry-task arms below would
+        /// go unpolled for as long as the reloads keep coming.
+        ///
+        /// What is left in the receiver is what pins the check. Two reloads
+        /// are queued before the wait is entered and the wait may take only
+        /// the first: the check the failed write arms takes the configuration
+        /// arm out of the round that follows, so the finished handle is
+        /// reached with the second reload still unread. Were the arm polled
+        /// again instead, the second reload would be taken as well and the
+        /// receiver would come back empty. The leftover message and the count
+        /// of failed writes are therefore what tell the two apart, neither of
+        /// them depending on how the runtime schedules a sender.
+        #[tokio::test]
+        async fn a_finished_handle_is_detected_while_failing_reloads_keep_arriving() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            let id = fixture
+                .finish_entry_task(Subsystem::Peer, async { Ok(()) })
+                .await;
+            fixture.queue_failing_reloads(2);
+
+            let (logs, _guard) = capture_logs();
+            let end = tokio::time::timeout(READY_TIMEOUT, wait_without_web(&mut fixture))
+                .await
+                .expect(
+                    "the wait should end on the finished handle, not on the reloads running out",
+                );
+
+            assert_eq!(end, GenerationEnd::EntryTaskExited(Subsystem::Peer));
+            assert!(
+                fixture.intents.reload_rx.try_recv().is_ok(),
+                "a queued reload should have been left unread, so the handle was reached \
+                 while the reloads were still there to take"
+            );
+            assert_eq!(
+                records(&logs, "Failed to update configuration").len(),
+                1,
+                "exactly one reload should have been taken before the check, got: {}",
+                captured(&logs)
+            );
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Peer,
+                id,
+                "serving",
+                "early_exit",
+            );
+            fixture.settle().await;
+        }
+
+        /// One failed configuration write on its own leaves the generation
+        /// serving.
+        ///
+        /// The check that follows it finds nothing ready, so it returns to the
+        /// selection immediately — and the next reload, sent once the
+        /// configuration file exists, is applied normally.
+        #[tokio::test]
+        async fn a_failed_configuration_write_alone_keeps_the_generation_serving() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            let reload_tx = fixture.reload_tx.clone();
+            let settings = fixture.settings.clone();
+            let mut applied = settings.config.visible.clone();
+            applied.ack_transmission = settings.config.visible.ack_transmission + 1;
+
+            let (logs, _guard) = capture_logs();
+            let (end, ()) = tokio::join!(wait_without_web(&mut fixture), async {
+                reload_tx
+                    .send(settings.config.visible.clone())
+                    .await
+                    .expect("the wait should still hold the receiver");
+                wait_for_logs(&logs, &["Failed to update configuration"]).await;
+
+                // The path is writable now, so the next reload is persisted.
+                write_config_file(&settings);
+                reload_tx
+                    .send(applied)
+                    .await
+                    .expect("the wait should still hold the receiver");
+            });
+
+            assert_eq!(end, GenerationEnd::ReloadConfig);
+            assert_eq!(
+                fixture.settings.config.visible.ack_transmission,
+                settings.config.visible.ack_transmission + 1,
+                "the second reload should have been applied"
+            );
+            assert!(
+                records(&logs, ABNORMAL_RECORD).is_empty(),
+                "nothing ended abnormally, got: {}",
+                captured(&logs)
+            );
+            fixture.settle().await;
+        }
+
+        /// A resolver that parks until the test releases it.
+        ///
+        /// `entered` fires the first time the resolver is reached, so a test
+        /// can prove a request is genuinely in flight rather than infer it
+        /// from a wall-clock sleep; `release` is what lets the request answer.
+        /// A request that has not been released is what keeps
+        /// [`WebController::shutdown`] from returning, which is how a TLS
+        /// reload is held mid-flight without a production seam.
+        #[derive(Clone)]
+        struct ParkSignal {
+            entered: Arc<Notify>,
+            release: Arc<Notify>,
+        }
+
+        struct ParkQuery;
+
+        #[Object]
+        impl ParkQuery {
+            async fn hello(&self) -> &'static str {
+                "world"
+            }
+
+            async fn park(&self, ctx: &async_graphql::Context<'_>) -> &'static str {
+                let (entered, release) = {
+                    let signal = ctx
+                        .data::<ParkSignal>()
+                        .expect("the parking schema carries its signal");
+                    (Arc::clone(&signal.entered), Arc::clone(&signal.release))
+                };
+                entered.notify_one();
+                release.notified().await;
+                "released"
+            }
+        }
+
+        fn parking_schema(
+            signal: &ParkSignal,
+        ) -> Schema<ParkQuery, EmptyMutation, EmptySubscription> {
+            Schema::build(ParkQuery, EmptyMutation, EmptySubscription)
+                .data(signal.clone())
+                .finish()
+        }
+
+        /// The graceful-shutdown timeout the held reload runs under.
+        ///
+        /// Long enough that the parked request is never cut off before the
+        /// test releases it, which is what makes the hold a hold rather than a
+        /// race against a deadline.
+        const WEB_HOLD_TIMEOUT: Duration = Duration::from_secs(30);
+
+        /// What the test raises while the TLS reload is held mid-flight.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum MidFlight {
+            /// A terminal intent, over a configuration reload queued before
+            /// the wait and an entry handle that has already finished.
+            Reboot,
+            /// A configuration update whose write succeeds, over that same
+            /// finished handle.
+            PersistedReload,
+            /// A configuration update whose write fails, so the check that
+            /// follows it is what finds the finished handle.
+            FailingReload,
+            /// Another SIGHUP alongside a configuration update whose write
+            /// fails, so the reload outranks both.
+            AnotherTlsReload,
+        }
+
+        /// What outranks what at the selection a non-ending arm returns to.
+        ///
+        /// The TLS reload is held mid-flight by a real request that has not
+        /// been answered: `reload_https_server` shuts the live HTTPS server
+        /// down gracefully, and `WebController::shutdown` cannot return while
+        /// a request is still in its resolver. The graceful-shutdown record is
+        /// what confirms the branch was entered, and the request that has not
+        /// been released is what keeps it there — nothing here is inferred
+        /// from a wall-clock sleep.
+        ///
+        /// The TLS material has to actually change for that path to run at
+        /// all: with a live controller and unchanged material the reload
+        /// returns before it touches the server. So a valid but different
+        /// certificate set is written to the same paths before the SIGHUP.
+        ///
+        /// This is the order that applies immediately after the branch
+        /// returns, not preemption of the reload that was running.
+        // Four rounds of one drive, each with its own live server, parked
+        // request and assertions; splitting them would mean four copies of the
+        // setup rather than one.
+        #[allow(clippy::too_many_lines)]
+        #[tokio::test]
+        async fn what_outranks_what_when_a_tls_reload_returns() {
+            for injection in [
+                MidFlight::Reboot,
+                MidFlight::PersistedReload,
+                MidFlight::FailingReload,
+                MidFlight::AnotherTlsReload,
+            ] {
+                let case = format!("{injection:?}");
+                let dir = tempdir().expect("tempdir");
+                let mut fixture = wait_fixture(dir.path());
+                // The two cases whose reload has to persist need the file the
+                // rewrite backs up; the other two reach the failure arm by not
+                // having it.
+                if matches!(injection, MidFlight::Reboot | MidFlight::PersistedReload) {
+                    write_config_file(&fixture.settings);
+                }
+                let id = fixture
+                    .finish_entry_task(Subsystem::Ingest, async { Ok(()) })
+                    .await;
+
+                // A live HTTPS server with one request parked inside it.
+                let tls = tls_reload::get_current_tls_material(&fixture.process.tls_watch);
+                let web_addr = free_addr();
+                let signal = ParkSignal {
+                    entered: Arc::new(Notify::new()),
+                    release: Arc::new(Notify::new()),
+                };
+                let mut web_controller = Some(
+                    web::serve(
+                        parking_schema(&signal),
+                        web_addr,
+                        tls.cert_pem.clone(),
+                        tls.key_pem.clone(),
+                        tls.ca_pem.clone(),
+                        WEB_HOLD_TIMEOUT,
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("{case}: the parking server should start: {e:#}")),
+                );
+                let client = super::reload_https_server_tests::build_mtls_client(
+                    &tls.cert_pem,
+                    &tls.key_pem,
+                    &tls.ca_pem,
+                );
+                let parked = task::spawn(async move {
+                    client
+                        .post(format!("https://{web_addr}/graphql"))
+                        .header("Content-Type", "application/json")
+                        .body(r#"{"query":"{ park }"}"#)
+                        .send()
+                        .await
+                });
+                tokio::time::timeout(READY_TIMEOUT, signal.entered.notified())
+                    .await
+                    .unwrap_or_else(|_| {
+                        panic!("{case}: the request should have reached the resolver")
+                    });
+
+                // Valid but different material on the same paths, so the
+                // reload has something to rebind for.
+                write_node_pki(dir.path());
+                fixture.notify_tls_reload.notify_one();
+                if injection == MidFlight::Reboot {
+                    // Queued before the wait, so what the reboot outranks is a
+                    // reload that was already there.
+                    fixture
+                        .reload_tx
+                        .send(fixture.settings.config.visible.clone())
+                        .await
+                        .expect("the wait should still hold the receiver");
+                }
+
+                let notify_reboot = Arc::clone(&fixture.notify_reboot);
+                let notify_tls_reload = Arc::clone(&fixture.notify_tls_reload);
+                let reload_tx = fixture.reload_tx.clone();
+                let release = Arc::clone(&signal.release);
+                let mut injected = fixture.settings.config.visible.clone();
+                injected.ack_transmission += 1;
+                let before = fixture.settings.config.visible.ack_transmission;
+                let schema = parking_schema(&signal);
+
+                let (logs, guard) = capture_logs();
+                let (end, ()) = tokio::time::timeout(GENERATION_TIMEOUT, async {
+                    tokio::join!(
+                        wait_for_generation_end(
+                            &mut fixture.settings,
+                            &fixture.process,
+                            &mut fixture.intents,
+                            &mut fixture.entry_tasks,
+                            &mut web_controller,
+                            &schema,
+                            web_addr,
+                            WEB_HOLD_TIMEOUT,
+                        ),
+                        async {
+                            wait_for_logs(&logs, &["HTTPS reload: initiating graceful shutdown"])
+                                .await;
+                            match injection {
+                                MidFlight::Reboot => notify_reboot.notify_one(),
+                                MidFlight::AnotherTlsReload => {
+                                    notify_tls_reload.notify_one();
+                                    reload_tx
+                                        .send(injected)
+                                        .await
+                                        .expect("the wait still holds the receiver");
+                                }
+                                _ => reload_tx
+                                    .send(injected)
+                                    .await
+                                    .expect("the wait still holds the receiver"),
+                            }
+                            release.notify_one();
+                        }
+                    )
+                })
+                .await
+                .unwrap_or_else(|_| panic!("{case}: the wait should have ended"));
+
+                let output = captured(&logs);
+                match injection {
+                    MidFlight::Reboot => {
+                        assert_eq!(end, GenerationEnd::Reboot, "{case}");
+                        assert_eq!(
+                            fixture.settings.config.visible.ack_transmission, before,
+                            "{case}: the queued reload should still be queued"
+                        );
+                        // The handle the reboot outranked is handed to the
+                        // teardown marked as having already finished, which is
+                        // what makes it an early exit rather than a clean stop
+                        // when it is read back after the drain.
+                        let handed_over = fixture.take_retained();
+                        assert!(
+                            handed_over
+                                .iter()
+                                .any(|task| task.handle.id() == id && task.already_finished),
+                            "{case}: the finished handle should have been handed over"
+                        );
+                    }
+                    MidFlight::PersistedReload => {
+                        assert_eq!(end, GenerationEnd::ReloadConfig, "{case}");
+                        assert!(
+                            fixture.entry_tasks.ingest.is_some(),
+                            "{case}: the update outranks the finished handle"
+                        );
+                        assert_eq!(
+                            fixture.settings.config.visible.ack_transmission,
+                            before + 1,
+                            "{case}: the update should have been applied"
+                        );
+                    }
+                    MidFlight::FailingReload => {
+                        assert_eq!(
+                            end,
+                            GenerationEnd::EntryTaskExited(Subsystem::Ingest),
+                            "{case}"
+                        );
+                        assert!(
+                            output.contains("Failed to update configuration"),
+                            "{case}: the check follows a write that failed, got: {output}"
+                        );
+                        assert_report_fields(
+                            &abnormal_report(&logs),
+                            Subsystem::Ingest,
+                            id,
+                            "serving",
+                            "early_exit",
+                        );
+                    }
+                    MidFlight::AnotherTlsReload => {
+                        assert_eq!(
+                            end,
+                            GenerationEnd::EntryTaskExited(Subsystem::Ingest),
+                            "{case}"
+                        );
+                        // The second reload has nothing to rebind — the files
+                        // have not changed since the first one read them — so
+                        // it returns at once. That it ran at all, and ran
+                        // before the finished handle was taken, is the order
+                        // under test.
+                        assert_precedes(
+                            &logs,
+                            TLS_NOOP_RECORD,
+                            ABNORMAL_RECORD,
+                            &format!("{case}: the pending reload should have gone first"),
+                        );
+                        assert_report_fields(
+                            &abnormal_report(&logs),
+                            Subsystem::Ingest,
+                            id,
+                            "serving",
+                            "early_exit",
+                        );
+                    }
+                }
+                drop(guard);
+
+                fixture.settle().await;
+                shutdown_web(web_controller.take()).await;
+                tokio::time::timeout(READY_TIMEOUT, parked)
+                    .await
+                    .unwrap_or_else(|_| panic!("{case}: the released request should have answered"))
+                    .unwrap_or_else(|e| panic!("{case}: the request task should join: {e}"))
+                    .unwrap_or_else(|e| panic!("{case}: the request should succeed: {e}"));
+            }
         }
 
         /// Every ending shuts the store down, and only the tail after it
@@ -2684,10 +4098,18 @@ mod tests {
                 let effects = RecordingEffects::new();
                 let (logs, guard) = capture_logs();
 
-                shutdown_generation(empty_teardown(), generation_end, &database, &effects)
-                    .await
-                    .unwrap_or_else(|e| panic!("{ending}: the teardown should not fail: {e:#}"));
-                let flow = act_on_generation_end(generation_end, &effects);
+                let health =
+                    shutdown_generation(empty_teardown(), generation_end, &database, &effects)
+                        .await
+                        .unwrap_or_else(|e| {
+                            panic!("{ending}: the teardown should not fail: {e:#}")
+                        });
+                assert_eq!(
+                    health,
+                    GenerationHealth::Clean,
+                    "{ending}: a teardown with nothing to read back is not degraded"
+                );
+                let flow = act_on_generation_end(clean(generation_end), &effects);
 
                 assert_marker_sequence(&logs, &full_marker_sequence(generation_end), &ending);
                 let output = captured(&logs);
@@ -2718,12 +4140,14 @@ mod tests {
                         ControlFlow::Continue(()),
                         "{ending}: a reload should ask for another generation"
                     ),
-                    GenerationEnd::IngestExited => {
+                    GenerationEnd::EntryTaskExited(subsystem) => {
                         let error = flow
                             .err()
                             .unwrap_or_else(|| panic!("{ending}: an early exit should fail"));
                         assert!(
-                            error.to_string().contains("ingest subsystem ended"),
+                            error
+                                .to_string()
+                                .contains(&format!("the {subsystem} subsystem ended")),
                             "{ending}: got: {error:#}"
                         );
                     }
@@ -2794,7 +4218,7 @@ mod tests {
                 let effects = RecordingEffects::refusing_host_actions();
                 let (logs, guard) = capture_logs();
 
-                let error = act_on_generation_end(generation_end, &effects)
+                let error = act_on_generation_end(clean(generation_end), &effects)
                     .err()
                     .unwrap_or_else(|| panic!("{ending}: a refused command should fail"));
 
@@ -2812,66 +4236,90 @@ mod tests {
             }
         }
 
-        /// A retained handle that came back badly is reported and suppresses
-        /// nothing.
+        /// A retained handle that came back badly is reported, degrades the
+        /// generation, and suppresses nothing.
         ///
         /// The three abnormal completions a handle can carry, against the two
         /// shapes of final action: a host command, and the next generation.
-        /// What is asserted is that the failure was reported and that the
-        /// action still happened — not that the teardown returned plain
-        /// success, which is what the entry-task supervision issue is expected
-        /// to turn into a degraded outcome.
+        /// The rest of the teardown and the database shutdown still run, the
+        /// action is still taken, and the record names the task at
+        /// `phase="after_drain"`.
         #[tokio::test(start_paused = true)]
         async fn a_failed_retained_handle_is_reported_and_suppresses_no_action() {
             let dir = tempdir().expect("tempdir");
             let settings = test_settings(dir.path());
             let database = test_database(&settings.config.visible.data_dir);
+            let tracker = TaskTracker::new();
 
-            for (failure, report) in [
-                ("error", "Retention had already terminated unexpectedly"),
-                ("panic", "Retention panicked"),
-                ("cancelled", "Retention did not run to completion"),
-            ] {
+            for outcome in ["error", "panic", "cancelled"] {
                 for generation_end in [GenerationEnd::Reboot, GenerationEnd::ReloadConfig] {
-                    let case = format!("{failure}/{generation_end:?}");
-                    let retain_task_handle: JoinHandle<Result<()>> = match failure {
-                        "error" => task::spawn(async { Err(anyhow!("a retention pass failed")) }),
-                        "panic" => task::spawn(async { panic!("the retention task panicked") }),
+                    let case = format!("{outcome}/{generation_end:?}");
+                    // Installed before the stand-in is built: a panic and an
+                    // abort are reported by the registration guard the moment
+                    // they happen, not when the handle is read back.
+                    let (logs, guard) = capture_logs();
+                    let handle = match outcome {
+                        "error" => stand_in(&tracker, Subsystem::Retention, async {
+                            Err(anyhow!("a retention pass failed"))
+                        }),
+                        "panic" => stand_in(&tracker, Subsystem::Retention, async {
+                            panic!("the retention task panicked")
+                        }),
                         _ => {
-                            // Aborted before the teardown reads it, so the join
-                            // returns a cancellation `JoinError`.
-                            let handle = task::spawn(std::future::pending::<Result<()>>());
+                            // Aborted before the teardown reads it, so the
+                            // join returns a cancellation `JoinError`.
+                            let handle =
+                                stand_in(&tracker, Subsystem::Retention, std::future::pending());
                             handle.abort();
                             handle
                         }
                     };
+                    let id = handle.id();
 
                     let effects = RecordingEffects::new();
-                    let (logs, guard) = capture_logs();
-                    // The return value is deliberately not asserted on: a
-                    // handle failure reaching the lifecycle result is the
-                    // supervision issue's to add.
-                    let _outcome = shutdown_generation(
-                        teardown_with_retention(retain_task_handle),
+                    let health = shutdown_generation(
+                        teardown_with_entry_tasks(vec![retained(handle, false)]),
                         generation_end,
                         &database,
                         &effects,
                     )
-                    .await;
-                    let flow = act_on_generation_end(generation_end, &effects);
+                    .await
+                    .unwrap_or_else(|e| panic!("{case}: the teardown should not fail: {e:#}"));
+                    assert_eq!(
+                        health,
+                        GenerationHealth::Degraded,
+                        "{case}: an abnormal handle degrades the generation"
+                    );
+                    let flow = act_on_generation_end(
+                        GenerationOutcome {
+                            ending: generation_end,
+                            health,
+                        },
+                        &effects,
+                    );
 
-                    let output = captured(&logs);
-                    assert!(
-                        output.contains(report),
-                        "{case}: the handle failure should be reported, got: {output}"
+                    assert_report_fields(
+                        &abnormal_report(&logs),
+                        Subsystem::Retention,
+                        id,
+                        "after_drain",
+                        outcome,
                     );
                     assert_marker_sequence(&logs, &full_marker_sequence(generation_end), &case);
+                    assert_lifecycle_record(&sole_record(&logs, DEGRADED_RECORD), generation_end);
 
                     if generation_end == GenerationEnd::Reboot {
                         assert_eq!(
                             effects.calls(),
                             vec![EffectCall::ShutdownDatabase, EffectCall::Reboot],
                             "{case}: the reboot should still have been asked for"
+                        );
+                        let error = flow.err().unwrap_or_else(|| {
+                            panic!("{case}: a degraded reboot should fail the lifecycle")
+                        });
+                        assert!(
+                            error.to_string().contains("degraded"),
+                            "{case}: got: {error:#}"
                         );
                     } else {
                         assert_eq!(
@@ -2883,6 +4331,291 @@ mod tests {
                     drop(guard);
                 }
             }
+        }
+
+        /// A retained handle that stopped because the drain cancelled it is
+        /// not a failure.
+        ///
+        /// It is the one shape reported at `info!`, with `outcome="clean"`,
+        /// and it leaves the generation undegraded and the lifecycle result a
+        /// success. The stand-in waits for its token, so it returns `Ok(())`
+        /// only because the drain cancelled it.
+        #[tokio::test(start_paused = true)]
+        async fn a_retained_handle_that_stopped_on_cancellation_is_clean() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+
+            let top_level_tracker = TaskTracker::new();
+            let handle = top_level_tracker
+                .spawn_observed("retention", |cancel| async move {
+                    cancel.cancelled().await;
+                    Ok(())
+                })
+                .expect("a fresh tracker admits the retention stand-in");
+            let id = handle.id();
+
+            let effects = RecordingEffects::new();
+            let (logs, _guard) = capture_logs();
+            let health = shutdown_generation(
+                GenerationTeardown {
+                    web_controller: None,
+                    web_reaper_tracker: TaskTracker::new(),
+                    top_level_tracker,
+                    entry_tasks: vec![retained(handle, false)],
+                },
+                GenerationEnd::Terminate,
+                &database,
+                &effects,
+            )
+            .await
+            .expect("the teardown should not fail");
+
+            assert_eq!(health, GenerationHealth::Clean);
+            assert_report_fields(
+                &sole_record(&logs, CLEAN_RECORD),
+                Subsystem::Retention,
+                id,
+                "after_drain",
+                "clean",
+            );
+            assert!(
+                records(&logs, ABNORMAL_RECORD).is_empty(),
+                "a cancelled task that stopped is not abnormal, got: {}",
+                captured(&logs)
+            );
+            assert_eq!(
+                act_on_generation_end(clean(GenerationEnd::Terminate), &effects)
+                    .expect("a clean terminate should not fail"),
+                ControlFlow::Break(())
+            );
+        }
+
+        /// An `Ok(())` from a handle that had already finished when the wait
+        /// ended is an early exit, not a clean stop.
+        ///
+        /// Cancellation happens inside the drain, so a task that was already
+        /// finished cannot have finished because of it. The two cases differ
+        /// only in that flag, and they are read as different outcomes.
+        #[tokio::test(start_paused = true)]
+        async fn an_already_finished_handle_reads_as_an_early_exit() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+            let tracker = TaskTracker::new();
+            let handle = finished_stand_in(&tracker, Subsystem::Publish, async { Ok(()) }).await;
+            let id = handle.id();
+
+            let effects = RecordingEffects::new();
+            let (logs, _guard) = capture_logs();
+            let health = shutdown_generation(
+                teardown_with_entry_tasks(vec![retained(handle, true)]),
+                GenerationEnd::Terminate,
+                &database,
+                &effects,
+            )
+            .await
+            .expect("the teardown should not fail");
+
+            assert_eq!(health, GenerationHealth::Degraded);
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Publish,
+                id,
+                "after_drain",
+                "early_exit",
+            );
+        }
+
+        /// What the lifecycle returns for a degraded generation, per ending.
+        ///
+        /// The final action is taken on every row; only the result differs,
+        /// and the configuration reload is the one row a degradation does not
+        /// fail. One outcome class is enough here: the ending contract does
+        /// not vary by class.
+        #[tokio::test(start_paused = true)]
+        async fn a_degraded_generation_still_takes_its_action() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+            let tracker = TaskTracker::new();
+
+            for generation_end in ALL_ENDINGS {
+                let ending = format!("{generation_end:?}");
+                let handle = stand_in(&tracker, Subsystem::Ingest, async {
+                    Err(anyhow!("the listener is gone"))
+                });
+
+                let effects = RecordingEffects::new();
+                let (logs, guard) = capture_logs();
+                let health = shutdown_generation(
+                    teardown_with_entry_tasks(vec![retained(handle, false)]),
+                    generation_end,
+                    &database,
+                    &effects,
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{ending}: the teardown should not fail: {e:#}"));
+                assert_eq!(health, GenerationHealth::Degraded, "{ending}");
+
+                let flow = act_on_generation_end(degraded(generation_end), &effects);
+                let expected_calls = match generation_end {
+                    GenerationEnd::Reboot => {
+                        vec![EffectCall::ShutdownDatabase, EffectCall::Reboot]
+                    }
+                    GenerationEnd::PowerOff => {
+                        vec![EffectCall::ShutdownDatabase, EffectCall::PowerOff]
+                    }
+                    _ => vec![EffectCall::ShutdownDatabase],
+                };
+                assert_eq!(
+                    effects.calls(),
+                    expected_calls,
+                    "{ending}: the ending's action is taken whatever the health"
+                );
+
+                if generation_end == GenerationEnd::ReloadConfig {
+                    assert_eq!(
+                        flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
+                        ControlFlow::Continue(()),
+                        "{ending}: a degraded reload still hands over to the next generation"
+                    );
+                } else {
+                    assert!(
+                        flow.is_err(),
+                        "{ending}: a degraded generation should fail the lifecycle"
+                    );
+                }
+                assert_lifecycle_record(&sole_record(&logs, DEGRADED_RECORD), generation_end);
+                drop(guard);
+            }
+        }
+
+        /// A store that cannot be shut down still suppresses the action, even
+        /// when the generation is also degraded.
+        #[tokio::test(start_paused = true)]
+        async fn a_failed_database_shutdown_beats_a_degraded_generation() {
+            let dir = tempdir().expect("tempdir");
+            let settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+            let tracker = TaskTracker::new();
+            let handle = stand_in(&tracker, Subsystem::Ingest, async {
+                Err(anyhow!("the listener is gone"))
+            });
+            let id = handle.id();
+
+            let effects = RecordingEffects::failing();
+            let (logs, _guard) = capture_logs();
+            let error = shutdown_generation(
+                teardown_with_entry_tasks(vec![retained(handle, false)]),
+                GenerationEnd::Reboot,
+                &database,
+                &effects,
+            )
+            .await
+            .expect_err("a failed database shutdown should end the teardown");
+
+            assert!(
+                error.to_string().contains(SHUTDOWN_FAILURE),
+                "the seam's failure should be what propagates, got: {error:#}"
+            );
+            assert_eq!(
+                effects.calls(),
+                vec![EffectCall::ShutdownDatabase],
+                "no host action may follow a store whose state is unknown"
+            );
+            // The handle was still read, before the store was touched.
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Ingest,
+                id,
+                "after_drain",
+                "error",
+            );
+        }
+
+        /// A degraded generation whose host action also fails returns the
+        /// action's error, and both records reach the log in order.
+        #[tokio::test]
+        async fn a_degraded_generation_whose_host_action_fails_reports_both() {
+            let effects = RecordingEffects::refusing_host_actions();
+            let (logs, guard) = capture_logs();
+
+            let error = act_on_generation_end(degraded(GenerationEnd::Reboot), &effects)
+                .expect_err("a refused command should fail the lifecycle");
+
+            assert!(
+                error.to_string().contains(HOST_REFUSAL),
+                "the host's refusal is the more actionable of the two, got: {error:#}"
+            );
+            let degraded_record = sole_record(&logs, DEGRADED_RECORD);
+            let failed_action = sole_record(&logs, FAILED_ACTION_RECORD);
+            assert_lifecycle_record(&degraded_record, GenerationEnd::Reboot);
+            assert_lifecycle_record(&failed_action, GenerationEnd::Reboot);
+            assert!(
+                failed_action.contains(HOST_REFUSAL),
+                "the failed-action record should carry the cause, got: {failed_action}"
+            );
+            assert_precedes(
+                &logs,
+                DEGRADED_RECORD,
+                FAILED_ACTION_RECORD,
+                "the degraded record comes first",
+            );
+            drop(guard);
+
+            // The companion: a reboot that succeeds leaves the degraded record
+            // alone, with no failed-action record beside it.
+            let effects = RecordingEffects::new();
+            let (logs, _guard) = capture_logs();
+            let error = act_on_generation_end(degraded(GenerationEnd::Reboot), &effects)
+                .expect_err("a degraded reboot should fail the lifecycle");
+            assert!(error.to_string().contains("degraded"), "got: {error:#}");
+            assert_lifecycle_record(&sole_record(&logs, DEGRADED_RECORD), GenerationEnd::Reboot);
+            assert!(
+                records(&logs, FAILED_ACTION_RECORD).is_empty(),
+                "an action that succeeded leaves no failure record, got: {}",
+                captured(&logs)
+            );
+        }
+
+        /// A task that has completed and left the registry is still reported
+        /// with its name, id and elapsed time.
+        ///
+        /// The registration guard removes the registry entry as the task
+        /// returns, which is the very moment the boundary reads the handle, so
+        /// nothing about the task is recoverable from the tracker by then. The
+        /// copy the observed handle carries is what survives that.
+        #[tokio::test]
+        async fn a_observed_handle_names_a_task_the_registry_has_forgotten() {
+            let tracker = TaskTracker::new();
+            let handle = finished_stand_in(&tracker, Subsystem::Peer, async { Ok(()) }).await;
+            let id = handle.id();
+            assert_eq!(
+                tracker.pending_count(),
+                0,
+                "the task should have left the registry"
+            );
+
+            let (logs, _guard) = capture_logs();
+            assert!(observe_entry_task(retained(handle, true)).await);
+            assert_report_fields(
+                &abnormal_report(&logs),
+                Subsystem::Peer,
+                id,
+                "after_drain",
+                "early_exit",
+            );
+
+            // The other half: `spawn` is untouched, so a caller that wants a
+            // bare handle still gets one.
+            let plain: JoinHandle<Result<()>> = tracker
+                .spawn("plain", |_cancel| async { Ok(()) })
+                .expect("the tracker still admits a plain spawn");
+            plain
+                .await
+                .expect("the plain task should join")
+                .expect("the plain task should succeed");
         }
 
         /// The store is shut down only after the drain reports the tracker
@@ -2897,6 +4630,7 @@ mod tests {
         /// the observable, which is why this holds for a terminate and a
         /// reload as well as for the reboot that used to be the only ending
         /// leaving a line behind.
+        #[allow(clippy::too_many_lines)]
         #[tokio::test]
         async fn the_database_is_shut_down_only_after_the_drain_reports_the_tracker_empty() {
             let dir = tempdir().expect("tempdir");
@@ -2915,8 +4649,8 @@ mod tests {
                 let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
                 let cleanup_started = Arc::new(AtomicBool::new(false));
                 let cleanup_finished = Arc::new(AtomicBool::new(false));
-                let retain_task_handle: JoinHandle<Result<()>> = tracker
-                    .spawn("retention", {
+                let retain_task_handle = tracker
+                    .spawn_observed("retention", {
                         let db = database.clone();
                         let cleanup_started = Arc::clone(&cleanup_started);
                         let cleanup_finished = Arc::clone(&cleanup_finished);
@@ -2937,6 +4671,7 @@ mod tests {
                         }
                     })
                     .expect("a fresh tracker admits the retention task");
+                let retain_task_id = retain_task_handle.id();
 
                 let effects = RecordingEffects::new();
                 let (logs, guard) = capture_logs();
@@ -2950,8 +4685,7 @@ mod tests {
                                 web_controller: None,
                                 web_reaper_tracker: TaskTracker::new(),
                                 top_level_tracker,
-                                retain_task_handle,
-                                ingest_task_handle: None,
+                                entry_tasks: vec![retained(retain_task_handle, false)],
                             },
                             generation_end,
                             &database,
@@ -3015,10 +4749,12 @@ mod tests {
                     cleanup_finished.load(Ordering::SeqCst),
                     "{ending}: the blocking cleanup should have run to the end first"
                 );
-                let output = captured(&logs);
-                assert!(
-                    output.contains("Retention stopped"),
-                    "{ending}: the retention handle should have been read, got: {output}"
+                assert_report_fields(
+                    &sole_record(&logs, CLEAN_RECORD),
+                    Subsystem::Retention,
+                    retain_task_id,
+                    "after_drain",
+                    "clean",
                 );
 
                 // What is left of the tail is a delay, and this test is not
@@ -3072,8 +4808,7 @@ mod tests {
                             web_controller: None,
                             web_reaper_tracker,
                             top_level_tracker,
-                            retain_task_handle: task::spawn(async { Ok(()) }),
-                            ingest_task_handle: None,
+                            entry_tasks: Vec::new(),
                         },
                         GenerationEnd::Terminate,
                         &database,
@@ -3257,8 +4992,12 @@ mod tests {
                 "the terminate arm should have run, got: {output}"
             );
             assert!(
-                output.contains("Retention stopped"),
-                "the retention task should have stopped cleanly, got: {output}"
+                records(&logs, CLEAN_RECORD).len() == 3,
+                "the three entry tasks should each have stopped cleanly, got: {output}"
+            );
+            assert!(
+                records(&logs, ABNORMAL_RECORD).is_empty(),
+                "nothing should have ended abnormally, got: {output}"
             );
             // Nothing here joins a publish handle, so this line can only come
             // from the token the top-level tracker handed its entry task.
@@ -3376,7 +5115,7 @@ mod tests {
                 .expect("a terminate intent should end the generation")
                 .expect("the generation should not fail");
 
-            assert_eq!(end, GenerationEnd::Terminate);
+            assert_eq!(end, clean(GenerationEnd::Terminate));
 
             let output = captured(&logs);
             assert!(
@@ -3660,46 +5399,48 @@ mod tests {
             assert_eq!(effects.calls(), vec![EffectCall::ShutdownDatabase]);
         }
 
-        /// A peer subsystem that ends on its own does not take the generation
-        /// with it.
+        /// A peer subsystem that ends on its own takes the generation with it.
         ///
         /// The configuration file is never written, so the peer subsystem
         /// fails the read it performs on startup and returns an error instead
-        /// of parking. The generation keeps serving, reports the failure, and
-        /// still ends on the intent it is given.
+        /// of parking. Nothing is notified here: the only thing that can end
+        /// this generation is the peer entry task, and a generation that
+        /// carried on serving without peer would sit here until
+        /// `GENERATION_TIMEOUT`.
         #[tokio::test]
-        async fn a_generation_reports_a_peer_subsystem_that_ended_early() {
+        async fn a_peer_subsystem_that_ends_early_ends_the_generation() {
             let dir = tempdir().expect("tempdir");
-            let notify_terminate = Arc::new(Notify::new());
-            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let process = test_process_context(dir.path(), Arc::new(Notify::new()));
             let mut settings = test_settings(dir.path());
             settings.config.peer_srv_addr = Some(ephemeral_addr());
 
             let (logs, _guard) = capture_logs();
-            let (end, ()) = tokio::join!(
-                tokio::time::timeout(
-                    GENERATION_TIMEOUT,
-                    run_generation(&mut settings, &process, &HostEffects)
-                ),
-                async {
-                    wait_for_logs(
-                        &logs,
-                        &[
-                            "Ingest listening on",
-                            "Publish listening on",
-                            "Peer subsystem terminated unexpectedly",
-                            "Database cleanup completed.",
-                        ],
-                    )
-                    .await;
-                    notify_terminate.notify_one();
-                }
-            );
-            let end = end
-                .expect("a terminate intent should end the generation")
-                .expect("a failed peer subsystem should not fail the generation");
+            let end = tokio::time::timeout(
+                GENERATION_TIMEOUT,
+                run_generation(&mut settings, &process, &HostEffects),
+            )
+            .await
+            .expect("a failed peer subsystem should end the generation on its own")
+            .expect("an entry task that ended is not a failure of the generation itself");
 
-            assert_eq!(end, GenerationEnd::Terminate);
+            assert_eq!(
+                end,
+                clean(GenerationEnd::EntryTaskExited(Subsystem::Peer)),
+                "the generation should name the subsystem that ended it"
+            );
+
+            let output = captured(&logs);
+            // The subsystem still reports its own failure where it happens;
+            // the boundary record is in addition to it, not in place of it.
+            assert!(
+                output.contains("Peer subsystem terminated unexpectedly"),
+                "the peer subsystem should report its own error, got: {output}"
+            );
+            let report = abnormal_report(&logs);
+            assert!(
+                report.contains("name=\"peer\"") && report.contains("phase=\"serving\""),
+                "the boundary should name the task it observed, got: {report}"
+            );
         }
 
         /// An ingest entry task that ends on its own takes the generation
@@ -3754,9 +5495,15 @@ mod tests {
                 output.contains("Ingest subsystem terminated unexpectedly"),
                 "the entry task should report its own error, got: {output}"
             );
+            // One record at the coordination boundary, naming the task and
+            // classing the outcome: the task returned an error, it did not
+            // panic and it was not cancelled.
+            let report = abnormal_report(&logs);
             assert!(
-                !output.contains("Ingest task did not join"),
-                "the entry task returned, it did not panic, got: {output}"
+                report.contains("name=\"ingest\"")
+                    && report.contains("phase=\"serving\"")
+                    && report.contains("outcome=\"error\""),
+                "the boundary should class what it observed, got: {report}"
             );
             // The generation still went down the common shutdown sequence:
             // the subsystems it did start were notified and the drain ran.
@@ -3766,26 +5513,22 @@ mod tests {
             );
             assert_marker_sequence(
                 &logs,
-                &full_marker_sequence(GenerationEnd::IngestExited),
-                "IngestExited",
+                &full_marker_sequence(GenerationEnd::EntryTaskExited(Subsystem::Ingest)),
+                "EntryTaskExited(Ingest)",
             );
         }
 
-        /// A publish listener that cannot bind is reported where it happens,
-        /// and the generation keeps serving.
+        /// A publish listener that cannot bind ends the generation too.
         ///
-        /// This is the other half of the ingest case above. Publish is not
-        /// watched by a `GenerationEnd` variant, so nothing outside the entry
-        /// task ever reads its result back; if the task did not report the
-        /// failure itself, a node serving no publish traffic would run to the
-        /// end of the generation without a word about it. The terminate intent
-        /// is what ends this one, which is also the proof that the early exit
-        /// did not.
+        /// The other half of the ingest case above, and the whole point of
+        /// watching more than one entry task: a node serving no publish
+        /// traffic used to run to the end of the generation with nothing but
+        /// the subsystem's own line about it. Nothing is notified here, so the
+        /// publish entry task is the only thing that can end this generation.
         #[tokio::test]
-        async fn a_publish_listener_that_cannot_bind_is_reported() {
+        async fn a_publish_listener_that_cannot_bind_ends_the_generation() {
             let dir = tempdir().expect("tempdir");
-            let notify_terminate = Arc::new(Notify::new());
-            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let process = test_process_context(dir.path(), Arc::new(Notify::new()));
             let mut settings = test_settings(dir.path());
 
             // QUIC is UDP, so the port has to be held by a UDP socket for the
@@ -3796,28 +5539,18 @@ mod tests {
                 occupied.local_addr().expect("occupied addr");
 
             let (logs, _guard) = capture_logs();
-            let (end, ()) = tokio::join!(
-                tokio::time::timeout(
-                    GENERATION_TIMEOUT,
-                    run_generation(&mut settings, &process, &HostEffects)
-                ),
-                async {
-                    wait_for_logs(
-                        &logs,
-                        &[
-                            "Ingest listening on",
-                            "Publish subsystem terminated unexpectedly",
-                        ],
-                    )
-                    .await;
-                    notify_terminate.notify_one();
-                }
-            );
-            let end = end
-                .expect("a terminate intent should end the generation")
-                .expect("a failed publish listener should not fail the generation");
+            let end = tokio::time::timeout(
+                GENERATION_TIMEOUT,
+                run_generation(&mut settings, &process, &HostEffects),
+            )
+            .await
+            .expect("a failed publish listener should end the generation on its own")
+            .expect("an entry task that ended is not a failure of the generation itself");
 
-            assert_eq!(end, GenerationEnd::Terminate);
+            assert_eq!(
+                end,
+                clean(GenerationEnd::EntryTaskExited(Subsystem::Publish))
+            );
 
             let output = captured(&logs);
             assert!(
@@ -3825,8 +5558,17 @@ mod tests {
                 "the bind failure itself should be reported, got: {output}"
             );
             assert!(
+                output.contains("Publish subsystem terminated unexpectedly"),
+                "the entry task should report its own error, got: {output}"
+            );
+            assert!(
                 !output.contains("tracked task did not run to completion"),
                 "the entry task returned, it did not vanish, got: {output}"
+            );
+            let report = abnormal_report(&logs);
+            assert!(
+                report.contains("name=\"publish\"") && report.contains("phase=\"serving\""),
+                "the boundary should name the task it observed, got: {report}"
             );
         }
 
@@ -3934,7 +5676,7 @@ mod tests {
             let end = end
                 .expect("a live sensor connection should not hold the generation open")
                 .expect("the generation should not fail");
-            assert_eq!(end, GenerationEnd::Terminate);
+            assert_eq!(end, clean(GenerationEnd::Terminate));
             drop(conn);
 
             let output = captured(&logs);
@@ -3972,7 +5714,7 @@ mod tests {
         /// point while the job was still `InProgress` did not wait for the
         /// deletion, whatever the log says. The deletion is held past the
         /// start of the drain by a read guard on the sensor list — the
-        /// supervisor takes that lock for writing once the RocksDB deletes are
+        /// observer takes that lock for writing once the RocksDB deletes are
         /// done — and the drain's own `close` is what the test waits on, so no
         /// step here is timed.
         #[cfg(feature = "bootroot")]
@@ -4025,8 +5767,7 @@ mod tests {
                                 web_controller: None,
                                 web_reaper_tracker: TaskTracker::new(),
                                 top_level_tracker,
-                                retain_task_handle: task::spawn(async { Ok(()) }),
-                                ingest_task_handle: None,
+                                entry_tasks: Vec::new(),
                             },
                             generation_end,
                             &database,
