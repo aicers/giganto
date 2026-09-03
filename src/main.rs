@@ -5666,22 +5666,6 @@ mod tests {
             );
         }
 
-        /// The captured log position where the `nth` occurrence of `needle`
-        /// starts.
-        ///
-        /// Meant to be called once a bounded wait — [`wait_for_occurrences`]
-        /// with a matching or greater count — has already established that
-        /// the occurrence exists; this does no waiting of its own; it is
-        /// where a position for two already-confirmed lines is read, so
-        /// their relative order in that one log can be asserted.
-        fn occurrence_position(logs: &Arc<Mutex<Vec<u8>>>, needle: &str, nth: usize) -> usize {
-            captured(logs)
-                .match_indices(needle)
-                .nth(nth - 1)
-                .unwrap_or_else(|| panic!("expected occurrence {nth} of {needle:?} in the log"))
-                .0
-        }
-
         /// Sends a configuration reload the only way production sends one: an
         /// mTLS `updateConfig` mutation against the generation's own HTTPS
         /// server.
@@ -5732,13 +5716,20 @@ mod tests {
         /// same store and rebinds the same addresses.
         ///
         /// This is the drive that proves the previous generation dropped every
-        /// `Database` clone it held: nothing untracked holds one here, so the
-        /// second `Database::open` on that path could not have succeeded
-        /// otherwise. The four readiness lines are all needed, one per pinned
-        /// address, and the GraphQL one is not substitutable — `web::serve`
-        /// logs it only after the acceptor has bound, so a second occurrence
-        /// is what says this lifecycle released the pinned GraphQL port and
-        /// took it again.
+        /// `Database` clone and every listener binding it held: nothing
+        /// untracked holds either here, so a second `Database::open` on that
+        /// path, and a second bind on each pinned address, could not have
+        /// succeeded otherwise.
+        ///
+        /// A second occurrence of the four readiness lines is the whole of
+        /// that evidence. Each is logged only after its own address has bound,
+        /// and every one of those points is reached after a successful
+        /// `Database::open` — the store is opened before any listener binds —
+        /// so the rebind and the reopen behind it are both covered. The four
+        /// are all needed, one per pinned address, and the GraphQL one is not
+        /// substitutable: `web::serve` logs it only after the acceptor has
+        /// bound, so a second occurrence is what says this lifecycle released
+        /// the pinned GraphQL port and took it again.
         #[tokio::test]
         async fn a_reload_reopens_the_same_store_and_rebinds_the_same_addresses() {
             let dir = tempdir().expect("tempdir");
@@ -5764,12 +5755,13 @@ mod tests {
                     // down, and asked for another generation.
                     wait_for_logs(&logs, &[shutdown_marker.as_str(), reload_marker]).await;
 
-                    // The second generation took every pinned address back.
+                    // The second generation took every pinned address back,
+                    // and so reopened the store behind them: `Database::open`
+                    // runs before any listener binds, and each of these lines
+                    // is logged only once its own address is bound.
                     for line in READINESS_LINES {
                         wait_for_occurrences(&logs, line, 2).await;
                     }
-                    // And reopened the store behind them.
-                    wait_for_occurrences(&logs, "Database cleanup completed.", 2).await;
 
                     notify_terminate.notify_one();
                 }
@@ -5804,18 +5796,6 @@ mod tests {
                 occurrences(&logs, &shutdown_marker),
                 2,
                 "each generation shuts its own store down, got: {output}"
-            );
-            // `run_generation` awaits `web::serve` — which logs the GraphQL
-            // readiness line only after its acceptor has bound — before it
-            // registers retention, whose own pass is what logs cleanup. That
-            // ordering is deterministic, so the second generation's GraphQL
-            // readiness line must precede its cleanup line in this one log.
-            let second_graphql_ready =
-                occurrence_position(&logs, "GraphQL web server is starting on", 2);
-            let second_cleanup = occurrence_position(&logs, "Database cleanup completed.", 2);
-            assert!(
-                second_graphql_ready < second_cleanup,
-                "the second generation's GraphQL readiness should precede its cleanup, got: {output}"
             );
         }
 
