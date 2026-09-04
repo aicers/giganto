@@ -1,12 +1,12 @@
-use std::{io::Write, path::Path, time::Duration};
+use std::{io::Write, path::Path};
 
 use anyhow::{Context as AnyhowContext, anyhow};
 #[cfg(feature = "storage_diagnostics")]
 use async_graphql::InputObject;
 use async_graphql::{Context, Object, Result, SimpleObject};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Sender, error::TrySendError};
 use toml_edit::{DocumentMut, InlineTable};
-use tracing::{error, info};
+use tracing::info;
 
 use super::{PowerOffNotify, RebootNotify, TerminateNotify};
 use crate::graphql::{StringNumberU32, StringNumberU64};
@@ -15,7 +15,6 @@ use crate::settings::ConfigVisible;
 use crate::storage::Database;
 use crate::{comm::peer::PeerIdentity, settings::Settings};
 
-const GRAPHQL_REBOOT_DELAY: u64 = 100;
 pub const CONFIG_PUBLISH_SRV_ADDR: &str = "publish_srv_addr";
 pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
 
@@ -170,11 +169,11 @@ impl ConfigMutation {
     ///
     /// # Errors
     ///
-    /// Returns an error if the `new` is empty. In addition, it returns an error if the `new` is
-    /// invalid. The `new` config is invalid if it contains a negative value for `max_open_files` or
-    /// `num_of_thread`, or if the `data_dir` or `export_dir` does not exist or is not a directory.
-    /// It also returns an error if the `export_dir` is not writable. If the `new` is the same as
-    /// the current config, it returns an error.
+    /// Returns an error if `new` is empty, unchanged, stale relative to the current configuration,
+    /// malformed, or invalid. Validation rejects negative `max_open_files` or `num_of_thread`,
+    /// missing or non-directory `data_dir` and `export_dir` paths, and an unwritable `export_dir`.
+    /// Admission also fails with a retryable error when the reload queue is full, or with a closed
+    /// error when the generation is ending and no longer accepts reloads.
     async fn update_config(
         &self,
         ctx: &Context<'_>,
@@ -213,20 +212,18 @@ impl ConfigMutation {
         }
 
         let reload_tx = ctx.data::<Sender<ConfigVisible>>()?;
-        let tx_clone = reload_tx.clone();
-
-        let new_config_clone = new_config.clone();
-        tokio::spawn(async move {
-            // Used to complete the response of a GraphQL Mutation.
-            tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
-            tx_clone.send(new_config_clone).await.map_err(|e| {
-                error!("Failed to send config: {e:?}");
-                "Failed to send config".to_string()
-            })
-        });
-        info!("New config applied");
-
-        crate::graphql::ready(Ok(new_config)).await
+        match reload_tx.try_send(new_config.clone()) {
+            Ok(()) => {
+                info!("Configuration reload accepted");
+                crate::graphql::ready(Ok(new_config)).await
+            }
+            Err(TrySendError::Full(_)) => Err("Reload queue is full; please retry later"
+                .to_string()
+                .into()),
+            Err(TrySendError::Closed(_)) => Err("Reload admission closed: generation is ending"
+                .to_string()
+                .into()),
+        }
     }
 
     async fn stop(&self, ctx: &Context<'_>) -> Result<bool> {
@@ -424,7 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_config() {
-        let schema = TestSchema::new();
+        let mut schema = TestSchema::new();
 
         // config
         let query = r"
@@ -453,20 +450,8 @@ mod tests {
         );
 
         let old_config = old_config();
-        let new_config = toml::toml!(
-            ingest_srv_addr = "0.0.0.0:48370"
-            publish_srv_addr = "0.0.0.0:48371"
-            graphql_srv_addr = "127.0.0.1:8443"
-            data_dir = "tests"
-            retention = "100d"
-            export_dir = "tests"
-            ack_transmission = 1024
-            max_open_files = 8000
-            max_mb_of_level_base = 512
-            num_of_thread = 10
-            max_subcompactions = 2
-        )
-        .to_string();
+        let new_config = changed_config();
+        let expected_config: crate::settings::ConfigVisible = toml::from_str(&new_config).unwrap();
 
         // set_config
         let query = format!(
@@ -494,6 +479,57 @@ mod tests {
             res.data.to_string(),
             "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubcompactions: \"2\"}}"
         );
+        assert_eq!(
+            schema.reload_rx.recv().await,
+            Some(expected_config.clone()),
+            "a successful response must correspond to the same admitted configuration"
+        );
+
+        let res = schema.execute(&query).await;
+        assert!(
+            res.errors.is_empty(),
+            "draining the queue should admit a subsequent reload: {:?}",
+            res.errors
+        );
+        assert_eq!(schema.reload_rx.recv().await, Some(expected_config));
+    }
+
+    #[tokio::test]
+    async fn test_update_config_reports_full_reload_queue() {
+        let mut schema = TestSchema::new();
+        let queued: crate::settings::ConfigVisible = toml::from_str(&old_config()).unwrap();
+        schema
+            .reload_tx
+            .try_send(queued.clone())
+            .expect("the empty capacity-one queue should accept its first item");
+
+        let query = update_config_query(&old_config(), &changed_config());
+        let res = schema.execute(&query).await;
+
+        assert_eq!(
+            res.errors.first().map(|error| error.message.as_str()),
+            Some("Reload queue is full; please retry later")
+        );
+        assert_eq!(
+            schema.reload_rx.try_recv(),
+            Ok(queued),
+            "a refused reload must not replace the request already queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_config_reports_closed_reload_admission() {
+        let mut schema = TestSchema::new();
+        schema.reload_rx.close();
+
+        let query = update_config_query(&old_config(), &changed_config());
+        let res = schema.execute(&query).await;
+
+        assert_eq!(
+            res.errors.first().map(|error| error.message.as_str()),
+            Some("Reload admission closed: generation is ending")
+        );
+        assert!(schema.reload_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -724,5 +760,34 @@ mod tests {
             max_subcompactions = 2
         )
         .to_string()
+    }
+
+    fn changed_config() -> String {
+        toml::toml!(
+            ingest_srv_addr = "0.0.0.0:48370"
+            publish_srv_addr = "0.0.0.0:48371"
+            graphql_srv_addr = "127.0.0.1:8443"
+            data_dir = "tests"
+            retention = "100d"
+            export_dir = "tests"
+            ack_transmission = 1024
+            max_open_files = 8000
+            max_mb_of_level_base = 512
+            num_of_thread = 10
+            max_subcompactions = 2
+        )
+        .to_string()
+    }
+
+    fn update_config_query(old: &str, new: &str) -> String {
+        format!(
+            r"
+            mutation {{
+                updateConfig(old: {old:?} new: {new:?}) {{
+                    ingestSrvAddr
+                }}
+            }}
+            "
+        )
     }
 }
