@@ -6146,6 +6146,155 @@ mod tests {
             );
         }
 
+        async fn accept_shutdown_test_export(
+            schema: &crate::graphql::tests::TestSchema,
+            ending: &str,
+        ) -> std::path::PathBuf {
+            use giganto_client::ingest::log::Log;
+
+            const TIMESTAMP: i64 = 1_700_000_000_000_000_000;
+            const KIND: &str = "shutdown-export";
+
+            let mut key = Vec::new();
+            key.extend_from_slice(b"src1\0");
+            key.extend_from_slice(KIND.as_bytes());
+            key.push(0);
+            key.extend_from_slice(&TIMESTAMP.to_be_bytes());
+            let event = Log {
+                kind: KIND.to_string(),
+                log: SHUTDOWN_EXPORT_TEXT.as_bytes().to_vec(),
+            };
+            schema
+                .db
+                .log_store()
+                .expect("open the log store")
+                .append(
+                    &key,
+                    &bincode::serialize(&event).expect("serialize the log"),
+                )
+                .expect("insert the log");
+
+            let accepted = schema
+                .execute(&format!(
+                    r#"{{
+                            export(
+                                filter: {{
+                                    protocol: "log"
+                                    sensorId: "src1"
+                                    kind: "{KIND}"
+                                }}
+                                exportType: "csv"
+                            )
+                        }}"#
+                ))
+                .await;
+            assert!(
+                accepted.errors.is_empty(),
+                "{ending}: {:?}",
+                accepted.errors
+            );
+            let download = accepted.data.into_json().expect("export response")["export"]
+                .as_str()
+                .expect("export path")
+                .to_string();
+            Path::new(
+                download
+                    .rsplit_once('@')
+                    .map_or(download.as_str(), |(path, _node)| path),
+            )
+            .to_path_buf()
+        }
+
+        const SHUTDOWN_EXPORT_TEXT: &str = "shutdown export regression";
+
+        /// An accepted export finishes before the generation closes the
+        /// database, on every ending an operator can ask for.
+        #[tokio::test]
+        async fn an_accepted_export_finishes_before_the_generation_closes_the_database() {
+            for generation_end in [
+                GenerationEnd::Terminate,
+                GenerationEnd::ReloadConfig,
+                GenerationEnd::Reboot,
+                GenerationEnd::PowerOff,
+            ] {
+                let ending = format!("{generation_end:?}");
+                let schema = crate::graphql::tests::TestSchema::new();
+                let control = Arc::new(crate::graphql::ExportTestControl::new());
+                let finished = Arc::clone(&control.finished);
+                let _registration = crate::graphql::register_export_test_control(
+                    schema.export_dir.path(),
+                    Arc::clone(&control),
+                );
+                let export_path = accept_shutdown_test_export(&schema, &ending).await;
+
+                assert!(
+                    tokio::time::timeout(READY_TIMEOUT, control.started.notified())
+                        .await
+                        .is_ok(),
+                    "{ending}: the export task never reached its test gate"
+                );
+
+                let effects = ExportStatusAtShutdown::new(Arc::clone(&finished));
+                let shutdown = task::spawn({
+                    let database = schema.db.clone();
+                    let effects = effects.clone();
+                    let top_level_tracker = schema.top_level_tracker.clone();
+                    async move {
+                        shutdown_generation(
+                            GenerationTeardown {
+                                web_controller: None,
+                                web_reaper_tracker: TaskTracker::new(),
+                                top_level_tracker,
+                                entry_tasks: Vec::new(),
+                            },
+                            generation_end,
+                            &database,
+                            &effects,
+                            TEST_DRAIN_REPORT_INTERVAL,
+                        )
+                        .await
+                    }
+                });
+
+                assert!(
+                    poll_until(READY_TIMEOUT, || schema.top_level_tracker.is_closed()).await,
+                    "{ending}: the teardown never reached the drain"
+                );
+                assert!(
+                    !finished.load(Ordering::SeqCst),
+                    "{ending}: the held export unexpectedly finished"
+                );
+                assert!(
+                    effects.observed().is_none(),
+                    "{ending}: the store was shut down while the export was still running"
+                );
+
+                control.release.notify_one();
+                assert!(
+                    poll_until(READY_TIMEOUT, || effects.observed().is_some()).await,
+                    "{ending}: the teardown never shut the store down"
+                );
+                assert_eq!(
+                    effects.observed(),
+                    Some(true),
+                    "{ending}: the export had not finished when the store was shut down"
+                );
+                assert!(
+                    export_path.exists(),
+                    "{ending}: export file was not created"
+                );
+                let contents = fs::read_to_string(&export_path).expect("read export file");
+                assert!(
+                    contents.contains(SHUTDOWN_EXPORT_TEXT),
+                    "{ending}: export file did not contain the expected event: {contents:?}"
+                );
+
+                // What is left of the teardown is the pause before the
+                // ending's action, and this test is not waiting it out.
+                shutdown.abort();
+            }
+        }
+
         /// An accepted customer deletion finishes before the generation closes
         /// the database, on every ending an operator can ask for.
         ///
@@ -6807,6 +6956,42 @@ mod tests {
                 let observation = job_status(&self.db, self.customer_id)
                     .map_or(ShutdownObservation::NoJob, ShutdownObservation::Job);
                 *self.observed.lock().expect("lock") = Some(observation);
+                Ok(())
+            }
+
+            fn reboot(&self) -> Result<()> {
+                unreachable!("the teardown itself takes no host action")
+            }
+
+            fn power_off(&self) -> Result<()> {
+                unreachable!("the teardown itself takes no host action")
+            }
+        }
+
+        /// A lifecycle seam that records whether an export had returned at
+        /// the moment the store would be shut down.
+        #[derive(Clone)]
+        struct ExportStatusAtShutdown {
+            finished: Arc<AtomicBool>,
+            observed: Arc<Mutex<Option<bool>>>,
+        }
+
+        impl ExportStatusAtShutdown {
+            fn new(finished: Arc<AtomicBool>) -> Self {
+                Self {
+                    finished,
+                    observed: Arc::new(Mutex::new(None)),
+                }
+            }
+
+            fn observed(&self) -> Option<bool> {
+                *self.observed.lock().expect("lock")
+            }
+        }
+
+        impl LifecycleEffects for ExportStatusAtShutdown {
+            fn shutdown_database(&self, _database: &storage::Database) -> Result<()> {
+                *self.observed.lock().expect("lock") = Some(self.finished.load(Ordering::SeqCst));
                 Ok(())
             }
 

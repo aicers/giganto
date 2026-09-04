@@ -10,6 +10,14 @@ use std::{
     net::IpAddr,
     path::{Path, PathBuf},
 };
+#[cfg(test)]
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use anyhow::anyhow;
 use async_graphql::{Context, InputObject, Object, Result};
@@ -34,6 +42,8 @@ use giganto_client::{
 #[cfg(feature = "cluster")]
 use graphql_client::GraphQLQuery;
 use serde::{Serialize, de::DeserializeOwned};
+#[cfg(test)]
+use tokio::sync::Notify;
 use tracing::{error, info, warn};
 
 use super::{
@@ -98,6 +108,79 @@ const SYSMON_EVENT_TYPES: [&str; 14] = [
     "file delete detected",
 ];
 const LOG_EVENT_TYPES: [&str; 2] = ["log", "secu log"];
+
+#[cfg(test)]
+static EXPORT_TEST_CONTROLS: OnceLock<Mutex<HashMap<PathBuf, Arc<ExportTestControl>>>> =
+    OnceLock::new();
+
+/// A test-only gate for holding an accepted export inside its tracked task.
+#[cfg(test)]
+pub(crate) struct ExportTestControl {
+    pub(crate) started: Notify,
+    pub(crate) release: Notify,
+    pub(crate) finished: Arc<AtomicBool>,
+}
+
+#[cfg(test)]
+impl ExportTestControl {
+    pub(crate) fn new() -> Self {
+        Self {
+            started: Notify::new(),
+            release: Notify::new(),
+            finished: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// Keeps one test control installed until the owning test iteration ends.
+#[cfg(test)]
+pub(crate) struct ExportTestControlRegistration {
+    destination: PathBuf,
+    control: Arc<ExportTestControl>,
+}
+
+#[cfg(test)]
+impl Drop for ExportTestControlRegistration {
+    fn drop(&mut self) {
+        let mut controls = export_test_controls().lock().expect("lock");
+        if controls
+            .get(&self.destination)
+            .is_some_and(|control| Arc::ptr_eq(control, &self.control))
+        {
+            controls.remove(&self.destination);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn register_export_test_control(
+    destination: &Path,
+    control: Arc<ExportTestControl>,
+) -> ExportTestControlRegistration {
+    export_test_controls()
+        .lock()
+        .expect("lock")
+        .insert(destination.to_path_buf(), Arc::clone(&control));
+    ExportTestControlRegistration {
+        destination: destination.to_path_buf(),
+        control,
+    }
+}
+
+#[cfg(test)]
+fn export_test_controls() -> &'static Mutex<HashMap<PathBuf, Arc<ExportTestControl>>> {
+    EXPORT_TEST_CONTROLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+struct ExportTestFinishedGuard(Arc<AtomicBool>);
+
+#[cfg(test)]
+impl Drop for ExportTestFinishedGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
 
 #[derive(Default)]
 pub(super) struct ExportQuery;
@@ -2130,6 +2213,25 @@ fn export_by_protocol(
             // The token is ignored: an accepted export is waited on by the
             // drain, never cancelled, so it runs to completion.
             tracker.spawn("export", move |_cancel| async move {
+                #[cfg(test)]
+                let _finished_guard = {
+                    let control = export_done_path.parent().and_then(|destination| {
+                        export_test_controls()
+                            .lock()
+                            .expect("lock")
+                            .get(destination)
+                            .cloned()
+                    });
+                    if let Some(control) = control {
+                        let guard = ExportTestFinishedGuard(Arc::clone(&control.finished));
+                        control.started.notify_one();
+                        control.release.notified().await;
+                        Some(guard)
+                    } else {
+                        None
+                    }
+                };
+
                 if let Ok(store) = db.$store_method() {
                     match $process_fn(
                         &store,

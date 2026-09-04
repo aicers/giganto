@@ -3,6 +3,8 @@ mod client;
 #[cfg(feature = "bootroot")]
 mod customer_deletion;
 mod export;
+#[cfg(test)]
+pub(crate) use export::{ExportTestControl, register_export_test_control};
 mod log;
 mod netflow;
 pub mod network;
@@ -1196,7 +1198,6 @@ pub(crate) mod tests {
         /// The generation tracker the schema was built with, so a test can
         /// close it the way shutdown does and drain it the way a generation
         /// teardown does.
-        #[cfg(feature = "bootroot")]
         pub(crate) top_level_tracker: crate::cancellation::TaskTracker,
         /// The store claim the schema was built with, so a test can hold it
         /// the way a retention cycle or another customer's deletion does.
@@ -1284,7 +1285,6 @@ pub(crate) mod tests {
                 export_dir,
                 db,
                 schema,
-                #[cfg(feature = "bootroot")]
                 top_level_tracker,
                 #[cfg(feature = "bootroot")]
                 deletion_coordination,
