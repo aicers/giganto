@@ -68,6 +68,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed `updateConfig` reporting success before its reload request had been
+  admitted. It now reports acceptance only when the generation's reload queue
+  accepts the request, and returns distinct errors when that queue is full or
+  reload admission has closed because the generation is ending.
 - Fixed realtime Time Series Generator streams being sent with a
   semi-supervised frame when the generator id or request sensor name
   contained the substring `SemiSupervised`.

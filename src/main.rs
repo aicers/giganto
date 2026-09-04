@@ -846,15 +846,20 @@ async fn run_generation(
         web_shutdown_timeout,
     )
     .await;
+    // Choosing an ending closes reload admission immediately. This receiver
+    // closure is the linearization point: a GraphQL `try_send` after it returns
+    // `Closed`, before web shutdown or any tracker cancellation/drain begins.
+    close_reload_admission(&mut intents.reload_rx);
     // Read here rather than inside the teardown: what an `Ok(())` means
     // depends on whether the handle had already finished at the moment the
     // wait ended, and the drain that runs later is what cancels the rest.
     let retained_entry_tasks = entry_tasks.into_retained();
 
-    // Every ending is shut down the same way, so the whole sequence is one
-    // call rather than a step per arm. Nothing is cancelled here: the only
-    // cancellation of the top-level tracker is the close-then-cancel inside
-    // the drain, so the tracker is never left cancelled but still admitting.
+    // Every ending is shut down the same way after reload admission has been
+    // closed, so the whole sequence is one call rather than a step per arm.
+    // Nothing is cancelled here: the only cancellation of the top-level
+    // tracker is the close-then-cancel inside the drain, so the tracker is
+    // never left cancelled but still admitting.
     let health = shutdown_generation(
         GenerationTeardown {
             web_controller: web_controller.take(),
@@ -891,12 +896,18 @@ async fn run_generation(
 /// [`wait_for_generation_end`]'s parameter list readable and gives a test one
 /// place to build the intents from.
 struct GenerationIntents {
-    /// Carries the rewritten configuration a `setConfig` mutation produced.
+    /// Carries configurations admitted by an `updateConfig` mutation.
     reload_rx: mpsc::Receiver<ConfigVisible>,
     /// Raised by the GraphQL reboot mutation.
     notify_reboot: Arc<Notify>,
     /// Raised by the GraphQL power-off mutation.
     notify_power_off: Arc<Notify>,
+}
+
+/// Closes a generation's reload admission without discarding requests that
+/// were already admitted to its channel.
+fn close_reload_admission(reload_rx: &mut mpsc::Receiver<ConfigVisible>) {
+    reload_rx.close();
 }
 
 /// The four entry tasks a generation observes, each until something reads
@@ -1167,9 +1178,10 @@ where
     // `poll_config_reload` is what makes the readiness check below a check.
     //
     // A configuration reload whose write failed does not end the generation
-    // and can be ready again at once — several senders parked in `send` refill
-    // a channel of capacity 1 as soon as one is taken — so on its own it would
-    // keep the entry-task arms beneath it from ever being polled. And the
+    // and another admitted reload can already be ready — the capacity-one
+    // channel may have been refilled after the failed request was taken — so
+    // on its own it would keep the entry-task arms beneath it from ever being
+    // polled. And the
     // condition that fails a configuration write, a full disk or a path gone
     // read-only, is the same one that kills subsystems, so detection must not
     // depend on an entry-task arm winning. Clearing this flag takes the
@@ -3309,13 +3321,11 @@ mod tests {
 
             /// Queues `count` configuration reloads whose write will fail.
             ///
-            /// Production's channel holds one message and senders parked in
-            /// `send` refill it as soon as one is taken, so the arm can be
-            /// ready round after round. A channel that already holds `count`
-            /// messages puts the wait in that same position without depending
-            /// on a sender task being scheduled between two polls of the arm —
-            /// and what is left in the receiver when the wait ends is then
-            /// exactly what the wait did not take.
+            /// Production admits reloads non-blockingly to a capacity-one
+            /// channel. A larger test channel containing `count` messages puts
+            /// the wait in the equivalent ready-round-after-round position,
+            /// and what remains when the wait ends is exactly what it did not
+            /// take.
             fn queue_failing_reloads(&mut self, count: usize) {
                 let (tx, rx) = mpsc::channel::<ConfigVisible>(count);
                 for _ in 0..count {
@@ -3481,6 +3491,27 @@ mod tests {
                 wait_without_web(&mut fixture).await,
                 GenerationEnd::Terminate
             );
+            fixture.settle().await;
+        }
+
+        #[tokio::test]
+        async fn generation_ending_closes_reload_admission() {
+            let dir = tempdir().expect("tempdir");
+            let mut fixture = wait_fixture(dir.path());
+            fixture.notify_terminate.notify_one();
+
+            assert_eq!(
+                wait_without_web(&mut fixture).await,
+                GenerationEnd::Terminate
+            );
+            close_reload_admission(&mut fixture.intents.reload_rx);
+
+            assert!(matches!(
+                fixture
+                    .reload_tx
+                    .try_send(fixture.settings.config.visible.clone()),
+                Err(mpsc::error::TrySendError::Closed(_))
+            ));
             fixture.settle().await;
         }
 
@@ -5670,9 +5701,11 @@ mod tests {
         /// mTLS `updateConfig` mutation against the generation's own HTTPS
         /// server.
         ///
-        /// The mutation sleeps `GRAPHQL_REBOOT_DELAY` before it hands the new
-        /// configuration to the generation, so the response says only that the
-        /// mutation was accepted; the reload itself is waited for in the log.
+        /// The resolver returns success only after its non-blocking admission
+        /// succeeds. The generation receives and processes the request in
+        /// main; graceful web shutdown gives this HTTP response a chance to
+        /// complete, while an admitted request may still be discarded if a
+        /// higher-priority ending wins.
         async fn send_reload_mutation(
             process: &ProcessContext,
             addr: SocketAddr,
