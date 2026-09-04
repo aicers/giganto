@@ -56,6 +56,12 @@ use crate::{
     tls_reload::{CertPaths, ReloadHandle, load_tls_material},
     web::WebController,
 };
+#[cfg(feature = "bootroot")]
+use crate::{
+    comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels},
+    graphql::customer_deletion::start_customer_deletion_worker_from_stored_job,
+    storage::{CustomerDataDeletionStatus, Database, deletion_coordination::DeletionBlocked},
+};
 
 const ONE_DAY: Duration = Duration::from_hours(24);
 const WAIT_SHUTDOWN: u64 = 15;
@@ -539,6 +545,117 @@ struct GenerationOutcome {
     health: GenerationHealth,
 }
 
+/// Restarts persisted `InProgress` deletion jobs, one at a time, before this
+/// generation starts serving requests or retention work.
+///
+/// # Errors
+///
+/// Returns an error if the persisted jobs cannot be read or a completed
+/// supervisor's job status cannot be read back for reporting.
+#[cfg(feature = "bootroot")]
+#[allow(clippy::too_many_arguments)]
+async fn recover_inprogress_deletions(
+    database: &Database,
+    top_level_tracker: &TaskTracker,
+    deletion_coordination: &Arc<CustomerDeletionCoordinator>,
+    ingest_sensors: &IngestSensors,
+    runtime_ingest_sensors: &RunTimeIngestSensors,
+    pcap_sensors: &PcapSensors,
+    stream_direct_channels: &StreamDirectChannels,
+) -> Result<()> {
+    let jobs = database
+        .customer_deletion_job_store()?
+        .list_all()?
+        .into_iter()
+        .filter(|(_, job)| job.status == CustomerDataDeletionStatus::InProgress)
+        .collect::<Vec<_>>();
+
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    info!(
+        job_count = jobs.len(),
+        "Recovering interrupted customer data deletions"
+    );
+
+    for (customer_id, job) in jobs {
+        if top_level_tracker.is_closed() {
+            info!(
+                customer_id,
+                "Stopping customer data deletion recovery because shutdown has started"
+            );
+            break;
+        }
+
+        let deletion_guard = match deletion_coordination.begin_deletion(customer_id) {
+            Ok(guard) => guard,
+            Err(blocked) => {
+                match blocked {
+                    DeletionBlocked::Retention => warn!(
+                        customer_id,
+                        "Deferring customer data deletion recovery because retention owns the store"
+                    ),
+                    DeletionBlocked::AnotherDeletion | DeletionBlocked::SameCustomer => warn!(
+                        customer_id,
+                        ?blocked,
+                        "Deferring customer data deletion recovery because the store is already claimed"
+                    ),
+                }
+                break;
+            }
+        };
+
+        info!(
+            customer_id,
+            target_count = job.service_fqdn_list.len(),
+            requested_at = job.requested_at,
+            "Starting recovered customer data deletion"
+        );
+        let handle = match start_customer_deletion_worker_from_stored_job(
+            top_level_tracker,
+            deletion_guard,
+            database.clone(),
+            customer_id,
+            job,
+            ingest_sensors.clone(),
+            runtime_ingest_sensors.clone(),
+            pcap_sensors.clone(),
+            stream_direct_channels.clone(),
+        ) {
+            Ok(handle) => handle,
+            Err(error) => {
+                warn!(
+                    customer_id,
+                    %error,
+                    "Could not register recovered customer data deletion"
+                );
+                break;
+            }
+        };
+
+        if let Err(error) = handle.await {
+            error!(
+                customer_id,
+                %error,
+                "Recovered customer data deletion supervisor did not finish normally"
+            );
+            continue;
+        }
+
+        let status = database
+            .customer_deletion_job_store()?
+            .get(customer_id)?
+            .map(|job| job.status);
+        info!(
+            customer_id,
+            ?status,
+            "Finished recovered customer data deletion"
+        );
+    }
+
+    Ok(())
+}
+
 /// Runs one generation and reports why it ended.
 ///
 /// A generation is one turn of the process lifecycle: it opens the database,
@@ -555,11 +672,11 @@ struct GenerationOutcome {
 /// # Errors
 ///
 /// Returns an error if the data directory fails compression validation or
-/// migration, if the database cannot be opened, if the node certificate
-/// carries no usable node name, if the peer subsystem cannot be built, or if
-/// the teardown could not shut the store down. A generation that ended
-/// degraded is not one of them: that is carried out as a value, because the
-/// ending's final action must still be taken.
+/// migration, if the database cannot be opened, if deletion recovery fails,
+/// if the node certificate carries no usable node name, if the peer subsystem
+/// cannot be built, or if the teardown could not shut the store down. A
+/// generation that ended degraded is not one of them: that is carried out as a
+/// value, because the ending's final action must still be taken.
 #[allow(clippy::too_many_lines)]
 async fn run_generation(
     settings: &mut Settings,
@@ -632,6 +749,19 @@ async fn run_generation(
     // reason — a claim only ever describes work running now, so it must not
     // outlive the store it was claimed over.
     let deletion_coordination = Arc::new(CustomerDeletionCoordinator::new());
+
+    #[cfg(feature = "bootroot")]
+    recover_inprogress_deletions(
+        &database,
+        &top_level_tracker,
+        &deletion_coordination,
+        &ingest_sensors,
+        &runtime_ingest_sensors,
+        &pcap_sensors,
+        &stream_direct_channels,
+    )
+    .await
+    .context("failed to recover interrupted customer data deletions")?;
 
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
     let certs = Arc::clone(&tls.certs);
@@ -2398,6 +2528,234 @@ mod tests {
 
     fn captured(buf: &Arc<Mutex<Vec<u8>>>) -> String {
         String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 log output")
+    }
+
+    #[cfg(feature = "bootroot")]
+    fn in_progress_job(target: &str, requested_at: i64) -> storage::CustomerDataDeletion {
+        storage::CustomerDataDeletion {
+            service_fqdn_list: vec![target.to_string()],
+            requested_at,
+            status: storage::CustomerDataDeletionStatus::InProgress,
+            completed_at: None,
+            error: None,
+        }
+    }
+
+    #[cfg(feature = "bootroot")]
+    fn recovery_state(
+        database: &storage::Database,
+    ) -> (
+        IngestSensors,
+        RunTimeIngestSensors,
+        PcapSensors,
+        StreamDirectChannels,
+    ) {
+        (
+            new_ingest_sensors(database),
+            new_runtime_ingest_sensors(),
+            new_pcap_sensors(),
+            new_stream_direct_channels(),
+        )
+    }
+
+    #[cfg(feature = "bootroot")]
+    async fn recover_with_state(
+        database: &storage::Database,
+        tracker: &TaskTracker,
+        coordination: &Arc<CustomerDeletionCoordinator>,
+        state: &(
+            IngestSensors,
+            RunTimeIngestSensors,
+            PcapSensors,
+            StreamDirectChannels,
+        ),
+    ) -> Result<()> {
+        recover_inprogress_deletions(
+            database,
+            tracker,
+            coordination,
+            &state.0,
+            &state.1,
+            &state.2,
+            &state.3,
+        )
+        .await
+    }
+
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn recovery_preserves_requested_at_and_uses_stored_targets() {
+        const CUSTOMER_ID: u32 = 42;
+        const REQUESTED_AT: i64 = 123_456;
+        let target = "piglet.recovery.example.test";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let mut event_key = target.as_bytes().to_vec();
+        event_key.push(0);
+        event_key.extend_from_slice(b"event");
+        database
+            .put_cf_for_test("conn", &event_key, b"customer event")
+            .expect("seed customer event");
+        database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .create(CUSTOMER_ID, &in_progress_job(target, REQUESTED_AT))
+            .expect("seed interrupted job");
+
+        let state = recovery_state(&database);
+        assert!(
+            !state.0.read().await.contains(target),
+            "the runtime sensor list must not supply the recovered target"
+        );
+        let tracker = TaskTracker::new();
+        recover_with_state(
+            &database,
+            &tracker,
+            &Arc::new(CustomerDeletionCoordinator::new()),
+            &state,
+        )
+        .await
+        .expect("recover interrupted deletion");
+
+        let recovered = database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .get(CUSTOMER_ID)
+            .expect("read recovered job")
+            .expect("job remains recorded");
+        assert_eq!(
+            recovered.status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        assert_eq!(recovered.requested_at, REQUESTED_AT);
+        assert_eq!(recovered.service_fqdn_list, [target]);
+        assert!(recovered.completed_at.is_some());
+        assert!(recovered.error.is_none());
+        assert_eq!(
+            database
+                .get_cf_for_test("conn", &event_key)
+                .expect("read customer event"),
+            None,
+            "recovery must delete data for the persisted target"
+        );
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn recovered_jobs_run_sequentially_under_the_shared_coordinator() {
+        use storage::deletion_coordination::DeletionBlocked;
+
+        const FIRST: u32 = 10;
+        const SECOND: u32 = 20;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let store = database
+            .customer_deletion_job_store()
+            .expect("open job store");
+        // Insert in reverse order: the big-endian keys, not insertion order,
+        // determine which recovery worker owns the coordinator first.
+        store
+            .create(SECOND, &in_progress_job("piglet.second.example.test", 2))
+            .expect("seed second job");
+        store
+            .create(FIRST, &in_progress_job("piglet.first.example.test", 1))
+            .expect("seed first job");
+
+        let state = recovery_state(&database);
+        let hold_runtime_cleanup = state.0.read().await;
+        let tracker = TaskTracker::new();
+        let coordination = Arc::new(CustomerDeletionCoordinator::new());
+        let recovery = task::spawn({
+            let database = database.clone();
+            let tracker = tracker.clone();
+            let coordination = Arc::clone(&coordination);
+            let state = state.clone();
+            async move { recover_with_state(&database, &tracker, &coordination, &state).await }
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while tracker.pending_count() != 1 {
+                task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first recovered supervisor should be tracked");
+        assert_eq!(
+            coordination.begin_deletion(FIRST).unwrap_err(),
+            DeletionBlocked::SameCustomer,
+            "the lowest customer ID must recover first"
+        );
+        assert_eq!(
+            coordination.begin_deletion(SECOND).unwrap_err(),
+            DeletionBlocked::AnotherDeletion
+        );
+        assert!(coordination.begin_retention().is_none());
+        assert_eq!(tracker.pending_count(), 1, "only one recovery may run");
+        assert_eq!(
+            store.get(SECOND).expect("read second job").unwrap().status,
+            storage::CustomerDataDeletionStatus::InProgress,
+            "the second job must remain untouched while the first is active"
+        );
+
+        drop(hold_runtime_cleanup);
+        recovery
+            .await
+            .expect("recovery task should not panic")
+            .expect("recover both jobs");
+        assert_eq!(
+            store.get(FIRST).expect("read first job").unwrap().status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        assert_eq!(
+            store.get(SECOND).expect("read second job").unwrap().status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        assert_eq!(tracker.pending_count(), 0);
+        drop(
+            coordination
+                .begin_retention()
+                .expect("recovery released the coordinator"),
+        );
+    }
+
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn closed_generation_leaves_recovery_jobs_in_progress() {
+        const CUSTOMER_ID: u32 = 7;
+        let target = "piglet.shutdown.example.test";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let job = in_progress_job(target, 99);
+        database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .create(CUSTOMER_ID, &job)
+            .expect("seed interrupted job");
+        let tracker = TaskTracker::new();
+        tracker.close().expect("close generation tracker");
+
+        recover_with_state(
+            &database,
+            &tracker,
+            &Arc::new(CustomerDeletionCoordinator::new()),
+            &recovery_state(&database),
+        )
+        .await
+        .expect("a closed tracker cleanly defers recovery");
+
+        assert_eq!(
+            database
+                .customer_deletion_job_store()
+                .expect("open job store")
+                .get(CUSTOMER_ID)
+                .expect("read deferred job"),
+            Some(job)
+        );
+        assert_eq!(tracker.pending_count(), 0);
     }
 
     #[tokio::test(start_paused = true)]

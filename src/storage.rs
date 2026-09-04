@@ -808,6 +808,26 @@ impl CustomerDeletionJobStore<'_> {
             .transpose()
     }
 
+    /// Returns every persisted job in ascending customer ID order.
+    pub fn list_all(&self) -> Result<Vec<(u32, CustomerDataDeletion)>> {
+        self.db
+            .iterator_cf(self.cf, rocksdb::IteratorMode::Start)
+            .map(|entry| {
+                let (key, value) = entry.context("cannot iterate customer deletion jobs")?;
+                let customer_id = u32::from_be_bytes(key.as_ref().try_into().map_err(|_| {
+                    anyhow!(
+                        "invalid customer deletion job key length: expected 4 bytes, got {}",
+                        key.len()
+                    )
+                })?);
+                let job = bincode::deserialize(&value).with_context(|| {
+                    format!("invalid customer deletion job for customer {customer_id}")
+                })?;
+                Ok((customer_id, job))
+            })
+            .collect()
+    }
+
     pub fn update(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
         if self
             .db

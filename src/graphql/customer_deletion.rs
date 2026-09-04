@@ -550,7 +550,66 @@ fn start_customer_deletion_worker(
     stream_direct_channels: StreamDirectChannels,
     peer_notify: Option<Arc<Notify>>,
 ) -> Result<(), SpawnError> {
-    let _handle = tracker.spawn("customer-deletion", move |_cancel| async move {
+    register_customer_deletion_worker(
+        tracker,
+        deletion_guard,
+        db,
+        customer_id,
+        service_fqdn_list,
+        ingest_sensors,
+        runtime_ingest_sensors,
+        pcap_sensors,
+        stream_direct_channels,
+        peer_notify,
+    )
+    .map(drop)
+}
+
+/// Restarts a deletion from its already-persisted job without rewriting it.
+///
+/// Recovery deliberately uses the stored targets and never notifies peers. The
+/// returned tracked handle lets startup await this supervisor before claiming
+/// the store for the next recovered customer.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn start_customer_deletion_worker_from_stored_job(
+    tracker: &TaskTracker,
+    deletion_guard: DeletionGuard,
+    db: Database,
+    customer_id: u32,
+    job: CustomerDataDeletion,
+    ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    pcap_sensors: PcapSensors,
+    stream_direct_channels: StreamDirectChannels,
+) -> Result<tokio::task::JoinHandle<()>, SpawnError> {
+    register_customer_deletion_worker(
+        tracker,
+        deletion_guard,
+        db,
+        customer_id,
+        job.service_fqdn_list,
+        ingest_sensors,
+        runtime_ingest_sensors,
+        pcap_sensors,
+        stream_direct_channels,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn register_customer_deletion_worker(
+    tracker: &TaskTracker,
+    deletion_guard: DeletionGuard,
+    db: Database,
+    customer_id: u32,
+    service_fqdn_list: Vec<String>,
+    ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    pcap_sensors: PcapSensors,
+    stream_direct_channels: StreamDirectChannels,
+    peer_notify: Option<Arc<Notify>>,
+) -> Result<tokio::task::JoinHandle<()>, SpawnError> {
+    tracker.spawn("customer-deletion", move |_cancel| async move {
         // Held for the whole deletion and dropped with this future, so every
         // way it can end — success, failure, a panic in the supervisor, or a
         // registration that was refused — releases the store.
@@ -573,8 +632,7 @@ fn start_customer_deletion_worker(
             peer_notify,
         )
         .await;
-    })?;
-    Ok(())
+    })
 }
 
 async fn cleanup_runtime_for_targets(
