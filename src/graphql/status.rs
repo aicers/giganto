@@ -6,7 +6,7 @@ use async_graphql::InputObject;
 use async_graphql::{Context, Object, Result, SimpleObject};
 use tokio::sync::mpsc::{Sender, error::TrySendError};
 use toml_edit::{DocumentMut, InlineTable};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{PowerOffNotify, RebootNotify, TerminateNotify};
 use crate::graphql::{StringNumberU32, StringNumberU64};
@@ -164,16 +164,14 @@ impl StatusQuery {
 
 #[Object]
 impl ConfigMutation {
-    /// Updates the config with the given `new` config. It involves reloading the module with the
-    /// new config.
+    /// Requests a configuration update. A successful response means that the service accepted the
+    /// request for processing, not that the update has already been applied.
     ///
     /// # Errors
     ///
-    /// Returns an error if `new` is empty, unchanged, stale relative to the current configuration,
-    /// malformed, or invalid. Validation rejects negative `max_open_files` or `num_of_thread`,
-    /// missing or non-directory `data_dir` and `export_dir` paths, and an unwritable `export_dir`.
-    /// Admission also fails with a retryable error when the reload queue is full, or with a closed
-    /// error when the generation is ending and no longer accepts reloads.
+    /// Returns an error if `new` is empty, unchanged, does not match the current configuration,
+    /// malformed, or invalid. A configuration update is also rejected when another update is
+    /// already pending, or when the service is stopping or restarting.
     async fn update_config(
         &self,
         ctx: &Context<'_>,
@@ -211,18 +209,26 @@ impl ConfigMutation {
             return Err("No changes".to_string().into());
         }
 
-        let reload_tx = ctx.data::<Sender<ConfigVisible>>()?;
-        match reload_tx.try_send(new_config.clone()) {
+        let config_update_tx = ctx.data::<Sender<ConfigVisible>>()?;
+        match config_update_tx.try_send(new_config.clone()) {
             Ok(()) => {
-                info!("Configuration reload accepted");
+                info!("Configuration update request accepted");
                 crate::graphql::ready(Ok(new_config)).await
             }
-            Err(TrySendError::Full(_)) => Err("Reload queue is full; please retry later"
-                .to_string()
-                .into()),
-            Err(TrySendError::Closed(_)) => Err("Reload admission closed: generation is ending"
-                .to_string()
-                .into()),
+            Err(TrySendError::Full(_)) => {
+                warn!("Configuration update rejected: another update is pending");
+                Err(
+                    "Another configuration update is already pending; try again later"
+                        .to_string()
+                        .into(),
+                )
+            }
+            Err(TrySendError::Closed(_)) => {
+                warn!("Configuration update rejected: service is stopping or restarting");
+                Err("Configuration updates are unavailable while the service is stopping or restarting"
+                    .to_string()
+                    .into())
+            }
         }
     }
 
@@ -480,7 +486,7 @@ mod tests {
             "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubcompactions: \"2\"}}"
         );
         assert_eq!(
-            schema.reload_rx.recv().await,
+            schema.config_update_rx.recv().await,
             Some(expected_config.clone()),
             "a successful response must correspond to the same admitted configuration"
         );
@@ -488,18 +494,18 @@ mod tests {
         let res = schema.execute(&query).await;
         assert!(
             res.errors.is_empty(),
-            "draining the queue should admit a subsequent reload: {:?}",
+            "processing the pending update should allow a subsequent update: {:?}",
             res.errors
         );
-        assert_eq!(schema.reload_rx.recv().await, Some(expected_config));
+        assert_eq!(schema.config_update_rx.recv().await, Some(expected_config));
     }
 
     #[tokio::test]
-    async fn test_update_config_reports_full_reload_queue() {
+    async fn test_update_config_reports_pending_update() {
         let mut schema = TestSchema::new();
         let queued: crate::settings::ConfigVisible = toml::from_str(&old_config()).unwrap();
         schema
-            .reload_tx
+            .config_update_tx
             .try_send(queued.clone())
             .expect("the empty capacity-one queue should accept its first item");
 
@@ -508,28 +514,30 @@ mod tests {
 
         assert_eq!(
             res.errors.first().map(|error| error.message.as_str()),
-            Some("Reload queue is full; please retry later")
+            Some("Another configuration update is already pending; try again later")
         );
         assert_eq!(
-            schema.reload_rx.try_recv(),
+            schema.config_update_rx.try_recv(),
             Ok(queued),
-            "a refused reload must not replace the request already queued"
+            "a rejected update must not replace the update already pending"
         );
     }
 
     #[tokio::test]
-    async fn test_update_config_reports_closed_reload_admission() {
+    async fn test_update_config_reports_unavailable_service() {
         let mut schema = TestSchema::new();
-        schema.reload_rx.close();
+        schema.config_update_rx.close();
 
         let query = update_config_query(&old_config(), &changed_config());
         let res = schema.execute(&query).await;
 
         assert_eq!(
             res.errors.first().map(|error| error.message.as_str()),
-            Some("Reload admission closed: generation is ending")
+            Some(
+                "Configuration updates are unavailable while the service is stopping or restarting"
+            )
         );
-        assert!(schema.reload_rx.try_recv().is_err());
+        assert!(schema.config_update_rx.try_recv().is_err());
     }
 
     #[tokio::test]

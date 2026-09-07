@@ -222,7 +222,7 @@ pub fn schema(
     peers: Peers,
     request_client_pool: reqwest::Client,
     export_path: PathBuf,
-    reload_tx: Sender<ConfigVisible>,
+    config_update_tx: Sender<ConfigVisible>,
     notify_reboot: Arc<Notify>,
     notify_power_off: Arc<Notify>,
     notify_terminate: Arc<Notify>,
@@ -254,7 +254,7 @@ pub fn schema(
         .data(peers)
         .data(request_client_pool)
         .data(export_path)
-        .data(reload_tx)
+        .data(config_update_tx)
         .data(TerminateNotify(notify_terminate))
         .data(RebootNotify(notify_reboot))
         .data(PowerOffNotify(notify_power_off))
@@ -1196,11 +1196,11 @@ pub(crate) mod tests {
         pub db: Database,
         pub schema: Schema,
         /// The sender installed in the schema, exposed so tests can fill the
-        /// capacity-one reload admission queue deterministically.
-        pub reload_tx: mpsc::Sender<ConfigVisible>,
+        /// capacity-one configuration-update queue deterministically.
+        pub config_update_tx: mpsc::Sender<ConfigVisible>,
         /// The receiver retained by the generation in production, exposed so
-        /// tests can observe accepted reloads or close admission.
-        pub reload_rx: mpsc::Receiver<ConfigVisible>,
+        /// tests can observe accepted updates or close update admission.
+        pub config_update_rx: mpsc::Receiver<ConfigVisible>,
         /// The generation tracker the schema was built with, so a test can
         /// close it the way shutdown does and drain it the way a generation
         /// teardown does.
@@ -1245,7 +1245,7 @@ pub(crate) mod tests {
             let stream_direct_channels = new_stream_direct_channels();
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
-            let (reload_tx, reload_rx) = mpsc::channel::<ConfigVisible>(1);
+            let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
             let notify_reboot = Arc::new(Notify::new());
             let notify_power_off = Arc::new(Notify::new());
             let notify_terminate = Arc::new(Notify::new());
@@ -1276,7 +1276,7 @@ pub(crate) mod tests {
                 peers,
                 request_client_pool,
                 export_dir.path().to_path_buf(),
-                reload_tx.clone(),
+                config_update_tx.clone(),
                 notify_reboot,
                 notify_power_off,
                 notify_terminate,
@@ -1291,8 +1291,8 @@ pub(crate) mod tests {
                 export_dir,
                 db,
                 schema,
-                reload_tx,
-                reload_rx,
+                config_update_tx,
+                config_update_rx,
                 top_level_tracker,
                 #[cfg(feature = "bootroot")]
                 deletion_coordination,

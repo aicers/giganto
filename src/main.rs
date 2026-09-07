@@ -256,9 +256,9 @@ impl LifecycleEffects for HostEffects {
 ///
 /// The order of the two steps is the point. [`run_generation`] returns only
 /// after it has dropped every [`storage::Database`] clone it held, and only
-/// then does [`act_on_generation_end`] run: a reload's next generation reopens
+/// then does [`act_on_generation_end`] run: a configuration update's next generation reopens
 /// the same path, and `Database::open` fails while a clone of the previous one
-/// is alive. Reboot and power-off do not depend on that drop the way a reload
+/// is alive. Reboot and power-off do not depend on that drop the way a configuration update
 /// does, but they take the same position so that one order holds for every
 /// ending.
 ///
@@ -267,7 +267,7 @@ impl LifecycleEffects for HostEffects {
 /// Returns an error if a generation failed, if the store could not be shut
 /// down, if the host refused a reboot or a power-off, if an entry task ended
 /// on its own, or if a generation ended degraded on an ending other than a
-/// configuration reload.
+/// configuration update.
 async fn run_lifecycle(
     settings: &mut Settings,
     process: &ProcessContext,
@@ -305,7 +305,7 @@ async fn run_lifecycle(
 /// Returns an error if the host refused the reboot or the power-off, if the
 /// generation ended because an entry task did — nobody asked for that one, so
 /// the process manager is told the exit was not wanted — or if the generation
-/// ended degraded on any ending but a configuration reload.
+/// ended degraded on any ending but a configuration update.
 fn act_on_generation_end(
     outcome: GenerationOutcome,
     effects: &dyn LifecycleEffects,
@@ -313,7 +313,7 @@ fn act_on_generation_end(
     let GenerationOutcome { ending, health } = outcome;
 
     let action = match ending {
-        GenerationEnd::ReloadConfig => {
+        GenerationEnd::RestartForConfigUpdate => {
             info!("{SHUTDOWN_PHASE}: final action, starting the next generation ({ending:?})");
             Ok(())
         }
@@ -359,7 +359,7 @@ fn act_on_generation_end(
         // the tracker empty, the store was shut down, and the last `Database`
         // clone goes as the generation returns. So the handoff holds, and the
         // failure is logged rather than propagated.
-        GenerationEnd::ReloadConfig => Ok(ControlFlow::Continue(())),
+        GenerationEnd::RestartForConfigUpdate => Ok(ControlFlow::Continue(())),
         _ if degraded => Err(anyhow!("the generation ended degraded ({ending:?})")),
         _ => Ok(ControlFlow::Break(())),
     }
@@ -464,7 +464,7 @@ impl std::fmt::Display for Subsystem {
 enum GenerationEnd {
     /// The configuration file was rewritten. The next generation starts from
     /// the updated settings.
-    ReloadConfig,
+    RestartForConfigUpdate,
     /// The daemon was asked to exit.
     Terminate,
     /// The host was asked to reboot.
@@ -592,7 +592,7 @@ async fn run_generation(
 
     let database = storage::Database::open(&db_path, &db_options)?;
 
-    let (reload_tx, reload_rx) = mpsc::channel::<ConfigVisible>(1);
+    let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
     let notify_reboot = Arc::new(Notify::new());
     let notify_power_off = Arc::new(Notify::new());
 
@@ -650,7 +650,7 @@ async fn run_generation(
         peers.clone(),
         process.request_client_pool.clone(),
         settings.config.visible.export_dir.clone(),
-        reload_tx,
+        config_update_tx,
         notify_reboot.clone(),
         notify_power_off.clone(),
         process.notify_terminate.clone(),
@@ -825,7 +825,7 @@ async fn run_generation(
         .context("failed to register the ingest entry task")?;
 
     let mut intents = GenerationIntents {
-        reload_rx,
+        config_update_rx,
         notify_reboot,
         notify_power_off,
     };
@@ -846,16 +846,16 @@ async fn run_generation(
         web_shutdown_timeout,
     )
     .await;
-    // Choosing an ending closes reload admission immediately. This receiver
+    // Choosing an ending closes configuration-update admission immediately. This receiver
     // closure is the linearization point: a GraphQL `try_send` after it returns
     // `Closed`, before web shutdown or any tracker cancellation/drain begins.
-    close_reload_admission(&mut intents.reload_rx);
+    close_config_update_admission(&mut intents.config_update_rx);
     // Read here rather than inside the teardown: what an `Ok(())` means
     // depends on whether the handle had already finished at the moment the
     // wait ended, and the drain that runs later is what cancels the rest.
     let retained_entry_tasks = entry_tasks.into_retained();
 
-    // Every ending is shut down the same way after reload admission has been
+    // Every ending is shut down the same way after configuration-update admission has been
     // closed, so the whole sequence is one call rather than a step per arm.
     // Nothing is cancelled here: the only cancellation of the top-level
     // tracker is the close-then-cancel inside the drain, so the tracker is
@@ -888,7 +888,7 @@ async fn run_generation(
     })
 }
 
-/// The three shutdown intents a generation owns.
+/// The three control inputs a generation owns.
 ///
 /// Terminate and TLS reload arrive from outside a generation and live in
 /// [`ProcessContext`]; these three are created per generation, handed to the
@@ -896,18 +896,18 @@ async fn run_generation(
 /// [`wait_for_generation_end`]'s parameter list readable and gives a test one
 /// place to build the intents from.
 struct GenerationIntents {
-    /// Carries configurations admitted by an `updateConfig` mutation.
-    reload_rx: mpsc::Receiver<ConfigVisible>,
+    /// Receives configuration update requests accepted from `updateConfig`.
+    config_update_rx: mpsc::Receiver<ConfigVisible>,
     /// Raised by the GraphQL reboot mutation.
     notify_reboot: Arc<Notify>,
     /// Raised by the GraphQL power-off mutation.
     notify_power_off: Arc<Notify>,
 }
 
-/// Closes a generation's reload admission without discarding requests that
-/// were already admitted to its channel.
-fn close_reload_admission(reload_rx: &mut mpsc::Receiver<ConfigVisible>) {
-    reload_rx.close();
+/// Closes a generation's configuration-update admission without discarding
+/// requests that were already accepted for processing.
+fn close_config_update_admission(config_update_rx: &mut mpsc::Receiver<ConfigVisible>) {
+    config_update_rx.close();
 }
 
 /// The four entry tasks a generation observes, each until something reads
@@ -1143,12 +1143,12 @@ fn end_on_entry_task(
 /// This is the whole of a generation's steady state. Every arm but two ends
 /// the generation; a TLS reload rebinds the HTTPS server in place and keeps
 /// serving, which is why the wait is a loop rather than a single `select!`,
-/// and a configuration reload that cannot be persisted also keeps serving, on
+/// and a configuration update that cannot be persisted also keeps serving, on
 /// the configuration the generation started with.
 ///
 /// One selection covers both the wait and the readiness check that follows a
 /// configuration write that failed. The check is that same selection with the
-/// configuration reload taken out for one round and an immediately ready arm
+/// configuration update taken out for one round and an immediately ready arm
 /// put in below the handles, so the precedence an operator gets is written
 /// once rather than restated in a second block that could drift from it.
 ///
@@ -1175,23 +1175,23 @@ async fn wait_for_generation_end<S>(
 where
     S: async_graphql::Executor + Clone,
 {
-    // `poll_config_reload` is what makes the readiness check below a check.
+    // `poll_config_updates` is what makes the readiness check below a check.
     //
-    // A configuration reload whose write failed does not end the generation
-    // and another admitted reload can already be ready — the capacity-one
+    // A configuration update whose write failed does not end the generation
+    // and another accepted configuration update can already be ready — the capacity-one
     // channel may have been refilled after the failed request was taken — so
     // on its own it would keep the entry-task arms beneath it from ever being
     // polled. And the
     // condition that fails a configuration write, a full disk or a path gone
     // read-only, is the same one that kills subsystems, so detection must not
     // depend on an entry-task arm winning. Clearing this flag takes the
-    // configuration reload out of the next round, and the last arm — ready on
+    // configuration update out of the next round, and the last arm — ready on
     // its first poll, and enabled only for that round — is what makes that
     // round a single pass over readiness rather than a second place the wait
     // can park. Only the three terminal intents and a pending TLS reload
     // outrank the handles in it, and when none of those is ready it falls
     // straight back to the full selection.
-    let mut poll_config_reload = true;
+    let mut poll_config_updates = true;
     loop {
         // `biased`, so the order the arms are written in is the policy.
         //
@@ -1210,11 +1210,11 @@ where
         // reload is only ever delayed. But a short-lived certificate delayed
         // far enough expires, an expired certificate under mTLS cuts both
         // directions, and the GraphQL endpoint it takes down is the very path
-        // a configuration reload arrives on. Repeated SIGHUP can therefore
+        // a configuration update arrives on. Repeated SIGHUP can therefore
         // delay the arms below; at that cadence the frequency does not arise,
         // and the delay is accepted.
         //
-        // The configuration reload sits above the entry-task arms because an
+        // The configuration update sits above the entry-task arms because an
         // entry-task exit ends the generation, and a generation that starts
         // from the new configuration also restarts the subsystem that died.
         // `recv` is cancel safe, so losing a poll consumes no message, but the
@@ -1251,24 +1251,24 @@ where
                     web_shutdown_timeout,
                 ).await;
                 // Back to the full selection, with no readiness check of its
-                // own. Checking after a reload would let a configuration
+                // own. Checking after a TLS reload would let a configuration
                 // update that arrived during its `await` lose to a finished
                 // entry handle and be discarded, which is exactly what putting
-                // the configuration reload above the entry-task arms is for.
+                // the configuration update above the entry-task arms is for.
                 //
-                // Restoring the flag is what that costs: a reload that wins
+                // Restoring the flag is what that costs: a TLS reload that wins
                 // during a check round drops that check rather than deferring
                 // it, so the next configuration message can be taken before
                 // the handles are looked at. It converges, because every
                 // failed write arms the check again.
-                poll_config_reload = true;
+                poll_config_updates = true;
             }
-            Some(new_config) = intents.reload_rx.recv(), if poll_config_reload => {
+            Some(new_config) = intents.config_update_rx.recv(), if poll_config_updates => {
                 match settings.update_config_file(&new_config) {
-                    Ok(()) => return GenerationEnd::ReloadConfig,
+                    Ok(()) => return GenerationEnd::RestartForConfigUpdate,
                     Err(e) => {
                         warn!("Failed to update configuration: {e:#}, run with previous config");
-                        poll_config_reload = false;
+                        poll_config_updates = false;
                     }
                 }
             }
@@ -1287,8 +1287,8 @@ where
             // Enabled only for the round that follows a configuration write
             // that failed, and ready on its first poll, so that round is a
             // pass over the arms above rather than a wait on them.
-            () = std::future::ready(()), if !poll_config_reload => {
-                poll_config_reload = true;
+            () = std::future::ready(()), if !poll_config_updates => {
+                poll_config_updates = true;
             }
         }
     }
@@ -1495,7 +1495,7 @@ async fn finish_generation(
     }
 
     match generation_end {
-        GenerationEnd::ReloadConfig
+        GenerationEnd::RestartForConfigUpdate
         | GenerationEnd::Terminate
         | GenerationEnd::EntryTaskExited(_) => {
             sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
@@ -2773,9 +2773,9 @@ mod tests {
         /// Materializes the configuration file at `cfg_path`.
         ///
         /// Two paths need the file to exist: the peer subsystem reads it on
-        /// startup, and a configuration reload backs it up before rewriting
+        /// startup, and a configuration update backs it up before rewriting
         /// it. Tests that exercise neither leave it absent, which is also how
-        /// they reach the reload's failure arm.
+        /// they reach the configuration update's failure arm.
         fn write_config_file(settings: &Settings) {
             let toml = toml::to_string(&settings.config).expect("serialize config");
             fs::write(&settings.cfg_path, toml).expect("write config file");
@@ -2854,7 +2854,7 @@ mod tests {
         /// sequence tests walk them.
         const ALL_ENDINGS: [GenerationEnd; 5] = [
             GenerationEnd::Terminate,
-            GenerationEnd::ReloadConfig,
+            GenerationEnd::RestartForConfigUpdate,
             GenerationEnd::Reboot,
             GenerationEnd::PowerOff,
             GenerationEnd::EntryTaskExited(Subsystem::Ingest),
@@ -2872,7 +2872,9 @@ mod tests {
         /// The sixth marker, the one that names the ending's final action.
         fn final_action_marker(generation_end: GenerationEnd) -> &'static str {
             match generation_end {
-                GenerationEnd::ReloadConfig => "final action, starting the next generation",
+                GenerationEnd::RestartForConfigUpdate => {
+                    "final action, starting the next generation"
+                }
                 GenerationEnd::Terminate => "final action, returning from the lifecycle",
                 GenerationEnd::Reboot => "final action, rebooting the host",
                 GenerationEnd::PowerOff => "final action, powering the host off",
@@ -3248,7 +3250,7 @@ mod tests {
             /// is four tasks that never return. A test that wants one of the
             /// entry-task arms replaces that slot.
             entry_tasks: EntryTasks,
-            reload_tx: mpsc::Sender<ConfigVisible>,
+            config_update_tx: mpsc::Sender<ConfigVisible>,
             notify_terminate: Arc<Notify>,
             notify_reboot: Arc<Notify>,
             notify_power_off: Arc<Notify>,
@@ -3319,24 +3321,24 @@ mod tests {
                 .into_retained()
             }
 
-            /// Queues `count` configuration reloads whose write will fail.
+            /// Queues `count` configuration updates whose write will fail.
             ///
-            /// Production admits reloads non-blockingly to a capacity-one
+            /// Production accepts configuration updates non-blockingly into a capacity-one
             /// channel. A larger test channel containing `count` messages puts
             /// the wait in the equivalent ready-round-after-round position,
             /// and what remains when the wait ends is exactly what it did not
             /// take.
-            fn queue_failing_reloads(&mut self, count: usize) {
+            fn queue_failing_config_updates(&mut self, count: usize) {
                 let (tx, rx) = mpsc::channel::<ConfigVisible>(count);
                 for _ in 0..count {
                     tx.try_send(self.settings.config.visible.clone())
-                        .expect("the queue should have room for every reload");
+                        .expect("the channel should have room for every configuration update");
                 }
                 // The sender is kept so an emptied channel leaves the arm
                 // pending, the way a live GraphQL handler does, rather than
                 // closing it.
-                self.reload_tx = tx;
-                self.intents.reload_rx = rx;
+                self.config_update_tx = tx;
+                self.intents.config_update_rx = rx;
             }
 
             /// Replaces one entry task with a stand-in the test aborts, so the
@@ -3358,7 +3360,7 @@ mod tests {
             let notify_terminate = Arc::new(Notify::new());
             let process = test_process_context(dir, Arc::clone(&notify_terminate));
             let notify_tls_reload = Arc::clone(&process.notify_tls_reload);
-            let (reload_tx, reload_rx) = mpsc::channel::<ConfigVisible>(1);
+            let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
             let notify_reboot = Arc::new(Notify::new());
             let notify_power_off = Arc::new(Notify::new());
             // Peer is present by default so its arm is exercised alongside the
@@ -3376,13 +3378,13 @@ mod tests {
                 settings: test_settings(dir),
                 process,
                 intents: GenerationIntents {
-                    reload_rx,
+                    config_update_rx,
                     notify_reboot: Arc::clone(&notify_reboot),
                     notify_power_off: Arc::clone(&notify_power_off),
                 },
                 tracker,
                 entry_tasks,
-                reload_tx,
+                config_update_tx,
                 notify_terminate,
                 notify_reboot,
                 notify_power_off,
@@ -3495,7 +3497,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn generation_ending_closes_reload_admission() {
+        async fn generation_ending_closes_config_update_admission() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
             fixture.notify_terminate.notify_one();
@@ -3504,11 +3506,11 @@ mod tests {
                 wait_without_web(&mut fixture).await,
                 GenerationEnd::Terminate
             );
-            close_reload_admission(&mut fixture.intents.reload_rx);
+            close_config_update_admission(&mut fixture.intents.config_update_rx);
 
             assert!(matches!(
                 fixture
-                    .reload_tx
+                    .config_update_tx
                     .try_send(fixture.settings.config.visible.clone()),
                 Err(mpsc::error::TrySendError::Closed(_))
             ));
@@ -3613,7 +3615,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_persisted_configuration_reload_ends_the_wait() {
+        async fn a_persisted_configuration_update_ends_the_wait() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
             write_config_file(&fixture.settings);
@@ -3621,39 +3623,39 @@ mod tests {
             let mut new_config = fixture.settings.config.visible.clone();
             new_config.ack_transmission = 2048;
             fixture
-                .reload_tx
+                .config_update_tx
                 .send(new_config)
                 .await
                 .expect("the wait should still hold the receiver");
 
             assert_eq!(
                 wait_without_web(&mut fixture).await,
-                GenerationEnd::ReloadConfig
+                GenerationEnd::RestartForConfigUpdate
             );
-            // The reload is what the next generation starts from, so the wait
+            // The configuration update is what the next generation starts from, so the wait
             // must leave the persisted settings behind it.
             assert_eq!(fixture.settings.config.visible.ack_transmission, 2048);
             fixture.settle().await;
         }
 
-        /// A reload that cannot be written down is not a shutdown.
+        /// A configuration update that cannot be written down is not a shutdown.
         ///
         /// `cfg_path` names a file that was never created, so the backup that
         /// precedes the rewrite fails and the generation keeps serving the
         /// configuration it started with — until a terminate intent ends it
         /// for real.
         #[tokio::test]
-        async fn a_configuration_reload_that_cannot_be_persisted_keeps_serving() {
+        async fn a_configuration_update_that_cannot_be_persisted_keeps_serving() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
             let notify_terminate = Arc::clone(&fixture.notify_terminate);
-            let reload_tx = fixture.reload_tx.clone();
+            let config_update_tx = fixture.config_update_tx.clone();
             let mut new_config = fixture.settings.config.visible.clone();
             new_config.ack_transmission = 2048;
 
             let (logs, _guard) = capture_logs();
             let (end, ()) = tokio::join!(wait_without_web(&mut fixture), async {
-                reload_tx
+                config_update_tx
                     .send(new_config)
                     .await
                     .expect("the wait should still hold the receiver");
@@ -3664,7 +3666,7 @@ mod tests {
             assert_eq!(end, GenerationEnd::Terminate);
             assert_eq!(
                 fixture.settings.config.visible.ack_transmission, 1024,
-                "a reload that was not persisted must not change the in-memory configuration"
+                "an update that was not persisted must not change the in-memory configuration"
             );
             fixture.settle().await;
         }
@@ -3712,13 +3714,13 @@ mod tests {
         }
 
         /// A terminal intent decides the ending over a queued configuration
-        /// reload, every time.
+        /// update, every time.
         ///
-        /// The reload is queued once and never consumed: `recv` is cancel
+        /// The configuration update is queued once and never consumed: `recv` is cancel
         /// safe, so an arm that is not polled takes no message, which is what
         /// lets the same queued message lose round after round.
         #[tokio::test]
-        async fn a_terminal_intent_outranks_a_queued_configuration_reload() {
+        async fn a_terminal_intent_outranks_a_queued_configuration_update() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
             write_config_file(&fixture.settings);
@@ -3727,7 +3729,7 @@ mod tests {
             let mut new_config = fixture.settings.config.visible.clone();
             new_config.ack_transmission = before + 1;
             fixture
-                .reload_tx
+                .config_update_tx
                 .send(new_config)
                 .await
                 .expect("the wait should still hold the receiver");
@@ -3743,7 +3745,7 @@ mod tests {
 
             assert_eq!(
                 fixture.settings.config.visible.ack_transmission, before,
-                "the queued reload should never have been taken"
+                "the queued configuration update should never have been taken"
             );
             fixture.settle().await;
         }
@@ -3826,14 +3828,14 @@ mod tests {
             );
         }
 
-        /// A queued configuration reload decides the ending over an entry
+        /// A queued configuration update decides the ending over an entry
         /// handle that has already finished, every time.
         ///
-        /// The reload is what restarts the subsystem that died, so taking the
+        /// The configuration update is what restarts the subsystem that died, so taking the
         /// entry-task exit first would throw away the recovery the operator
         /// asked for. The handle is still reported after the drain.
         #[tokio::test(start_paused = true)]
-        async fn a_configuration_reload_outranks_a_finished_entry_handle() {
+        async fn a_configuration_update_outranks_a_finished_entry_handle() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
             write_config_file(&fixture.settings);
@@ -3844,13 +3846,13 @@ mod tests {
             for round in 0..PRECEDENCE_ROUNDS {
                 let new_config = fixture.settings.config.visible.clone();
                 fixture
-                    .reload_tx
+                    .config_update_tx
                     .send(new_config)
                     .await
                     .expect("the wait should still hold the receiver");
                 assert_eq!(
                     wait_without_web(&mut fixture).await,
-                    GenerationEnd::ReloadConfig,
+                    GenerationEnd::RestartForConfigUpdate,
                     "round {round}"
                 );
             }
@@ -3861,7 +3863,7 @@ mod tests {
             let (logs, _guard) = capture_logs();
             let health = shutdown_generation(
                 fixture_teardown(&mut fixture),
-                GenerationEnd::ReloadConfig,
+                GenerationEnd::RestartForConfigUpdate,
                 &database,
                 &effects,
                 TEST_DRAIN_REPORT_INTERVAL,
@@ -3880,20 +3882,20 @@ mod tests {
             // The one row a degradation does not fail: the next generation
             // still starts, and the failure is logged rather than propagated.
             assert_eq!(
-                act_on_generation_end(degraded(GenerationEnd::ReloadConfig), &effects)
-                    .expect("a degraded reload should not fail the lifecycle"),
+                act_on_generation_end(degraded(GenerationEnd::RestartForConfigUpdate), &effects)
+                    .expect("a degraded configuration update should not fail the lifecycle"),
                 ControlFlow::Continue(())
             );
         }
 
-        /// A TLS reload runs before a queued configuration reload, and the
-        /// generation still ends as a configuration reload.
+        /// A TLS reload runs before a queued configuration update, and the
+        /// generation still ends as a configuration update.
         ///
         /// The two are ready together; the reload is the arm with a deadline,
-        /// so it goes first, and the configuration reload it delayed is taken
+        /// so it goes first, and the configuration update it delayed is taken
         /// on the next turn of the loop.
         #[tokio::test]
-        async fn a_tls_reload_outranks_a_queued_configuration_reload() {
+        async fn a_tls_reload_outranks_a_queued_configuration_update() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
             write_config_file(&fixture.settings);
@@ -3903,7 +3905,7 @@ mod tests {
             for round in 0..PRECEDENCE_ROUNDS {
                 let new_config = fixture.settings.config.visible.clone();
                 fixture
-                    .reload_tx
+                    .config_update_tx
                     .send(new_config)
                     .await
                     .expect("the wait should still hold the receiver");
@@ -3912,7 +3914,7 @@ mod tests {
                 let (logs, guard) = capture_logs();
                 assert_eq!(
                     wait_with_live_web(&mut fixture, &mut web_controller, web_addr).await,
-                    GenerationEnd::ReloadConfig,
+                    GenerationEnd::RestartForConfigUpdate,
                     "round {round}"
                 );
                 assert_eq!(
@@ -3997,49 +3999,49 @@ mod tests {
         }
 
         /// A finished entry handle is detected while failing configuration
-        /// reloads are still queued.
+        /// updates are still pending.
         ///
         /// The configuration file is never created, so every write fails on
         /// the backup that precedes it — a failure of the path, not of timing.
         /// That arm does not end the generation and refills at once, so
         /// without the check that follows it the entry-task arms below would
-        /// go unpolled for as long as the reloads keep coming.
+        /// go unpolled for as long as the configuration updates keep coming.
         ///
-        /// What is left in the receiver is what pins the check. Two reloads
+        /// What is left in the receiver is what pins the check. Two configuration updates
         /// are queued before the wait is entered and the wait may take only
         /// the first: the check the failed write arms takes the configuration
         /// arm out of the round that follows, so the finished handle is
-        /// reached with the second reload still unread. Were the arm polled
-        /// again instead, the second reload would be taken as well and the
+        /// reached with the second update still unread. Were the arm polled
+        /// again instead, the second update would be taken as well and the
         /// receiver would come back empty. The leftover message and the count
         /// of failed writes are therefore what tell the two apart, neither of
         /// them depending on how the runtime schedules a sender.
         #[tokio::test]
-        async fn a_finished_handle_is_detected_while_failing_reloads_keep_arriving() {
+        async fn a_finished_handle_is_detected_while_failing_config_updates_keep_arriving() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
             let id = fixture
                 .finish_entry_task(Subsystem::Peer, async { Ok(()) })
                 .await;
-            fixture.queue_failing_reloads(2);
+            fixture.queue_failing_config_updates(2);
 
             let (logs, _guard) = capture_logs();
             let end = tokio::time::timeout(READY_TIMEOUT, wait_without_web(&mut fixture))
                 .await
                 .expect(
-                    "the wait should end on the finished handle, not on the reloads running out",
+                    "the wait should end on the finished handle, not on the updates running out",
                 );
 
             assert_eq!(end, GenerationEnd::EntryTaskExited(Subsystem::Peer));
             assert!(
-                fixture.intents.reload_rx.try_recv().is_ok(),
-                "a queued reload should have been left unread, so the handle was reached \
-                 while the reloads were still there to take"
+                fixture.intents.config_update_rx.try_recv().is_ok(),
+                "a pending configuration update should have been left unread, so the handle was reached \
+                 while configuration updates were still there to take"
             );
             assert_eq!(
                 records(&logs, CONFIG_FAILURE_RECORD).len(),
                 1,
-                "exactly one reload should have been taken before the check, got: {}",
+                "exactly one configuration update should have been taken before the check, got: {}",
                 captured(&logs)
             );
             assert_report_fields(
@@ -4056,38 +4058,38 @@ mod tests {
         /// serving.
         ///
         /// The check that follows it finds nothing ready, so it returns to the
-        /// selection immediately — and the next reload, sent once the
+        /// selection immediately — and the next configuration update, sent once the
         /// configuration file exists, is applied normally.
         #[tokio::test]
         async fn a_failed_configuration_write_alone_keeps_the_generation_serving() {
             let dir = tempdir().expect("tempdir");
             let mut fixture = wait_fixture(dir.path());
-            let reload_tx = fixture.reload_tx.clone();
+            let config_update_tx = fixture.config_update_tx.clone();
             let settings = fixture.settings.clone();
             let mut applied = settings.config.visible.clone();
             applied.ack_transmission = settings.config.visible.ack_transmission + 1;
 
             let (logs, _guard) = capture_logs();
             let (end, ()) = tokio::join!(wait_without_web(&mut fixture), async {
-                reload_tx
+                config_update_tx
                     .send(settings.config.visible.clone())
                     .await
                     .expect("the wait should still hold the receiver");
                 wait_for_logs(&logs, &[CONFIG_FAILURE_RECORD]).await;
 
-                // The path is writable now, so the next reload is persisted.
+                // The path is writable now, so the next configuration update is persisted.
                 write_config_file(&settings);
-                reload_tx
+                config_update_tx
                     .send(applied)
                     .await
                     .expect("the wait should still hold the receiver");
             });
 
-            assert_eq!(end, GenerationEnd::ReloadConfig);
+            assert_eq!(end, GenerationEnd::RestartForConfigUpdate);
             assert_eq!(
                 fixture.settings.config.visible.ack_transmission,
                 settings.config.visible.ack_transmission + 1,
-                "the second reload should have been applied"
+                "the second configuration update should have been applied"
             );
             assert!(
                 records(&logs, ABNORMAL_RECORD).is_empty(),
@@ -4104,7 +4106,7 @@ mod tests {
         /// handles ready, so what the check round does when a TLS reload is
         /// pending in it has been the production arm order's claim rather than
         /// a covered one. Reaching it is the whole difficulty: the failure
-        /// branch logs, clears `poll_config_reload` and re-enters the
+        /// branch logs, clears `poll_config_updates` and re-enters the
         /// selection with no await in between, so a permit installed from
         /// another task could only land there by luck.
         ///
@@ -4113,7 +4115,7 @@ mod tests {
         /// thread — not a task, because the parked writer is holding the
         /// runtime thread — installs the TLS permit, and only then is the
         /// writer released. The round that follows is therefore entered with
-        /// `poll_config_reload` false, a permit waiting on
+        /// `poll_config_updates` false, a permit waiting on
         /// `notify_tls_reload`, and a retention handle already known to have
         /// finished.
         ///
@@ -4129,9 +4131,9 @@ mod tests {
             let id = fixture
                 .finish_entry_task(Subsystem::Retention, async { Ok(()) })
                 .await;
-            // One reload, so the single failure record the gate holds is also
+            // One configuration update, so the single failure record the gate holds is also
             // the only one the wait can produce.
-            fixture.queue_failing_reloads(1);
+            fixture.queue_failing_config_updates(1);
             let web_addr = free_addr();
             let mut web_controller = Some(live_web(&fixture, web_addr).await);
 
@@ -4170,13 +4172,13 @@ mod tests {
             assert_eq!(
                 records(&logs, CONFIG_FAILURE_RECORD).len(),
                 1,
-                "the one queued reload should have failed exactly once, got: {output}"
+                "the one pending configuration update should have failed exactly once, got: {output}"
             );
             assert_precedes(
                 &logs,
                 CONFIG_FAILURE_RECORD,
                 TLS_NOOP_RECORD,
-                "the reload should have run in the round the failed write armed",
+                "the TLS reload should have run in the round the failed write armed",
             );
             assert_precedes(
                 &logs,
@@ -4240,7 +4242,7 @@ mod tests {
                 .finish()
         }
 
-        /// The graceful-shutdown timeout the held reload runs under.
+        /// The graceful-shutdown timeout the held TLS reload runs under.
         ///
         /// Long enough that the parked request is never cut off before the
         /// test releases it, which is what makes the hold a hold rather than a
@@ -4250,15 +4252,15 @@ mod tests {
         /// What the test raises while the TLS reload is held mid-flight.
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         enum MidFlight {
-            /// A terminal intent, over a configuration reload queued before
+            /// A terminal intent, over a configuration update queued before
             /// the wait and an entry handle that has already finished.
             Reboot,
             /// A configuration update whose write succeeds, over that same
             /// finished handle.
-            PersistedReload,
+            PersistedConfigUpdate,
             /// A configuration update whose write fails, so the check that
             /// follows it is what finds the finished handle.
-            FailingReload,
+            FailingConfigUpdate,
             /// Another SIGHUP alongside a configuration update whose write
             /// fails, so the reload outranks both.
             AnotherTlsReload,
@@ -4289,17 +4291,20 @@ mod tests {
         async fn what_outranks_what_when_a_tls_reload_returns() {
             for injection in [
                 MidFlight::Reboot,
-                MidFlight::PersistedReload,
-                MidFlight::FailingReload,
+                MidFlight::PersistedConfigUpdate,
+                MidFlight::FailingConfigUpdate,
                 MidFlight::AnotherTlsReload,
             ] {
                 let case = format!("{injection:?}");
                 let dir = tempdir().expect("tempdir");
                 let mut fixture = wait_fixture(dir.path());
-                // The two cases whose reload has to persist need the file the
+                // The two cases whose configuration update has to persist need the file the
                 // rewrite backs up; the other two reach the failure arm by not
                 // having it.
-                if matches!(injection, MidFlight::Reboot | MidFlight::PersistedReload) {
+                if matches!(
+                    injection,
+                    MidFlight::Reboot | MidFlight::PersistedConfigUpdate
+                ) {
                     write_config_file(&fixture.settings);
                 }
                 let id = fixture
@@ -4350,9 +4355,9 @@ mod tests {
                 fixture.notify_tls_reload.notify_one();
                 if injection == MidFlight::Reboot {
                     // Queued before the wait, so what the reboot outranks is a
-                    // reload that was already there.
+                    // configuration update that was already there.
                     fixture
-                        .reload_tx
+                        .config_update_tx
                         .send(fixture.settings.config.visible.clone())
                         .await
                         .expect("the wait should still hold the receiver");
@@ -4360,7 +4365,7 @@ mod tests {
 
                 let notify_reboot = Arc::clone(&fixture.notify_reboot);
                 let notify_tls_reload = Arc::clone(&fixture.notify_tls_reload);
-                let reload_tx = fixture.reload_tx.clone();
+                let config_update_tx = fixture.config_update_tx.clone();
                 let release = Arc::clone(&signal.release);
                 let mut injected = fixture.settings.config.visible.clone();
                 injected.ack_transmission += 1;
@@ -4387,12 +4392,12 @@ mod tests {
                                 MidFlight::Reboot => notify_reboot.notify_one(),
                                 MidFlight::AnotherTlsReload => {
                                     notify_tls_reload.notify_one();
-                                    reload_tx
+                                    config_update_tx
                                         .send(injected)
                                         .await
                                         .expect("the wait still holds the receiver");
                                 }
-                                _ => reload_tx
+                                _ => config_update_tx
                                     .send(injected)
                                     .await
                                     .expect("the wait still holds the receiver"),
@@ -4410,7 +4415,7 @@ mod tests {
                         assert_eq!(end, GenerationEnd::Reboot, "{case}");
                         assert_eq!(
                             fixture.settings.config.visible.ack_transmission, before,
-                            "{case}: the queued reload should still be queued"
+                            "{case}: the pending configuration update should still be pending"
                         );
                         // The handle the reboot outranked is handed to the
                         // teardown marked as having already finished, which is
@@ -4424,8 +4429,8 @@ mod tests {
                             "{case}: the finished handle should have been handed over"
                         );
                     }
-                    MidFlight::PersistedReload => {
-                        assert_eq!(end, GenerationEnd::ReloadConfig, "{case}");
+                    MidFlight::PersistedConfigUpdate => {
+                        assert_eq!(end, GenerationEnd::RestartForConfigUpdate, "{case}");
                         assert!(
                             fixture.entry_tasks.ingest.is_some(),
                             "{case}: the update outranks the finished handle"
@@ -4436,7 +4441,7 @@ mod tests {
                             "{case}: the update should have been applied"
                         );
                     }
-                    MidFlight::FailingReload => {
+                    MidFlight::FailingConfigUpdate => {
                         assert_eq!(
                             end,
                             GenerationEnd::EntryTaskExited(Subsystem::Ingest),
@@ -4495,7 +4500,7 @@ mod tests {
         /// Every ending shuts the store down, and only the tail after it
         /// differs.
         ///
-        /// This is the rule that replaced the one where a reload, a terminate
+        /// This is the rule that replaced the one where a configuration update, a terminate
         /// and an early exit fell through to their delay with the store never
         /// flushed. Time is paused, so neither tail costs wall-clock time.
         #[tokio::test(start_paused = true)]
@@ -4612,12 +4617,12 @@ mod tests {
                 assert_eq!(effects.calls(), expected_calls, "{ending}");
 
                 match generation_end {
-                    // The reload ends here, at the boundary: no second
+                    // The configuration update ends here, at the boundary: no second
                     // generation is started, and the store was shut down once.
-                    GenerationEnd::ReloadConfig => assert_eq!(
+                    GenerationEnd::RestartForConfigUpdate => assert_eq!(
                         flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
                         ControlFlow::Continue(()),
-                        "{ending}: a reload should ask for another generation"
+                        "{ending}: a configuration update should ask for another generation"
                     ),
                     GenerationEnd::EntryTaskExited(subsystem) => {
                         let error = flow
@@ -4643,7 +4648,7 @@ mod tests {
         /// A store that cannot be shut down stops the sequence where it is.
         ///
         /// The teardown returns the failure, so `act_on_generation_end` is
-        /// never reached: no reboot, no power-off, and — on the reload case —
+        /// never reached: no reboot, no power-off, and — on the configuration-update case —
         /// no next generation. Five markers and no sixth, on every ending.
         #[tokio::test(start_paused = true)]
         async fn a_failed_database_shutdown_takes_no_action_on_any_ending() {
@@ -4736,7 +4741,8 @@ mod tests {
             let tracker = TaskTracker::new();
 
             for outcome in ["error", "panic", "cancelled"] {
-                for generation_end in [GenerationEnd::Reboot, GenerationEnd::ReloadConfig] {
+                for generation_end in [GenerationEnd::Reboot, GenerationEnd::RestartForConfigUpdate]
+                {
                     let case = format!("{outcome}/{generation_end:?}");
                     // Installed before the stand-in is built: a panic and an
                     // abort are reported by the registration guard the moment
@@ -4917,7 +4923,7 @@ mod tests {
         /// What the lifecycle returns for a degraded generation, per ending.
         ///
         /// The final action is taken on every row; only the result differs,
-        /// and the configuration reload is the one row a degradation does not
+        /// and the configuration update is the one row a degradation does not
         /// fail. One outcome class is enough here: the ending contract does
         /// not vary by class.
         #[tokio::test(start_paused = true)]
@@ -4962,11 +4968,11 @@ mod tests {
                     "{ending}: the ending's action is taken whatever the health"
                 );
 
-                if generation_end == GenerationEnd::ReloadConfig {
+                if generation_end == GenerationEnd::RestartForConfigUpdate {
                     assert_eq!(
                         flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
                         ControlFlow::Continue(()),
-                        "{ending}: a degraded reload still hands over to the next generation"
+                        "{ending}: a degraded configuration update still hands over to the next generation"
                     );
                 } else {
                     assert!(
@@ -5117,7 +5123,7 @@ mod tests {
         /// finished, so the test releases the blocking work only after
         /// checking that the sequence is still waiting. The phase marker is
         /// the observable, which is why this holds for a terminate and a
-        /// reload as well as for the reboot that used to be the only ending
+        /// configuration update as well as for the reboot that used to be the only ending
         /// leaving a line behind.
         #[allow(clippy::too_many_lines)]
         #[tokio::test]
@@ -5130,7 +5136,7 @@ mod tests {
             for generation_end in [
                 GenerationEnd::Reboot,
                 GenerationEnd::Terminate,
-                GenerationEnd::ReloadConfig,
+                GenerationEnd::RestartForConfigUpdate,
             ] {
                 let ending = format!("{generation_end:?}");
                 let tracker = TaskTracker::new();
@@ -5634,21 +5640,21 @@ mod tests {
             );
         }
 
-        /// Everything both reload drives need.
+        /// Everything both configuration-update drives need.
         ///
         /// All four addresses are pinned with `free_addr()` so the same ports
         /// can be asked of both generations, and the peer subsystem is
         /// configured so the fourth of them is bound at all. The configuration
         /// file has to exist: the peer subsystem reads it on startup, and a
-        /// reload backs it up before rewriting it.
-        struct ReloadFixture {
+        /// a configuration update backs it up before rewriting it.
+        struct ConfigUpdateFixture {
             settings: Settings,
             process: ProcessContext,
             notify_terminate: Arc<Notify>,
             graphql_addr: SocketAddr,
         }
 
-        fn reload_fixture(dir: &Path) -> ReloadFixture {
+        fn config_update_fixture(dir: &Path) -> ConfigUpdateFixture {
             let notify_terminate = Arc::new(Notify::new());
             let process = test_process_context(dir, Arc::clone(&notify_terminate));
             let mut settings = test_settings(dir);
@@ -5663,7 +5669,7 @@ mod tests {
             settings.config.peers = Some(HashSet::new());
             write_config_file(&settings);
 
-            ReloadFixture {
+            ConfigUpdateFixture {
                 settings,
                 process,
                 notify_terminate,
@@ -5697,7 +5703,7 @@ mod tests {
             );
         }
 
-        /// Sends a configuration reload the only way production sends one: an
+        /// Sends a configuration update the only way production sends one: an
         /// mTLS `updateConfig` mutation against the generation's own HTTPS
         /// server.
         ///
@@ -5706,7 +5712,7 @@ mod tests {
         /// main; graceful web shutdown gives this HTTP response a chance to
         /// complete, while an admitted request may still be discarded if a
         /// higher-priority ending wins.
-        async fn send_reload_mutation(
+        async fn send_update_config_mutation(
             process: &ProcessContext,
             addr: SocketAddr,
             current: &ConfigVisible,
@@ -5735,17 +5741,17 @@ mod tests {
                 .json(&body)
                 .send()
                 .await
-                .expect("the reload mutation should reach the generation's web server")
+                .expect("the updateConfig mutation should reach the generation's web server")
                 .text()
                 .await
                 .expect("the mutation response should decode");
             assert!(
                 !response.contains("\"errors\""),
-                "the reload mutation should have been accepted, got: {response}"
+                "the updateConfig mutation should have been accepted, got: {response}"
             );
         }
 
-        /// The lifecycle loops on a reload, and the next generation reopens the
+        /// The lifecycle loops on a configuration update, and the next generation reopens the
         /// same store and rebinds the same addresses.
         ///
         /// This is the drive that proves the previous generation dropped every
@@ -5764,14 +5770,14 @@ mod tests {
         /// bound, so a second occurrence is what says this lifecycle released
         /// the pinned GraphQL port and took it again.
         #[tokio::test]
-        async fn a_reload_reopens_the_same_store_and_rebinds_the_same_addresses() {
+        async fn a_config_update_reopens_the_same_store_and_rebinds_the_same_addresses() {
             let dir = tempdir().expect("tempdir");
-            let mut fixture = reload_fixture(dir.path());
+            let mut fixture = config_update_fixture(dir.path());
             let notify_terminate = Arc::clone(&fixture.notify_terminate);
             let graphql_addr = fixture.graphql_addr;
             let first_config = fixture.settings.config.visible.clone();
             let process = fixture.process;
-            let reload_marker = final_action_marker(GenerationEnd::ReloadConfig);
+            let config_update_marker = final_action_marker(GenerationEnd::RestartForConfigUpdate);
             let shutdown_marker = format!("{SHUTDOWN_PHASE}: shutting the database down");
 
             let (logs, _guard) = capture_logs();
@@ -5782,11 +5788,11 @@ mod tests {
                 ),
                 async {
                     wait_for_logs(&logs, &READINESS_LINES).await;
-                    send_reload_mutation(&process, graphql_addr, &first_config).await;
+                    send_update_config_mutation(&process, graphql_addr, &first_config).await;
 
-                    // The first generation ended on the reload, shut its store
+                    // The first generation ended on the configuration update, shut its store
                     // down, and asked for another generation.
-                    wait_for_logs(&logs, &[shutdown_marker.as_str(), reload_marker]).await;
+                    wait_for_logs(&logs, &[shutdown_marker.as_str(), config_update_marker]).await;
 
                     // The second generation took every pinned address back,
                     // and so reopened the store behind them: `Database::open`
@@ -5813,17 +5819,17 @@ mod tests {
             assert_eq!(
                 fixture.settings.config.visible.ack_transmission,
                 first_config.ack_transmission + 1,
-                "the reload should have left the rewritten configuration behind it"
+                "the configuration update should have left the rewritten configuration behind it"
             );
-            // Two endings, two full sequences: the reload and the terminate.
+            // Two endings, two full sequences: the configuration update and the terminate.
             assert_marker_sequence(
                 &logs,
                 &[
-                    full_marker_sequence(GenerationEnd::ReloadConfig),
+                    full_marker_sequence(GenerationEnd::RestartForConfigUpdate),
                     full_marker_sequence(GenerationEnd::Terminate),
                 ]
                 .concat(),
-                "ReloadConfig then Terminate",
+                "RestartForConfigUpdate then Terminate",
             );
             assert_eq!(
                 occurrences(&logs, &shutdown_marker),
@@ -5832,12 +5838,12 @@ mod tests {
             );
         }
 
-        /// A store the first generation could not shut down stops the reload
+        /// A store the first generation could not shut down stops the configuration update
         /// there: the second generation never starts.
         #[tokio::test]
-        async fn a_failed_shutdown_on_a_reload_starts_no_second_generation() {
+        async fn a_failed_shutdown_on_a_config_update_starts_no_second_generation() {
             let dir = tempdir().expect("tempdir");
-            let mut fixture = reload_fixture(dir.path());
+            let mut fixture = config_update_fixture(dir.path());
             let graphql_addr = fixture.graphql_addr;
             let first_config = fixture.settings.config.visible.clone();
             let process = fixture.process;
@@ -5851,7 +5857,7 @@ mod tests {
                 ),
                 async {
                     wait_for_logs(&logs, &READINESS_LINES).await;
-                    send_reload_mutation(&process, graphql_addr, &first_config).await;
+                    send_update_config_mutation(&process, graphql_addr, &first_config).await;
                 }
             );
             let error = outcome
@@ -5868,7 +5874,11 @@ mod tests {
                 "no second generation should have started, got: {}",
                 captured(&logs)
             );
-            assert_marker_sequence(&logs, &TEARDOWN_MARKERS, "ReloadConfig/failing seam");
+            assert_marker_sequence(
+                &logs,
+                &TEARDOWN_MARKERS,
+                "RestartForConfigUpdate/failing seam",
+            );
             assert_eq!(effects.calls(), vec![EffectCall::ShutdownDatabase]);
         }
 
@@ -6246,7 +6256,7 @@ mod tests {
         async fn an_accepted_export_finishes_before_the_generation_closes_the_database() {
             for generation_end in [
                 GenerationEnd::Terminate,
-                GenerationEnd::ReloadConfig,
+                GenerationEnd::RestartForConfigUpdate,
                 GenerationEnd::Reboot,
                 GenerationEnd::PowerOff,
             ] {
@@ -6325,6 +6335,7 @@ mod tests {
                 // What is left of the teardown is the pause before the
                 // ending's action, and this test is not waiting it out.
                 shutdown.abort();
+                let _ = shutdown.await;
             }
         }
 
@@ -6349,7 +6360,7 @@ mod tests {
 
             for generation_end in [
                 GenerationEnd::Terminate,
-                GenerationEnd::ReloadConfig,
+                GenerationEnd::RestartForConfigUpdate,
                 GenerationEnd::Reboot,
                 GenerationEnd::PowerOff,
             ] {
@@ -6444,6 +6455,7 @@ mod tests {
                 // What is left of the teardown is the pause before the
                 // ending's action, and this test is not waiting it out.
                 shutdown.abort();
+                let _ = shutdown.await;
             }
         }
 
@@ -6482,7 +6494,7 @@ mod tests {
             for generation_end in [
                 GenerationEnd::Terminate,
                 GenerationEnd::Reboot,
-                GenerationEnd::ReloadConfig,
+                GenerationEnd::RestartForConfigUpdate,
             ] {
                 let ending = format!("{generation_end:?}");
                 let top_level_tracker = TaskTracker::new();
@@ -6596,11 +6608,11 @@ mod tests {
                 assert_lifecycle_record(&sole_record(&logs, DEGRADED_RECORD), generation_end);
 
                 match generation_end {
-                    GenerationEnd::ReloadConfig => {
+                    GenerationEnd::RestartForConfigUpdate => {
                         assert_eq!(
                             flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
                             ControlFlow::Continue(()),
-                            "{ending}: a degraded reload still hands over to the next generation"
+                            "{ending}: a degraded configuration update still hands over to the next generation"
                         );
                     }
                     GenerationEnd::Reboot => {

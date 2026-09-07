@@ -1999,16 +1999,14 @@ type MqttRawEventEdge {
 
 type Mutation {
 	"""
-	Updates the config with the given `new` config. It involves reloading the module with the
-	new config.
+	Requests a configuration update. A successful response means that the service accepted the
+	request for processing, not that the update has already been applied.
 	
 	# Errors
 	
-	Returns an error if `new` is empty, unchanged, stale relative to the current configuration,
-	malformed, or invalid. Validation rejects negative `max_open_files` or `num_of_thread`,
-	missing or non-directory `data_dir` and `export_dir` paths, and an unwritable `export_dir`.
-	Admission also fails with a retryable error when the reload queue is full, or with a closed
-	error when the generation is ending and no longer accepts reloads.
+	Returns an error if `new` is empty, unchanged, does not match the current configuration,
+	malformed, or invalid. A configuration update is also rejected when another update is
+	already pending, or when the service is stopping or restarting.
 	"""
 	updateConfig(old: String!, new: String!): Config!
 	stop: Boolean!
