@@ -59,7 +59,7 @@ use crate::{
 #[cfg(feature = "bootroot")]
 use crate::{
     comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels},
-    graphql::customer_deletion::start_customer_deletion_worker_from_stored_job,
+    graphql::customer_deletion::{DeletionOutcome, start_customer_deletion_worker_from_stored_job},
     storage::{CustomerDataDeletionStatus, Database, deletion_coordination::DeletionBlocked},
 };
 
@@ -550,8 +550,7 @@ struct GenerationOutcome {
 ///
 /// # Errors
 ///
-/// Returns an error if the persisted jobs cannot be read or a completed
-/// supervisor's job status cannot be read back for reporting.
+/// Returns an error if the persisted jobs cannot be read.
 #[cfg(feature = "bootroot")]
 #[allow(clippy::too_many_arguments)]
 async fn recover_inprogress_deletions(
@@ -633,24 +632,26 @@ async fn recover_inprogress_deletions(
             }
         };
 
-        if let Err(error) = handle.await {
-            error!(
+        match handle.await {
+            Ok(DeletionOutcome::Succeeded) => info!(
                 customer_id,
+                outcome = "succeeded",
+                "Finished recovered customer data deletion"
+            ),
+            Ok(DeletionOutcome::Failed(error)) => warn!(
+                customer_id,
+                outcome = "failed",
                 %error,
-                "Recovered customer data deletion supervisor did not finish normally"
-            );
-            continue;
+                "Finished recovered customer data deletion"
+            ),
+            Err(error) => {
+                error!(
+                    customer_id,
+                    %error,
+                    "Recovered customer data deletion supervisor did not finish normally"
+                );
+            }
         }
-
-        let status = database
-            .customer_deletion_job_store()?
-            .get(customer_id)?
-            .map(|job| job.status);
-        info!(
-            customer_id,
-            ?status,
-            "Finished recovered customer data deletion"
-        );
     }
 
     Ok(())
@@ -751,17 +752,32 @@ async fn run_generation(
     let deletion_coordination = Arc::new(CustomerDeletionCoordinator::new());
 
     #[cfg(feature = "bootroot")]
-    recover_inprogress_deletions(
-        &database,
-        &top_level_tracker,
-        &deletion_coordination,
-        &ingest_sensors,
-        &runtime_ingest_sensors,
-        &pcap_sensors,
-        &stream_direct_channels,
-    )
-    .await
-    .context("failed to recover interrupted customer data deletions")?;
+    {
+        let database = database.clone();
+        let tracker = top_level_tracker.clone();
+        let deletion_coordination = Arc::clone(&deletion_coordination);
+        let ingest_sensors = ingest_sensors.clone();
+        let runtime_ingest_sensors = runtime_ingest_sensors.clone();
+        let pcap_sensors = pcap_sensors.clone();
+        let stream_direct_channels = stream_direct_channels.clone();
+        top_level_tracker
+            .spawn("customer-deletion-recovery", move |_cancel| async move {
+                if let Err(error) = recover_inprogress_deletions(
+                    &database,
+                    &tracker,
+                    &deletion_coordination,
+                    &ingest_sensors,
+                    &runtime_ingest_sensors,
+                    &pcap_sensors,
+                    &stream_direct_channels,
+                )
+                .await
+                {
+                    error!(%error, "Failed to recover interrupted customer data deletions");
+                }
+            })
+            .context("failed to register customer data deletion recovery")?;
+    }
 
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
     let certs = Arc::clone(&tls.certs);

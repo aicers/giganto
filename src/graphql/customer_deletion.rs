@@ -581,7 +581,7 @@ pub(crate) fn start_customer_deletion_worker_from_stored_job(
     runtime_ingest_sensors: RunTimeIngestSensors,
     pcap_sensors: PcapSensors,
     stream_direct_channels: StreamDirectChannels,
-) -> Result<tokio::task::JoinHandle<()>, SpawnError> {
+) -> Result<tokio::task::JoinHandle<DeletionOutcome>, SpawnError> {
     register_customer_deletion_worker(
         tracker,
         deletion_guard,
@@ -608,7 +608,7 @@ fn register_customer_deletion_worker(
     pcap_sensors: PcapSensors,
     stream_direct_channels: StreamDirectChannels,
     peer_notify: Option<Arc<Notify>>,
-) -> Result<tokio::task::JoinHandle<()>, SpawnError> {
+) -> Result<tokio::task::JoinHandle<DeletionOutcome>, SpawnError> {
     tracker.spawn("customer-deletion", move |_cancel| async move {
         // Held for the whole deletion and dropped with this future, so every
         // way it can end — success, failure, a panic in the supervisor, or a
@@ -631,7 +631,7 @@ fn register_customer_deletion_worker(
             stream_direct_channels,
             peer_notify,
         )
-        .await;
+        .await
     })
 }
 
@@ -689,7 +689,7 @@ async fn cleanup_runtime_for_targets(
 }
 
 #[derive(Debug)]
-enum DeletionOutcome {
+pub(crate) enum DeletionOutcome {
     Succeeded,
     Failed(String),
 }
@@ -716,7 +716,7 @@ async fn supervise_worker(
     pcap_sensors: PcapSensors,
     stream_direct_channels: StreamDirectChannels,
     peer_notify: Option<Arc<Notify>>,
-) {
+) -> DeletionOutcome {
     let outcome = match worker.await {
         Ok(Ok(())) => {
             info!(customer_id, "Customer database deletion succeeded");
@@ -750,7 +750,7 @@ async fn supervise_worker(
             DeletionOutcome::Failed(message) => mark_job_failed(&db, customer_id, message.clone()),
         };
         match update {
-            Ok(()) => return,
+            Ok(()) => break,
             Err(err) => error!(
                 customer_id,
                 attempt,
@@ -759,6 +759,8 @@ async fn supervise_worker(
             ),
         }
     }
+
+    outcome
 }
 
 fn mark_job_succeeded(db: &Database, customer_id: u32) -> AnyhowResult<()> {
