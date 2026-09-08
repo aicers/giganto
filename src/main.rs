@@ -59,7 +59,9 @@ use crate::{
 #[cfg(feature = "bootroot")]
 use crate::{
     comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels},
-    graphql::customer_deletion::{DeletionOutcome, start_customer_deletion_worker_from_stored_job},
+    graphql::customer_deletion::{
+        DeletionOutcome, WorkerOutcome, start_customer_deletion_worker_from_stored_job,
+    },
     storage::{CustomerDataDeletionStatus, Database, deletion_coordination::DeletionBlocked},
 };
 
@@ -545,8 +547,13 @@ struct GenerationOutcome {
     health: GenerationHealth,
 }
 
-/// Restarts persisted `InProgress` deletion jobs, one at a time, before this
-/// generation starts serving requests or retention work.
+/// Recovers persisted `InProgress` deletion jobs sequentially in a tracked
+/// startup task.
+///
+/// Other subsystems may start while recovery is running, but the retention
+/// entry task waits for recovery to finish. Shutdown does not cancel the
+/// currently running deletion and waits for the tracked recovery task before
+/// closing the database.
 ///
 /// # Errors
 ///
@@ -561,13 +568,10 @@ async fn recover_inprogress_deletions(
     runtime_ingest_sensors: &RunTimeIngestSensors,
     pcap_sensors: &PcapSensors,
     stream_direct_channels: &StreamDirectChannels,
+    peer_notify: Option<Arc<Notify>>,
 ) -> Result<()> {
-    let jobs = database
-        .customer_deletion_job_store()?
-        .list_all()?
-        .into_iter()
-        .filter(|(_, job)| job.status == CustomerDataDeletionStatus::InProgress)
-        .collect::<Vec<_>>();
+    let mut jobs = database.customer_deletion_job_store()?.list_all()?;
+    jobs.retain(|(_, job)| job.status == CustomerDataDeletionStatus::InProgress);
 
     if jobs.is_empty() {
         return Ok(());
@@ -620,6 +624,7 @@ async fn recover_inprogress_deletions(
             runtime_ingest_sensors.clone(),
             pcap_sensors.clone(),
             stream_direct_channels.clone(),
+            peer_notify.clone(),
         ) {
             Ok(handle) => handle,
             Err(error) => {
@@ -633,16 +638,22 @@ async fn recover_inprogress_deletions(
         };
 
         match handle.await {
-            Ok(DeletionOutcome::Succeeded) => info!(
+            Ok(DeletionOutcome::StatusPersisted(WorkerOutcome::Succeeded)) => info!(
                 customer_id,
                 outcome = "succeeded",
                 "Finished recovered customer data deletion"
             ),
-            Ok(DeletionOutcome::Failed(error)) => warn!(
+            Ok(DeletionOutcome::StatusPersisted(WorkerOutcome::Failed(error))) => warn!(
                 customer_id,
                 outcome = "failed",
                 %error,
                 "Finished recovered customer data deletion"
+            ),
+            Ok(DeletionOutcome::StatusPersistenceFailed(worker_outcome)) => error!(
+                customer_id,
+                outcome = "status_persistence_failed",
+                deletion_outcome = worker_outcome.as_str(),
+                "Recovered customer data deletion did not reach a durable terminal status"
             ),
             Err(error) => {
                 error!(
@@ -673,11 +684,11 @@ async fn recover_inprogress_deletions(
 /// # Errors
 ///
 /// Returns an error if the data directory fails compression validation or
-/// migration, if the database cannot be opened, if deletion recovery fails,
-/// if the node certificate carries no usable node name, if the peer subsystem
-/// cannot be built, or if the teardown could not shut the store down. A
-/// generation that ended degraded is not one of them: that is carried out as a
-/// value, because the ending's final action must still be taken.
+/// migration, if the database cannot be opened, if a required task cannot be
+/// registered, if the node certificate carries no usable node name, if the
+/// peer subsystem cannot be built, or if the teardown could not shut the store
+/// down. A generation that ended degraded is not one of them: that is carried
+/// out as a value, because the ending's final action must still be taken.
 #[allow(clippy::too_many_lines)]
 async fn run_generation(
     settings: &mut Settings,
@@ -752,7 +763,7 @@ async fn run_generation(
     let deletion_coordination = Arc::new(CustomerDeletionCoordinator::new());
 
     #[cfg(feature = "bootroot")]
-    {
+    let recovery_handle = {
         let database = database.clone();
         let tracker = top_level_tracker.clone();
         let deletion_coordination = Arc::clone(&deletion_coordination);
@@ -760,9 +771,10 @@ async fn run_generation(
         let runtime_ingest_sensors = runtime_ingest_sensors.clone();
         let pcap_sensors = pcap_sensors.clone();
         let stream_direct_channels = stream_direct_channels.clone();
+        let peer_notify = notify_sensor_change.clone();
         top_level_tracker
             .spawn("customer-deletion-recovery", move |_cancel| async move {
-                if let Err(error) = recover_inprogress_deletions(
+                recover_inprogress_deletions(
                     &database,
                     &tracker,
                     &deletion_coordination,
@@ -770,14 +782,12 @@ async fn run_generation(
                     &runtime_ingest_sensors,
                     &pcap_sensors,
                     &stream_direct_channels,
+                    peer_notify,
                 )
                 .await
-                {
-                    error!(%error, "Failed to recover interrupted customer data deletions");
-                }
             })
-            .context("failed to register customer data deletion recovery")?;
-    }
+            .context("failed to register customer data deletion recovery")?
+    };
 
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
     let certs = Arc::clone(&tls.certs);
@@ -827,14 +837,22 @@ async fn run_generation(
 
     // Retention is tracked, not detached: the tracker's cancellation is what
     // stops it, the tracker's drain is what waits for it, and the handle kept
-    // here is what says how it ended. Its child token reaches it through the
-    // closure argument, which is the only thing its shutdown travels on.
+    // here is what says how it ended. In `bootroot` builds, this entry task
+    // first awaits the tracked startup recovery handle, keeping recovery and
+    // retention ordered without blocking the rest of generation startup. Its
+    // child token reaches retention through the closure argument, which is the
+    // only thing its shutdown travels on.
     let retention = settings.config.visible.retention;
     let retain_task_handle: ObservedHandle<Result<()>> = top_level_tracker
         .spawn_observed("retention", {
             let db = database.clone();
             let deletion_coordination = Arc::clone(&deletion_coordination);
-            move |cancel| run_retention(ONE_DAY, retention, db, cancel, deletion_coordination)
+            move |cancel| async move {
+                #[cfg(feature = "bootroot")]
+                let _ = recovery_handle.await;
+
+                run_retention(ONE_DAY, retention, db, cancel, deletion_coordination).await
+            }
         })
         .map_err(|e| anyhow!("failed to register the retention task: {e}"))?;
 
@@ -2554,6 +2572,7 @@ mod tests {
             PcapSensors,
             StreamDirectChannels,
         ),
+        peer_notify: Option<Arc<Notify>>,
     ) -> Result<()> {
         recover_inprogress_deletions(
             database,
@@ -2563,6 +2582,7 @@ mod tests {
             &state.1,
             &state.2,
             &state.3,
+            peer_notify,
         )
         .await
     }
@@ -2599,6 +2619,7 @@ mod tests {
             &tracker,
             &Arc::new(CustomerDeletionCoordinator::new()),
             &state,
+            None,
         )
         .await
         .expect("recover interrupted deletion");
@@ -2624,6 +2645,97 @@ mod tests {
             None,
             "recovery must delete data for the persisted target"
         );
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    /// Verifies that startup recovery removes the recovered sensor from the
+    /// shared runtime sensor set and signals the peer sensor-change notifier.
+    ///
+    /// No task is waiting on the notifier during recovery, so consuming the stored
+    /// permit afterward confirms that recovery emitted the notification.
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn recovery_notifies_peer_sensor_change_after_runtime_cleanup() {
+        const CUSTOMER_ID: u32 = 43;
+        let target = "piglet.peer-recovery.example.test";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        database
+            .sensors_store()
+            .expect("open sensor store")
+            .insert(target, crate::datetime::DateTime::now())
+            .expect("seed persisted sensor");
+        database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .create(CUSTOMER_ID, &in_progress_job(target, 123))
+            .expect("seed interrupted job");
+
+        let state = recovery_state(&database);
+        assert!(
+            state.0.read().await.contains(target),
+            "startup must initially restore the persisted sensor"
+        );
+        let tracker = TaskTracker::new();
+        let peer_notify = Arc::new(Notify::new());
+
+        recover_with_state(
+            &database,
+            &tracker,
+            &Arc::new(CustomerDeletionCoordinator::new()),
+            &state,
+            Some(Arc::clone(&peer_notify)),
+        )
+        .await
+        .expect("recover interrupted deletion");
+
+        assert!(
+            !state.0.read().await.contains(target),
+            "notification must follow removal from the shared sensor snapshot"
+        );
+        tokio::time::timeout(Duration::from_secs(1), peer_notify.notified())
+            .await
+            .expect("recovery did not leave a peer sensor-change notification");
+    }
+
+    /// Awaiting the recovery handle is a strict completion dependency rather
+    /// than a reliance on Tokio's task scheduling order.
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn retention_waits_for_startup_recovery() {
+        let tracker = TaskTracker::new();
+        let (release_recovery_tx, release_recovery_rx) = oneshot::channel();
+        let recovery_handle = tracker
+            .spawn("customer-deletion-recovery", move |_cancel| async move {
+                let _ = release_recovery_rx.await;
+                Ok::<(), anyhow::Error>(())
+            })
+            .expect("register recovery");
+        let (observer_started_tx, observer_started_rx) = oneshot::channel();
+        let (retention_started_tx, mut retention_started_rx) = oneshot::channel();
+        let retention_handle = tracker
+            .spawn("retention", move |_cancel| async move {
+                observer_started_tx.send(()).expect("announce observer");
+                let _ = recovery_handle.await;
+                retention_started_tx.send(()).expect("announce retention");
+            })
+            .expect("register retention observer");
+
+        observer_started_rx.await.expect("observer should start");
+        assert_eq!(
+            retention_started_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty),
+            "retention must remain gated while recovery is pending"
+        );
+
+        release_recovery_tx.send(()).expect("release recovery");
+        retention_started_rx
+            .await
+            .expect("retention should start after recovery");
+        retention_handle
+            .await
+            .expect("retention observer should join");
         assert_eq!(tracker.pending_count(), 0);
     }
 
@@ -2658,7 +2770,7 @@ mod tests {
             let tracker = tracker.clone();
             let coordination = Arc::clone(&coordination);
             let state = state.clone();
-            async move { recover_with_state(&database, &tracker, &coordination, &state).await }
+            async move { recover_with_state(&database, &tracker, &coordination, &state, None).await }
         });
 
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -2728,6 +2840,7 @@ mod tests {
             &tracker,
             &Arc::new(CustomerDeletionCoordinator::new()),
             &recovery_state(&database),
+            None,
         )
         .await
         .expect("a closed tracker cleanly defers recovery");
