@@ -169,8 +169,10 @@ impl ConfigMutation {
     ///
     /// # Errors
     ///
-    /// Returns an error if `new` is empty, unchanged, does not match the current configuration,
-    /// malformed, or invalid. A configuration update is also rejected when another update is
+    /// Returns an error if `new` is empty, unchanged, malformed, or invalid, or if `old` does
+    /// not match the current configuration. Validation rejects negative `max_open_files` or
+    /// `num_of_thread`, missing or non-directory `data_dir` and `export_dir` paths, and an
+    /// unwritable `export_dir`. A configuration update is also rejected when another update is
     /// already pending, or when the service is stopping or restarting.
     async fn update_config(
         &self,
@@ -335,15 +337,71 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, path::Path, str::FromStr};
+    use std::{
+        io::Write,
+        net::SocketAddr,
+        path::Path,
+        str::FromStr,
+        sync::{Arc, Mutex},
+    };
 
     use toml_edit::DocumentMut;
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::{
         insert_toml_peers, parent_directory, parse_toml_element_to_string, read_toml_file,
         write_toml_file,
     };
     use crate::{comm::peer::PeerIdentity, graphql::tests::TestSchema};
+
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock").write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CaptureWriter {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            Self(Arc::clone(&self.0))
+        }
+    }
+
+    fn capture_logs() -> (Arc<Mutex<Vec<u8>>>, DefaultGuard) {
+        crate::cancellation::hold_callsite_interest_open();
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(CaptureWriter(Arc::clone(&logs)))
+            .finish();
+        (logs, tracing::subscriber::set_default(subscriber))
+    }
+
+    fn captured(logs: &Arc<Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(logs.lock().expect("lock").clone()).expect("utf8 log output")
+    }
+
+    fn assert_update_rejected_logs(output: &str, rejection: &str) {
+        assert!(
+            output.contains(rejection),
+            "missing rejection log: {output}"
+        );
+        assert!(
+            !output.contains("Configuration update request accepted")
+                && !output.contains("Configuration update applied"),
+            "a rejected update must not be logged as accepted or applied: {output}"
+        );
+    }
 
     #[tokio::test]
     async fn test_ping() {
@@ -502,6 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_config_reports_pending_update() {
+        let (logs, _guard) = capture_logs();
         let mut schema = TestSchema::new();
         let queued: crate::settings::ConfigVisible = toml::from_str(&old_config()).unwrap();
         schema
@@ -521,10 +580,15 @@ mod tests {
             Ok(queued),
             "a rejected update must not replace the update already pending"
         );
+        assert_update_rejected_logs(
+            &captured(&logs),
+            "Configuration update rejected: another update is pending",
+        );
     }
 
     #[tokio::test]
     async fn test_update_config_reports_unavailable_service() {
+        let (logs, _guard) = capture_logs();
         let mut schema = TestSchema::new();
         schema.config_update_rx.close();
 
@@ -538,6 +602,10 @@ mod tests {
             )
         );
         assert!(schema.config_update_rx.try_recv().is_err());
+        assert_update_rejected_logs(
+            &captured(&logs),
+            "Configuration update rejected: service is stopping or restarting",
+        );
     }
 
     #[tokio::test]

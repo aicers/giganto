@@ -254,13 +254,14 @@ impl LifecycleEffects for HostEffects {
 /// for another generation or returns. `main` keeps only argument parsing,
 /// process-wide setup, and the call into here.
 ///
-/// The order of the two steps is the point. [`run_generation`] returns only
-/// after it has dropped every [`storage::Database`] clone it held, and only
-/// then does [`act_on_generation_end`] run: a configuration update's next generation reopens
-/// the same path, and `Database::open` fails while a clone of the previous one
-/// is alive. Reboot and power-off do not depend on that drop the way a configuration update
-/// does, but they take the same position so that one order holds for every
-/// ending.
+/// This order is important. [`run_generation`] drops every
+/// [`storage::Database`] clone before returning. Afterward,
+/// [`act_on_generation_end`] performs the requested action.
+///
+/// A restart for a configuration update opens the same database path in a new
+/// generation. `Database::open` fails if any database clone from the old
+/// generation remains alive. Reboot and power-off do not require this database
+/// handoff, but use the same lifecycle order for consistency.
 ///
 /// # Errors
 ///
@@ -5646,7 +5647,7 @@ mod tests {
         /// can be asked of both generations, and the peer subsystem is
         /// configured so the fourth of them is bound at all. The configuration
         /// file has to exist: the peer subsystem reads it on startup, and a
-        /// a configuration update backs it up before rewriting it.
+        /// configuration update backs it up before rewriting it.
         struct ConfigUpdateFixture {
             settings: Settings,
             process: ProcessContext,
