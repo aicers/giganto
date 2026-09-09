@@ -9,9 +9,11 @@
 //! The state is one small enum behind a [`Mutex`]. That mutex is taken only to
 //! read the enum and replace it — never across an `.await`, and never across
 //! the RocksDB work itself. What outlives the critical section is a guard: an
-//! RAII token whose `Drop` puts the state back to [`Activity::Idle`]. Every
-//! terminal outcome therefore releases the claim, including the ones no
-//! success path can be written for — a failed deletion, a panicking
+//! RAII token whose `Drop` releases its claim. Startup recovery keeps an outer
+//! claim across its customers, returning to [`Activity::Idle`] only after the
+//! recovery and its last worker have finished. Every terminal outcome releases
+//! the worker's claim, including the ones no success path can be written for —
+//! a failed deletion, a panicking
 //! supervisor, and a worker future that was built but never admitted to the
 //! shutdown tracker.
 //!
@@ -25,7 +27,7 @@
 // Retention is built in every feature set and customer deletion is not, so
 // this module cannot be gated as a whole: a build without `bootroot` has the
 // retention half compiled and called, and the deletion half compiled with its
-// only caller — the `deleteCustomerData` resolver — absent.
+// callers — the `deleteCustomerData` resolver and startup recovery — absent.
 #![cfg_attr(not(feature = "bootroot"), allow(dead_code))]
 
 use std::sync::{
@@ -38,7 +40,7 @@ use std::sync::{
 pub enum DeletionBlocked {
     /// This customer's own deletion is already in flight on this node.
     SameCustomer,
-    /// Another customer's deletion is in flight.
+    /// Another customer's deletion or startup recovery owns the store.
     AnotherDeletion,
     /// A retention cleanup cycle is in flight.
     Retention,
@@ -51,6 +53,8 @@ enum Activity {
     Idle,
     /// A deletion for this customer is in flight.
     Deleting(u32),
+    /// Startup recovery owns the store, optionally running this customer's job.
+    Recovering(Option<u32>),
     /// A retention cleanup cycle is in flight.
     Retaining,
 }
@@ -89,24 +93,55 @@ impl CustomerDeletionCoordinator {
         let mut activity = self.lock_activity();
         match *activity {
             Activity::Idle => *activity = Activity::Deleting(customer_id),
-            Activity::Deleting(active) if active == customer_id => {
+            Activity::Deleting(active) | Activity::Recovering(Some(active))
+                if active == customer_id =>
+            {
                 return Err(DeletionBlocked::SameCustomer);
             }
-            Activity::Deleting(_) => return Err(DeletionBlocked::AnotherDeletion),
+            Activity::Deleting(_) | Activity::Recovering(_) => {
+                return Err(DeletionBlocked::AnotherDeletion);
+            }
             Activity::Retaining => return Err(DeletionBlocked::Retention),
         }
         drop(activity);
         Ok(DeletionGuard {
             coordinator: Arc::clone(self),
+            recovery: None,
         })
+    }
+
+    /// Claims the store for the whole startup recovery, including gaps between
+    /// jobs. Each worker keeps this guard alive until its own claim is released.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason an existing deletion, recovery, or retention cycle
+    /// prevents recovery from claiming the store.
+    pub fn begin_recovery(self: &Arc<Self>) -> Result<Arc<RecoveryGuard>, DeletionBlocked> {
+        let mut activity = self.lock_activity();
+        match *activity {
+            Activity::Idle => *activity = Activity::Recovering(None),
+            // Recovering is a duplicate-start safeguard: run_generation
+            // starts only one recovery task per generation.
+            Activity::Deleting(_) | Activity::Recovering(_) => {
+                return Err(DeletionBlocked::AnotherDeletion);
+            }
+            // run_generation awaits recovery before running retention.
+            // Keep this refusal for callers that do not enforce that order.
+            Activity::Retaining => return Err(DeletionBlocked::Retention),
+        }
+        drop(activity);
+        Ok(Arc::new(RecoveryGuard {
+            coordinator: Arc::clone(self),
+        }))
     }
 
     /// Claims the store for one retention cleanup cycle, or reports that the
     /// cycle has to be skipped.
     ///
-    /// Returns `None` when a deletion owns the store. The refusal is counted,
-    /// so a caller — or a test — can tell a cycle that gave way from one that
-    /// never came due.
+    /// Returns `None` when a deletion or recovery owns the store. The refusal
+    /// is counted, so a caller — or a test — can tell a cycle that gave way
+    /// from one that never came due.
     pub fn begin_retention(self: &Arc<Self>) -> Option<RetentionGuard> {
         let mut activity = self.lock_activity();
         if *activity == Activity::Idle {
@@ -132,7 +167,7 @@ impl CustomerDeletionCoordinator {
 
     /// Locks the activity state, reading through a poisoned lock.
     ///
-    /// The only code that takes this lock is the four-line state machine
+    /// The only code that takes this lock is the small state machine
     /// above, so a poisoned lock still holds a valid [`Activity`]. Refusing to
     /// read it would strand the store as claimed forever, which is the one
     /// outcome worse than the panic that poisoned it.
@@ -151,12 +186,68 @@ impl CustomerDeletionCoordinator {
 /// the runtime cleanup that follows, and the terminal status write — and
 /// dropped exactly once, however that work ends.
 #[derive(Debug)]
-#[must_use = "dropping the guard releases the store to retention and other customers"]
+#[must_use = "dropping the guard releases this customer's claim"]
 pub struct DeletionGuard {
     coordinator: Arc<CustomerDeletionCoordinator>,
+    // The deletion supervisor shares the outer task's recovery guard.
+    // Keeping only the coordinator alive would not stop RecoveryGuard::drop
+    // from setting Idle if the outer task exits before the supervisor.
+    recovery: Option<Arc<RecoveryGuard>>,
 }
 
 impl Drop for DeletionGuard {
+    fn drop(&mut self) {
+        *self.coordinator.lock_activity() = if self.recovery.is_some() {
+            Activity::Recovering(None)
+        } else {
+            Activity::Idle
+        };
+    }
+}
+
+/// An exclusive startup recovery, shared with its currently running worker.
+#[derive(Debug)]
+#[must_use = "dropping the last recovery guard releases the store"]
+pub struct RecoveryGuard {
+    coordinator: Arc<CustomerDeletionCoordinator>,
+}
+
+impl RecoveryGuard {
+    /// Starts one recovered customer's claim without opening the store to
+    /// GraphQL requests when the previous recovered customer finishes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal if a recovered customer is already running.
+    pub fn begin_deletion(
+        self: &Arc<Self>,
+        customer_id: u32,
+    ) -> Result<DeletionGuard, DeletionBlocked> {
+        let mut activity = self.coordinator.lock_activity();
+        // The recovery loop awaits each supervisor before claiming the next
+        // customer, so it normally reaches only Recovering(None). GraphQL
+        // requests use CustomerDeletionCoordinator::begin_deletion instead.
+        match *activity {
+            Activity::Recovering(None) => *activity = Activity::Recovering(Some(customer_id)),
+            // Defensive: the same customer was claimed again on this shared
+            // guard before its previous supervisor released the claim.
+            Activity::Recovering(Some(active)) if active == customer_id => {
+                return Err(DeletionBlocked::SameCustomer);
+            }
+            // A different active customer is also an overlapping claim.
+            // Idle, Deleting, and Retaining cannot occur while this recovery
+            // guard's claim is intact; refuse them rather than change state.
+            _ => return Err(DeletionBlocked::AnotherDeletion),
+        }
+        drop(activity);
+        Ok(DeletionGuard {
+            coordinator: Arc::clone(&self.coordinator),
+            recovery: Some(Arc::clone(self)),
+        })
+    }
+}
+
+impl Drop for RecoveryGuard {
     fn drop(&mut self) {
         self.coordinator.release();
     }
@@ -234,6 +325,147 @@ mod tests {
                 .begin_deletion(1)
                 .expect("the store was released"),
         );
+    }
+
+    /// A completed customer releases its slot, but only finishing the batch
+    /// lets GraphQL or retention claim the store again.
+    #[test]
+    fn recovery_keeps_the_store_between_customers() {
+        let coordinator = coordinator();
+        let recovery = coordinator.begin_recovery().expect("idle store");
+
+        for customer_id in [1, 2] {
+            assert_eq!(
+                coordinator.begin_deletion(customer_id).unwrap_err(),
+                DeletionBlocked::AnotherDeletion
+            );
+            assert!(coordinator.begin_retention().is_none());
+            assert_eq!(
+                coordinator.begin_recovery().unwrap_err(),
+                DeletionBlocked::AnotherDeletion
+            );
+
+            let worker = recovery.begin_deletion(customer_id).expect("next customer");
+            assert_eq!(
+                coordinator.begin_deletion(customer_id).unwrap_err(),
+                DeletionBlocked::SameCustomer
+            );
+            assert_eq!(
+                recovery.begin_deletion(customer_id).unwrap_err(),
+                DeletionBlocked::SameCustomer
+            );
+            assert_eq!(
+                recovery.begin_deletion(3).unwrap_err(),
+                DeletionBlocked::AnotherDeletion
+            );
+            assert!(coordinator.begin_retention().is_none());
+            drop(worker);
+        }
+
+        assert_eq!(
+            coordinator.begin_deletion(3).unwrap_err(),
+            DeletionBlocked::AnotherDeletion
+        );
+        drop(recovery);
+        drop(coordinator.begin_deletion(3).expect("batch finished"));
+        drop(coordinator.begin_retention().expect("batch finished"));
+    }
+
+    /// An outer task may disappear while its tracked worker is still alive.
+    /// The worker's shared recovery guard must keep both kinds of work out.
+    #[test]
+    fn a_recovered_worker_keeps_the_claim_after_the_outer_guard_is_dropped() {
+        let coordinator = coordinator();
+        let recovery = coordinator.begin_recovery().expect("idle store");
+        let worker = recovery.begin_deletion(1).expect("first customer");
+        drop(recovery);
+
+        assert_eq!(
+            coordinator.begin_deletion(1).unwrap_err(),
+            DeletionBlocked::SameCustomer
+        );
+        assert_eq!(
+            coordinator.begin_deletion(2).unwrap_err(),
+            DeletionBlocked::AnotherDeletion
+        );
+        assert!(coordinator.begin_retention().is_none());
+
+        drop(worker);
+        drop(coordinator.begin_deletion(2).expect("last worker finished"));
+        drop(coordinator.begin_retention().expect("last worker finished"));
+    }
+
+    #[test]
+    fn a_panicking_recovered_worker_releases_only_its_customer_slot() {
+        let coordinator = coordinator();
+        let recovery = coordinator.begin_recovery().expect("idle store");
+        let panicked = std::panic::catch_unwind({
+            let recovery = Arc::clone(&recovery);
+            move || {
+                let _worker = recovery.begin_deletion(1).expect("first customer");
+                panic!("injected recovered worker panic");
+            }
+        });
+
+        assert!(panicked.is_err());
+        assert_eq!(
+            coordinator.begin_deletion(2).unwrap_err(),
+            DeletionBlocked::AnotherDeletion
+        );
+        drop(recovery.begin_deletion(2).expect("recovery can continue"));
+        drop(recovery);
+        drop(coordinator.begin_retention().expect("batch finished"));
+    }
+
+    #[test]
+    fn a_panicking_recovery_releases_the_store() {
+        let coordinator = coordinator();
+        let panicked = std::panic::catch_unwind({
+            let coordinator = Arc::clone(&coordinator);
+            move || {
+                let _recovery = coordinator.begin_recovery().expect("idle store");
+                panic!("injected recovery panic");
+            }
+        });
+
+        assert!(panicked.is_err());
+        drop(
+            coordinator
+                .begin_deletion(1)
+                .expect("recovery released store"),
+        );
+        drop(
+            coordinator
+                .begin_retention()
+                .expect("recovery released store"),
+        );
+    }
+
+    #[test]
+    fn recovery_does_not_take_over_an_existing_claim() {
+        let coordinator = coordinator();
+        let deletion = coordinator.begin_deletion(1).expect("idle store");
+        assert_eq!(
+            coordinator.begin_recovery().unwrap_err(),
+            DeletionBlocked::AnotherDeletion
+        );
+        assert_eq!(
+            coordinator.begin_deletion(1).unwrap_err(),
+            DeletionBlocked::SameCustomer
+        );
+        drop(deletion);
+
+        let retention = coordinator.begin_retention().expect("idle store");
+        assert_eq!(
+            coordinator.begin_recovery().unwrap_err(),
+            DeletionBlocked::Retention
+        );
+        assert_eq!(
+            coordinator.begin_deletion(1).unwrap_err(),
+            DeletionBlocked::Retention
+        );
+        drop(retention);
+        drop(coordinator.begin_recovery().expect("store released"));
     }
 
     /// A guard dropped by unwinding releases the store the same way a guard

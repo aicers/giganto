@@ -27,8 +27,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   instead of one of those refusals, since retrying there can never help. An
   accepted deletion always finishes before the node shuts its database down.
   On startup, `bootroot` nodes resume interrupted `InProgress` jobs from their
-  persisted targets before retention begins. Cluster-wide aggregation is not
-  yet included.
+  persisted targets before retention begins. Once recovery starts, new deletion
+  requests cannot interrupt the remaining recovery jobs. Cluster-wide
+  aggregation is not yet included.
 - Customer deletion now runs on Tokio's blocking pool with batched RocksDB
   range deletes. Worker failures, including task panics, are recorded as
   failed jobs, and terminal status writes are retried without repeating data

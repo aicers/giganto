@@ -571,8 +571,8 @@ fn start_customer_deletion_worker(
 /// Recovery uses the stored targets and does not relay the deletion request to
 /// peers. After successful local cleanup, the optional notifier propagates the
 /// updated local sensor list. The returned tracked handle lets the recovery
-/// loop await this customer's terminal outcome before claiming the store for
-/// the next recovered customer.
+/// loop await this customer's terminal outcome before starting the next
+/// recovered customer under the batch's exclusive claim.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_customer_deletion_worker_from_stored_job(
     tracker: &TaskTracker,
@@ -616,7 +616,8 @@ fn register_customer_deletion_worker(
     tracker.spawn("customer-deletion", move |_cancel| async move {
         // Held for the whole deletion and dropped with this future, so every
         // way it can end — success, failure, a panic in the supervisor, or a
-        // registration that was refused — releases the store.
+        // registration that was refused — releases this customer's claim.
+        // A recovery guard keeps the batch exclusive between customers.
         let _deletion_guard = deletion_guard;
         let worker = tokio::task::spawn_blocking({
             let db = db.clone();
@@ -1769,6 +1770,115 @@ mod tests {
         assert_eq!(
             wait_for_terminal_job(&schema.db, 202).await.status,
             CustomerDataDeletionStatus::Succeeded
+        );
+    }
+
+    /// The batch reservation must reject new GraphQL deletions even when no
+    /// recovered worker is active, while preserving the active customer's reply.
+    #[tokio::test]
+    async fn recovery_blocks_new_requests_until_the_whole_batch_finishes() {
+        const RECOVERING: u32 = 302;
+        const REQUESTING: u32 = 303;
+        let target = "piglet.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[target]);
+        let recovery = schema
+            .deletion_coordination
+            .begin_recovery()
+            .expect("claim recovery");
+
+        let query = delete_customer_data_mutation(&[target], REQUESTING);
+        let before_first_job = schema.execute(&query).await;
+        assert!(before_first_job.errors.is_empty());
+        assert_eq!(
+            before_first_job.data.to_string(),
+            "{deleteCustomerData: BLOCKED_BY_ANOTHER_DELETION}"
+        );
+
+        let worker = recovery.begin_deletion(RECOVERING).expect("first job");
+        let repeat = schema
+            .execute(&delete_customer_data_mutation(&[target], RECOVERING))
+            .await;
+        assert!(repeat.errors.is_empty());
+        assert_eq!(
+            repeat.data.to_string(),
+            "{deleteCustomerData: DELETION_IN_PROGRESS}"
+        );
+        drop(worker);
+
+        let between_jobs = schema.execute(&query).await;
+        assert!(between_jobs.errors.is_empty());
+        assert_eq!(
+            between_jobs.data.to_string(),
+            "{deleteCustomerData: BLOCKED_BY_ANOTHER_DELETION}"
+        );
+        assert_eq!(job_status(&schema.db, REQUESTING), None);
+        assert_eq!(job_status(&schema.db, RECOVERING), None);
+
+        let no_local_target = schema
+            .execute(&delete_customer_data_mutation(
+                &["piglet.absent.example.test"],
+                304,
+            ))
+            .await;
+        assert_eq!(
+            no_local_target.data.to_string(),
+            "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
+        );
+
+        drop(recovery);
+        let accepted = schema.execute(&query).await;
+        assert!(accepted.errors.is_empty());
+        assert_eq!(accepted.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        assert_eq!(
+            wait_for_terminal_job(&schema.db, REQUESTING).await.status,
+            CustomerDataDeletionStatus::Succeeded
+        );
+    }
+
+    /// A tracker closure after recovery acquired a customer must leave the
+    /// batch reserved until its outer guard is released, without doing deletion.
+    #[tokio::test]
+    async fn a_refused_recovery_worker_releases_only_its_customer_claim() {
+        let schema = TestSchema::new_with_ingest_sensors(&["piglet.node1.example.test"]);
+        let recovery = schema
+            .deletion_coordination
+            .begin_recovery()
+            .expect("claim recovery");
+        let worker = recovery.begin_deletion(305).expect("first job");
+        schema.top_level_tracker.close().expect("close tracker");
+
+        let refused = start_customer_deletion_worker(
+            &schema.top_level_tracker,
+            worker,
+            schema.db.clone(),
+            305,
+            vec!["piglet.node1.example.test".to_string()],
+            schema.ingest_sensors.clone(),
+            schema.runtime_ingest_sensors.clone(),
+            schema.pcap_sensors.clone(),
+            schema.stream_direct_channels.clone(),
+            None,
+        );
+        assert!(matches!(refused, Err(SpawnError::Closed)));
+        assert!(
+            schema
+                .ingest_sensors
+                .read()
+                .await
+                .contains("piglet.node1.example.test")
+        );
+        assert!(schema.deletion_coordination.begin_retention().is_none());
+        drop(
+            recovery
+                .begin_deletion(306)
+                .expect("customer slot released"),
+        );
+        drop(recovery);
+        drop(
+            schema
+                .deletion_coordination
+                .begin_retention()
+                .expect("batch released"),
         );
     }
 
