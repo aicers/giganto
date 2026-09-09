@@ -2004,11 +2004,11 @@ type Mutation {
 	
 	# Errors
 	
-	Returns an error if `new` is empty, unchanged, malformed, or invalid, or if `old` does
-	not match the current configuration. Validation rejects negative `max_open_files` or
-	`num_of_thread`, missing or non-directory `data_dir` and `export_dir` paths, and an
-	unwritable `export_dir`. A configuration update is also rejected when another update is
-	already pending, or when the service is stopping or restarting.
+	Returns an error if `new` is empty or if either `old` or `new` cannot be parsed as a
+	configuration. It also returns an error if `old` does not match the current configuration, if
+	`new` matches the current configuration, or if the `data_dir` in `new` does not name an existing
+	directory. A configuration update is also rejected when another update is already pending, or
+	when the service is stopping or restarting.
 	"""
 	updateConfig(old: String!, new: String!): Config!
 	stop: Boolean!
