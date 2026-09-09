@@ -1,12 +1,12 @@
-use std::{io::Write, path::Path, time::Duration};
+use std::{io::Write, path::Path};
 
 use anyhow::{Context as AnyhowContext, anyhow};
 #[cfg(feature = "storage_diagnostics")]
 use async_graphql::InputObject;
 use async_graphql::{Context, Object, Result, SimpleObject};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Sender, error::TrySendError};
 use toml_edit::{DocumentMut, InlineTable};
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use super::{PowerOffNotify, RebootNotify, TerminateNotify};
 use crate::graphql::{StringNumberU32, StringNumberU64};
@@ -15,7 +15,6 @@ use crate::settings::ConfigVisible;
 use crate::storage::Database;
 use crate::{comm::peer::PeerIdentity, settings::Settings};
 
-const GRAPHQL_REBOOT_DELAY: u64 = 100;
 pub const CONFIG_PUBLISH_SRV_ADDR: &str = "publish_srv_addr";
 pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
 
@@ -165,16 +164,16 @@ impl StatusQuery {
 
 #[Object]
 impl ConfigMutation {
-    /// Updates the config with the given `new` config. It involves reloading the module with the
-    /// new config.
+    /// Requests a configuration update. A successful response means that the service accepted the
+    /// request for processing, not that the update has already been applied.
     ///
     /// # Errors
     ///
-    /// Returns an error if the `new` is empty. In addition, it returns an error if the `new` is
-    /// invalid. The `new` config is invalid if it contains a negative value for `max_open_files` or
-    /// `num_of_thread`, or if the `data_dir` or `export_dir` does not exist or is not a directory.
-    /// It also returns an error if the `export_dir` is not writable. If the `new` is the same as
-    /// the current config, it returns an error.
+    /// Returns an error if `new` is empty or if either `old` or `new` cannot be parsed as a
+    /// configuration. It also returns an error if `old` does not match the current configuration, if
+    /// `new` matches the current configuration, or if the `data_dir` in `new` does not name an existing
+    /// directory. A configuration update is also rejected when another update is already pending, or
+    /// when the service is stopping or restarting.
     async fn update_config(
         &self,
         ctx: &Context<'_>,
@@ -212,21 +211,27 @@ impl ConfigMutation {
             return Err("No changes".to_string().into());
         }
 
-        let reload_tx = ctx.data::<Sender<ConfigVisible>>()?;
-        let tx_clone = reload_tx.clone();
-
-        let new_config_clone = new_config.clone();
-        tokio::spawn(async move {
-            // Used to complete the response of a GraphQL Mutation.
-            tokio::time::sleep(Duration::from_millis(GRAPHQL_REBOOT_DELAY)).await;
-            tx_clone.send(new_config_clone).await.map_err(|e| {
-                error!("Failed to send config: {e:?}");
-                "Failed to send config".to_string()
-            })
-        });
-        info!("New config applied");
-
-        crate::graphql::ready(Ok(new_config)).await
+        let config_update_tx = ctx.data::<Sender<ConfigVisible>>()?;
+        match config_update_tx.try_send(new_config.clone()) {
+            Ok(()) => {
+                info!("Configuration update request accepted");
+                crate::graphql::ready(Ok(new_config)).await
+            }
+            Err(TrySendError::Full(_)) => {
+                warn!("Configuration update rejected: another update is pending");
+                Err(
+                    "Another configuration update is already pending; try again later"
+                        .to_string()
+                        .into(),
+                )
+            }
+            Err(TrySendError::Closed(_)) => {
+                warn!("Configuration update rejected: service is stopping or restarting");
+                Err("Configuration updates are unavailable while the service is stopping or restarting"
+                    .to_string()
+                    .into())
+            }
+        }
     }
 
     async fn stop(&self, ctx: &Context<'_>) -> Result<bool> {
@@ -332,15 +337,71 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, path::Path, str::FromStr};
+    use std::{
+        io::Write,
+        net::SocketAddr,
+        path::Path,
+        str::FromStr,
+        sync::{Arc, Mutex},
+    };
 
     use toml_edit::DocumentMut;
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::{
         insert_toml_peers, parent_directory, parse_toml_element_to_string, read_toml_file,
         write_toml_file,
     };
     use crate::{comm::peer::PeerIdentity, graphql::tests::TestSchema};
+
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock").write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CaptureWriter {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            Self(Arc::clone(&self.0))
+        }
+    }
+
+    fn capture_logs() -> (Arc<Mutex<Vec<u8>>>, DefaultGuard) {
+        crate::cancellation::hold_callsite_interest_open();
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(CaptureWriter(Arc::clone(&logs)))
+            .finish();
+        (logs, tracing::subscriber::set_default(subscriber))
+    }
+
+    fn captured(logs: &Arc<Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(logs.lock().expect("lock").clone()).expect("utf8 log output")
+    }
+
+    fn assert_update_rejected_logs(output: &str, rejection: &str) {
+        assert!(
+            output.contains(rejection),
+            "missing rejection log: {output}"
+        );
+        assert!(
+            !output.contains("Configuration update request accepted")
+                && !output.contains("Configuration update applied"),
+            "a rejected update must not be logged as accepted or applied: {output}"
+        );
+    }
 
     #[tokio::test]
     async fn test_ping() {
@@ -424,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_config() {
-        let schema = TestSchema::new();
+        let mut schema = TestSchema::new();
 
         // config
         let query = r"
@@ -453,20 +514,8 @@ mod tests {
         );
 
         let old_config = old_config();
-        let new_config = toml::toml!(
-            ingest_srv_addr = "0.0.0.0:48370"
-            publish_srv_addr = "0.0.0.0:48371"
-            graphql_srv_addr = "127.0.0.1:8443"
-            data_dir = "tests"
-            retention = "100d"
-            export_dir = "tests"
-            ack_transmission = 1024
-            max_open_files = 8000
-            max_mb_of_level_base = 512
-            num_of_thread = 10
-            max_subcompactions = 2
-        )
-        .to_string();
+        let new_config = changed_config();
+        let expected_config: crate::settings::ConfigVisible = toml::from_str(&new_config).unwrap();
 
         // set_config
         let query = format!(
@@ -493,6 +542,69 @@ mod tests {
         assert_eq!(
             res.data.to_string(),
             "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubcompactions: \"2\"}}"
+        );
+        assert_eq!(
+            schema.config_update_rx.recv().await,
+            Some(expected_config.clone()),
+            "a successful response must correspond to the same admitted configuration"
+        );
+
+        let res = schema.execute(&query).await;
+        assert!(
+            res.errors.is_empty(),
+            "processing the pending update should allow a subsequent update: {:?}",
+            res.errors
+        );
+        assert_eq!(schema.config_update_rx.recv().await, Some(expected_config));
+    }
+
+    #[tokio::test]
+    async fn test_update_config_reports_pending_update() {
+        let (logs, _guard) = capture_logs();
+        let mut schema = TestSchema::new();
+        let queued: crate::settings::ConfigVisible = toml::from_str(&old_config()).unwrap();
+        schema
+            .config_update_tx
+            .try_send(queued.clone())
+            .expect("the empty capacity-one queue should accept its first item");
+
+        let query = update_config_query(&old_config(), &changed_config());
+        let res = schema.execute(&query).await;
+
+        assert_eq!(
+            res.errors.first().map(|error| error.message.as_str()),
+            Some("Another configuration update is already pending; try again later")
+        );
+        assert_eq!(
+            schema.config_update_rx.try_recv(),
+            Ok(queued),
+            "a rejected update must not replace the update already pending"
+        );
+        assert_update_rejected_logs(
+            &captured(&logs),
+            "Configuration update rejected: another update is pending",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_config_reports_unavailable_service() {
+        let (logs, _guard) = capture_logs();
+        let mut schema = TestSchema::new();
+        schema.config_update_rx.close();
+
+        let query = update_config_query(&old_config(), &changed_config());
+        let res = schema.execute(&query).await;
+
+        assert_eq!(
+            res.errors.first().map(|error| error.message.as_str()),
+            Some(
+                "Configuration updates are unavailable while the service is stopping or restarting"
+            )
+        );
+        assert!(schema.config_update_rx.try_recv().is_err());
+        assert_update_rejected_logs(
+            &captured(&logs),
+            "Configuration update rejected: service is stopping or restarting",
         );
     }
 
@@ -724,5 +836,34 @@ mod tests {
             max_subcompactions = 2
         )
         .to_string()
+    }
+
+    fn changed_config() -> String {
+        toml::toml!(
+            ingest_srv_addr = "0.0.0.0:48370"
+            publish_srv_addr = "0.0.0.0:48371"
+            graphql_srv_addr = "127.0.0.1:8443"
+            data_dir = "tests"
+            retention = "100d"
+            export_dir = "tests"
+            ack_transmission = 1024
+            max_open_files = 8000
+            max_mb_of_level_base = 512
+            num_of_thread = 10
+            max_subcompactions = 2
+        )
+        .to_string()
+    }
+
+    fn update_config_query(old: &str, new: &str) -> String {
+        format!(
+            r"
+            mutation {{
+                updateConfig(old: {old:?} new: {new:?}) {{
+                    ingestSrvAddr
+                }}
+            }}
+            "
+        )
     }
 }

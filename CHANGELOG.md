@@ -68,6 +68,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed `updateConfig` reporting success before the service accepted the
+  configuration update for processing. It now returns an error when another
+  update is pending or the service is stopping or restarting.
 - Fixed realtime Time Series Generator streams being sent with a
   semi-supervised frame when the generator id or request sensor name
   contained the substring `SemiSupervised`.
