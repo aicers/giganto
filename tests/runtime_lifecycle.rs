@@ -58,7 +58,8 @@ use tokio::time::{Instant, sleep};
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 /// Upper bound on a signalled child exiting.
 const EXIT_TIMEOUT: Duration = Duration::from_secs(120);
-/// Upper bound on the ingest handshake and the acknowledgement that follows.
+/// Upper bound on the whole ingest exchange: the connection, the handshake,
+/// the stream the record is written on, and the acknowledgement that follows.
 const INGEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Upper bound on GraphQL answering with the record the first process stored.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -695,60 +696,88 @@ struct IngestClient {
 ///
 /// `ack_transmission` is 1 in the configuration, so this single record is a
 /// whole batch and the reply needs no second synchronization point.
+///
+/// One bound covers the whole exchange rather than one bound per step.
+/// Opening the stream and writing to it can park as readily as connecting and
+/// waiting for the acknowledgement can — a peer that stops granting stream
+/// credit never fails, it simply never returns — and a hang anywhere in here
+/// is a hang inside the test body, where the `Node` guard that reaps children
+/// never runs. Whatever ends the exchange, the failure carries the child's log
+/// with it: once the panic unwinds, the temp directory holding that log is
+/// gone.
 async fn ingest_marker(
+    node: &Node,
     addr: SocketAddr,
     pki: &TestPki,
     marker: &[u8],
     timestamp: i64,
 ) -> IngestClient {
+    let exchange = ingest_exchange(addr, pki, marker, timestamp);
+    let Ok(outcome) = tokio::time::timeout(INGEST_TIMEOUT, exchange).await else {
+        panic!(
+            "{}: the marker exchange with {addr} did not finish within {INGEST_TIMEOUT:?}\n{}",
+            node.label,
+            node.diagnostics(),
+        );
+    };
+    outcome.unwrap_or_else(|reason| panic!("{}: {reason}\n{}", node.label, node.diagnostics()))
+}
+
+/// Connects, handshakes, sends one record, and waits for its acknowledgement.
+///
+/// Every failure comes back as a string because the caller is what holds the
+/// child, and so is what can say which node did not answer and what it logged.
+async fn ingest_exchange(
+    addr: SocketAddr,
+    pki: &TestPki,
+    marker: &[u8],
+    timestamp: i64,
+) -> Result<IngestClient, String> {
     // Bound on IPv4 because the listener is: quinn will not send from a v6
     // socket to a v4 peer.
     let mut endpoint = quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
-        .expect("create the sensor endpoint");
+        .map_err(|e| format!("the sensor endpoint could not be created: {e}"))?;
     endpoint.set_default_client_config(sensor_client_config(pki));
 
-    let connection = tokio::time::timeout(
-        INGEST_TIMEOUT,
-        endpoint
-            .connect(addr, NODE_SAN)
-            .expect("the sensor client configuration should build"),
-    )
-    .await
-    .expect("the sensor should reach the ingest listener within the bound")
-    .expect("the sensor should reach the ingest listener");
-    tokio::time::timeout(
-        INGEST_TIMEOUT,
-        client_handshake(&connection, env!("CARGO_PKG_VERSION")),
-    )
-    .await
-    .expect("the version handshake should finish within the bound")
-    .expect("the version handshake should succeed");
+    let connection = endpoint
+        .connect(addr, NODE_SAN)
+        .map_err(|e| format!("the connection to {addr} could not be started: {e}"))?
+        .await
+        .map_err(|e| format!("the sensor could not reach the ingest listener at {addr}: {e}"))?;
+    client_handshake(&connection, env!("CARGO_PKG_VERSION"))
+        .await
+        .map_err(|e| format!("the version handshake failed: {e}"))?;
 
-    let (mut send, mut recv) = connection.open_bi().await.expect("open the sensor stream");
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .map_err(|e| format!("the sensor stream could not be opened: {e}"))?;
     send_record_header(&mut send, RawEventKind::Log)
         .await
-        .expect("send the record header");
+        .map_err(|e| format!("the record header could not be sent: {e}"))?;
     let event = Log {
         kind: LOG_KIND.to_string(),
         log: marker.to_vec(),
     };
     let body = bincode::serialize(&event).expect("serialize the log body");
     let batch = bincode::serialize(&vec![(timestamp, body)]).expect("serialize the log batch");
-    send_raw(&mut send, &batch).await.expect("send the marker");
-
-    let acked = tokio::time::timeout(INGEST_TIMEOUT, receive_ack_timestamp(&mut recv))
+    send_raw(&mut send, &batch)
         .await
-        .expect("the marker should be acknowledged within the bound")
-        .expect("the acknowledgement should decode");
-    assert_eq!(
-        acked, timestamp,
-        "the acknowledgement should name the marker"
-    );
+        .map_err(|e| format!("the marker could not be sent: {e}"))?;
 
-    IngestClient {
+    let acked = receive_ack_timestamp(&mut recv)
+        .await
+        .map_err(|e| format!("the acknowledgement could not be read: {e}"))?;
+    if acked != timestamp {
+        return Err(format!(
+            "the acknowledgement named {acked} rather than the marker's {timestamp}"
+        ));
+    }
+
+    Ok(IngestClient {
         _endpoint: endpoint,
         _connection: connection,
-    }
+    })
 }
 
 /// The mTLS GraphQL client, built the way the node builds its own.
@@ -941,7 +970,7 @@ async fn process_sigterm_sigint_shutdown_and_restart() {
         let ingest_addr = addr_after(&first, "Ingest listening on");
         let publish_addr = addr_after(&first, "Publish listening on");
 
-        let sensor = ingest_marker(ingest_addr, &pki, marker.as_bytes(), timestamp).await;
+        let sensor = ingest_marker(&first, ingest_addr, &pki, marker.as_bytes(), timestamp).await;
 
         first.signal(libc::SIGTERM);
         let status = first.wait_for_exit().await;
