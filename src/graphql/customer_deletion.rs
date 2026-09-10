@@ -78,7 +78,7 @@ pub enum CustomerDataDeletionRequestStatus {
     AlreadyCompleted,
     /// Wait for the existing job: this customer's previously accepted deletion is still running.
     DeletionInProgress,
-    /// Retry later: another customer's deletion blocks this request, which was not accepted.
+    /// Retry later: another customer's deletion or startup recovery blocks this request, which was not accepted.
     BlockedByAnotherDeletion,
     /// Retry later: retention cleanup blocks this request, which was not accepted.
     BlockedByRetention,
@@ -151,7 +151,7 @@ impl OutputType for CustomerDataDeletionRequestStatus {
                 ),
                 (
                     "BLOCKED_BY_ANOTHER_DELETION",
-                    "Retry later: another customer's deletion blocks this request, which was not accepted.",
+                    "Retry later: another customer's deletion or startup recovery blocks this request, which was not accepted.",
                 ),
                 (
                     "BLOCKED_BY_RETENTION",
