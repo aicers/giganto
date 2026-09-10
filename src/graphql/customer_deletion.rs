@@ -2,7 +2,8 @@ use std::{borrow::Cow, collections::HashSet, future, sync::Arc};
 
 use anyhow::{Context as AnyhowContext, Result as AnyhowResult, anyhow};
 use async_graphql::{
-    Context, ContextSelectionSet, Object, OutputType, Positioned, Result, ServerResult, Value,
+    Context, ContextSelectionSet, Object, OutputType, Positioned, Result, ServerResult,
+    SimpleObject, Value,
     indexmap::IndexMap,
     parser::types::Field,
     registry::{Deprecation, MetaEnumValue, MetaType, MetaTypeId, Registry},
@@ -197,6 +198,121 @@ impl OutputType for CustomerDataDeletionRequestStatus {
         _: &Positioned<Field>,
     ) -> impl Future<Output = ServerResult<Value>> + Send {
         future::ready(Ok(async_graphql::resolver_utils::enum_value(*self)))
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CustomerDataDeletionStatusOutput {
+    InProgress,
+    Succeeded,
+    Failed,
+}
+
+impl EnumType for CustomerDataDeletionStatusOutput {
+    fn items() -> &'static [EnumItem<Self>] {
+        &[
+            EnumItem {
+                name: "IN_PROGRESS",
+                value: Self::InProgress,
+            },
+            EnumItem {
+                name: "SUCCEEDED",
+                value: Self::Succeeded,
+            },
+            EnumItem {
+                name: "FAILED",
+                value: Self::Failed,
+            },
+        ]
+    }
+}
+
+impl OutputType for CustomerDataDeletionStatusOutput {
+    fn type_name() -> Cow<'static, str> {
+        Cow::Borrowed("CustomerDataDeletionStatusOutput")
+    }
+
+    fn create_type_info(registry: &mut Registry) -> String {
+        registry.create_output_type::<Self, _>(MetaTypeId::Enum, |_| MetaType::Enum {
+            name: Self::type_name().into_owned(),
+            description: Some("The persisted state of a customer data deletion job.".to_string()),
+            enum_values: ["IN_PROGRESS", "SUCCEEDED", "FAILED"]
+                .into_iter()
+                .map(|name| {
+                    (
+                        name.to_owned(),
+                        MetaEnumValue {
+                            name: name.to_owned(),
+                            description: None,
+                            deprecation: Deprecation::NoDeprecated,
+                            visible: None,
+                            inaccessible: false,
+                            tags: Vec::new(),
+                            directive_invocations: Vec::new(),
+                        },
+                    )
+                })
+                .collect::<IndexMap<_, _>>(),
+            visible: None,
+            inaccessible: false,
+            tags: Vec::new(),
+            rust_typename: Some(std::any::type_name::<Self>()),
+            directive_invocations: Vec::new(),
+            requires_scopes: Vec::new(),
+        })
+    }
+
+    fn resolve(
+        &self,
+        _: &ContextSelectionSet<'_>,
+        _: &Positioned<Field>,
+    ) -> impl Future<Output = ServerResult<Value>> + Send {
+        future::ready(Ok(async_graphql::resolver_utils::enum_value(*self)))
+    }
+}
+
+#[derive(SimpleObject)]
+pub struct CustomerDataDeletionResult {
+    customer_id: StringNumberU32,
+    requested_at: DateTime,
+    service_fqdn_list: Vec<String>,
+    status: CustomerDataDeletionStatusOutput,
+    completed_at: Option<DateTime>,
+    error: Option<String>,
+}
+
+#[derive(Default)]
+pub(super) struct CustomerDeletionQuery;
+
+#[Object]
+impl CustomerDeletionQuery {
+    /// Returns the persisted customer data deletion job for the requested customer.
+    async fn customer_data_deletion_result(
+        &self,
+        ctx: &Context<'_>,
+        customer_id: StringNumberU32,
+    ) -> Result<Option<CustomerDataDeletionResult>> {
+        let db = ctx.data::<Database>()?.clone();
+        let store = db.customer_deletion_job_store()?;
+        let customer_id_bytes = customer_id.0.to_be_bytes();
+        let Some(job) = crate::graphql::ready(store.get(customer_id.0)).await? else {
+            return Ok(None);
+        };
+
+        let status = match job.status {
+            CustomerDataDeletionStatus::InProgress => CustomerDataDeletionStatusOutput::InProgress,
+            CustomerDataDeletionStatus::Succeeded => CustomerDataDeletionStatusOutput::Succeeded,
+            CustomerDataDeletionStatus::Failed => CustomerDataDeletionStatusOutput::Failed,
+        };
+
+        Ok(Some(CustomerDataDeletionResult {
+            customer_id: StringNumberU32(u32::from_be_bytes(customer_id_bytes)),
+            requested_at: DateTime::from_timestamp_nanos(job.requested_at),
+            service_fqdn_list: job.service_fqdn_list,
+            status,
+            completed_at: job.completed_at.map(DateTime::from_timestamp_nanos),
+            error: job.error,
+        }))
     }
 }
 
@@ -858,6 +974,28 @@ mod tests {
         )
     }
 
+    async fn customer_data_deletion_result(
+        schema: &TestSchema,
+        customer_id: u32,
+    ) -> serde_json::Value {
+        let response = schema
+            .execute(&format!(
+                r#"query {{
+                    customerDataDeletionResult(customerId: "{customer_id}") {{
+                        customerId
+                        requestedAt
+                        serviceFqdnList
+                        status
+                        completedAt
+                        error
+                    }}
+                }}"#
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        response.data.into_json().unwrap()["customerDataDeletionResult"].clone()
+    }
+
     fn job_status(db: &Database, customer_id: u32) -> Option<CustomerDataDeletionStatus> {
         db.customer_deletion_job_store()
             .unwrap()
@@ -995,6 +1133,166 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn query_returns_exact_job_and_null_for_missing_customer() {
+        const CUSTOMER_ID: u32 = 4_000_000_042;
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        let requested_at = 1_709_528_767_123_456_789;
+        let job = CustomerDataDeletion {
+            service_fqdn_list: vec![
+                "piglet.node1.example.test".to_string(),
+                "reproduce.node2.example.test".to_string(),
+            ],
+            requested_at,
+            status: CustomerDataDeletionStatus::InProgress,
+            completed_at: None,
+            error: None,
+        };
+        schema
+            .db
+            .customer_deletion_job_store()
+            .unwrap()
+            .create(CUSTOMER_ID, &job)
+            .unwrap();
+
+        assert_eq!(
+            customer_data_deletion_result(&schema, CUSTOMER_ID).await,
+            serde_json::json!({
+                "customerId": CUSTOMER_ID.to_string(),
+                "requestedAt": DateTime::from_timestamp_nanos(requested_at),
+                "serviceFqdnList": [
+                    "piglet.node1.example.test",
+                    "reproduce.node2.example.test"
+                ],
+                "status": "IN_PROGRESS",
+                "completedAt": null,
+                "error": null,
+            })
+        );
+        assert_eq!(
+            customer_data_deletion_result(&schema, CUSTOMER_ID - 1).await,
+            serde_json::Value::Null
+        );
+    }
+
+    #[tokio::test]
+    async fn query_isolates_jobs_by_customer_id() {
+        const STORED_CUSTOMER_ID: u32 = 0x0102_0304;
+        const OTHER_CUSTOMER_ID: u32 = 0x0403_0201;
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        schema
+            .db
+            .customer_deletion_job_store()
+            .unwrap()
+            .create(
+                STORED_CUSTOMER_ID,
+                &CustomerDataDeletion {
+                    service_fqdn_list: vec!["piglet.node1.example.test".to_string()],
+                    requested_at: 1,
+                    status: CustomerDataDeletionStatus::Succeeded,
+                    completed_at: Some(2),
+                    error: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            customer_data_deletion_result(&schema, OTHER_CUSTOMER_ID).await,
+            serde_json::Value::Null
+        );
+    }
+
+    #[tokio::test]
+    async fn query_restores_each_persisted_state_and_failure_details() {
+        const IN_PROGRESS: u32 = 501;
+        const SUCCEEDED: u32 = 502;
+        const FAILED: u32 = 503;
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        let in_progress = CustomerDataDeletion {
+            service_fqdn_list: vec!["piglet.in-progress.example.test".to_string()],
+            requested_at: 1_700_000_000_000_000_001,
+            status: CustomerDataDeletionStatus::InProgress,
+            completed_at: None,
+            error: None,
+        };
+        let succeeded = CustomerDataDeletion {
+            service_fqdn_list: vec!["reproduce.succeeded.example.test".to_string()],
+            requested_at: 1_700_000_000_000_000_002,
+            status: CustomerDataDeletionStatus::Succeeded,
+            completed_at: Some(1_700_000_001_000_000_002),
+            error: None,
+        };
+        let failed = CustomerDataDeletion {
+            service_fqdn_list: vec![
+                "piglet.failed.example.test".to_string(),
+                "reproduce.failed.example.test".to_string(),
+            ],
+            requested_at: 1_700_000_000_000_000_003,
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(1_700_000_001_000_000_003),
+            error: Some("persisted deletion failure".to_string()),
+        };
+        let store = schema.db.customer_deletion_job_store().unwrap();
+        store.create(IN_PROGRESS, &in_progress).unwrap();
+        store
+            .create(
+                SUCCEEDED,
+                &CustomerDataDeletion {
+                    status: CustomerDataDeletionStatus::InProgress,
+                    completed_at: None,
+                    ..succeeded.clone()
+                },
+            )
+            .unwrap();
+        store.update(SUCCEEDED, &succeeded).unwrap();
+        store
+            .create(
+                FAILED,
+                &CustomerDataDeletion {
+                    status: CustomerDataDeletionStatus::InProgress,
+                    completed_at: None,
+                    error: None,
+                    ..failed.clone()
+                },
+            )
+            .unwrap();
+        store.update(FAILED, &failed).unwrap();
+
+        assert_eq!(
+            customer_data_deletion_result(&schema, IN_PROGRESS).await,
+            serde_json::json!({
+                "customerId": IN_PROGRESS.to_string(),
+                "requestedAt": DateTime::from_timestamp_nanos(in_progress.requested_at),
+                "serviceFqdnList": in_progress.service_fqdn_list,
+                "status": "IN_PROGRESS",
+                "completedAt": null,
+                "error": null,
+            })
+        );
+        assert_eq!(
+            customer_data_deletion_result(&schema, SUCCEEDED).await,
+            serde_json::json!({
+                "customerId": SUCCEEDED.to_string(),
+                "requestedAt": DateTime::from_timestamp_nanos(succeeded.requested_at),
+                "serviceFqdnList": succeeded.service_fqdn_list,
+                "status": "SUCCEEDED",
+                "completedAt": succeeded.completed_at.map(DateTime::from_timestamp_nanos),
+                "error": null,
+            })
+        );
+        assert_eq!(
+            customer_data_deletion_result(&schema, FAILED).await,
+            serde_json::json!({
+                "customerId": FAILED.to_string(),
+                "requestedAt": DateTime::from_timestamp_nanos(failed.requested_at),
+                "serviceFqdnList": failed.service_fqdn_list,
+                "status": "FAILED",
+                "completedAt": failed.completed_at.map(DateTime::from_timestamp_nanos),
+                "error": failed.error,
+            })
+        );
     }
 
     #[tokio::test]
