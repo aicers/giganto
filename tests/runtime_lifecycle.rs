@@ -62,6 +62,11 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(120);
 const INGEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Upper bound on GraphQL answering with the record the first process stored.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
+/// Upper bound on one GraphQL request, from the handshake through the last
+/// byte of the answer. A node that accepts the connection and then stalls
+/// would otherwise hang the test with no bound of its own, because the retry
+/// loop only gets to look at its deadline between attempts.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound on the failure path's wait for a child to take its `SIGTERM`
 /// before it is escalated to `SIGKILL`.
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -760,22 +765,34 @@ fn graphql_client(pki: &TestPki) -> reqwest::Client {
         .expect("build the GraphQL client")
 }
 
-/// Posts one GraphQL query, reporting either the answer or why there was
-/// none.
+/// Posts one GraphQL query under `budget`, reporting either the answer or why
+/// there was none.
 ///
-/// The two failure modes are folded into one string because the caller only
-/// retries and, on the way out, reports what it last saw.
-async fn post_query(client: &reqwest::Client, url: &str, query: &str) -> Result<String, String> {
-    let response = client
-        .post(url)
-        .json(&serde_json::json!({ "query": query }))
-        .send()
+/// The bound covers the whole exchange, body read included, so a peer that
+/// completes the handshake and then says nothing is a failed attempt rather
+/// than a hang. The failure modes are folded into one string because the
+/// caller only retries and, on the way out, reports what it last saw.
+async fn post_query(
+    client: &reqwest::Client,
+    url: &str,
+    query: &str,
+    budget: Duration,
+) -> Result<String, String> {
+    let exchange = async {
+        let response = client
+            .post(url)
+            .json(&serde_json::json!({ "query": query }))
+            .send()
+            .await
+            .map_err(|e| format!("the request failed: {e}"))?;
+        response
+            .text()
+            .await
+            .map_err(|e| format!("the response body could not be read: {e}"))
+    };
+    tokio::time::timeout(budget, exchange)
         .await
-        .map_err(|e| format!("the request failed: {e}"))?;
-    response
-        .text()
-        .await
-        .map_err(|e| format!("the response body could not be read: {e}"))
+        .map_err(|_| format!("the request did not answer within {budget:?}"))?
 }
 
 /// The query that asks one sensor for the marker kind.
@@ -830,7 +847,8 @@ async fn assert_marker_is_queryable(
     let deadline = Instant::now() + QUERY_TIMEOUT;
     let mut last;
     let body = loop {
-        last = match post_query(client, &url, &query).await {
+        let budget = REQUEST_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
+        last = match post_query(client, &url, &query, budget).await {
             Ok(body) if body.contains(&encoded) => break body,
             Ok(body) => body,
             Err(reason) => reason,
@@ -852,7 +870,7 @@ async fn assert_marker_is_queryable(
     );
 
     let control = node_identity();
-    let body = post_query(client, &url, &marker_query(control))
+    let body = post_query(client, &url, &marker_query(control), REQUEST_TIMEOUT)
         .await
         .unwrap_or_else(|reason| {
             panic!(
