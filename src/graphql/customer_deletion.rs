@@ -78,7 +78,7 @@ pub enum CustomerDataDeletionRequestStatus {
     AlreadyCompleted,
     /// Wait for the existing job: this customer's previously accepted deletion is still running.
     DeletionInProgress,
-    /// Retry later: another customer's deletion blocks this request, which was not accepted.
+    /// Retry later: another customer's deletion or startup recovery blocks this request, which was not accepted.
     BlockedByAnotherDeletion,
     /// Retry later: retention cleanup blocks this request, which was not accepted.
     BlockedByRetention,
@@ -151,7 +151,7 @@ impl OutputType for CustomerDataDeletionRequestStatus {
                 ),
                 (
                     "BLOCKED_BY_ANOTHER_DELETION",
-                    "Retry later: another customer's deletion blocks this request, which was not accepted.",
+                    "Retry later: another customer's deletion or startup recovery blocks this request, which was not accepted.",
                 ),
                 (
                     "BLOCKED_BY_RETENTION",
@@ -290,10 +290,11 @@ impl CustomerDeletionMutation {
         let previous_job = store.get(customer_id.0)?;
         let local_targets = if let Some(job) = &previous_job {
             match job.status {
-                // Not the coordinator's answer but the store's: a job left
-                // `InProgress` by a generation that ended mid-deletion outlives
-                // the claim that was taken for it. Recovering from that is
-                // #1725; until then it is reported as still running.
+                // This is the persisted job's answer rather than the
+                // coordinator's: an `InProgress` job can outlive the
+                // generation-local claim that originally started it. Startup
+                // recovery resumes such a job, and normal requests report it
+                // as running until it reaches a terminal state.
                 CustomerDataDeletionStatus::InProgress => {
                     return Ok(CustomerDataDeletionRequestStatus::DeletionInProgress);
                 }
@@ -383,12 +384,12 @@ async fn local_targets(provided: &[String], ingest_sensors: &IngestSensors) -> V
 /// is raised as an error instead, and logged where it happens.
 ///
 /// `undo` puts the job store back the way the request found it, and only a
-/// request that leaves it that way is a refusal. When the undo fails the job
-/// just written stays `InProgress` with no worker registered to finish it —
-/// the very thing the refusal exists to prevent, and, until #1725 recovers
-/// such a job at startup, the answer to every later request for this customer.
-/// That is a failure of the mutation, not a refusal the caller could act on,
-/// so it is raised as an error.
+/// request that leaves it that way is a refusal. When the undo fails, the job
+/// just written remains `InProgress` with no worker registered in the current
+/// generation. Startup recovery retries that persisted job in the next
+/// generation; until then, later requests report it as still in progress. That
+/// is a failure of the mutation, not a refusal the caller could act on, so it is
+/// raised as an error.
 ///
 /// # Errors
 ///
@@ -550,10 +551,73 @@ fn start_customer_deletion_worker(
     stream_direct_channels: StreamDirectChannels,
     peer_notify: Option<Arc<Notify>>,
 ) -> Result<(), SpawnError> {
-    let _handle = tracker.spawn("customer-deletion", move |_cancel| async move {
+    register_customer_deletion_worker(
+        tracker,
+        deletion_guard,
+        db,
+        customer_id,
+        service_fqdn_list,
+        ingest_sensors,
+        runtime_ingest_sensors,
+        pcap_sensors,
+        stream_direct_channels,
+        peer_notify,
+    )
+    .map(drop)
+}
+
+/// Restarts a deletion from its already-persisted job without rewriting it.
+///
+/// Recovery uses the stored targets and does not relay the deletion request to
+/// peers. After successful local cleanup, the optional notifier propagates the
+/// updated local sensor list. The returned tracked handle lets the recovery
+/// loop await this customer's terminal outcome before starting the next
+/// recovered customer under the batch's exclusive claim.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn start_customer_deletion_worker_from_stored_job(
+    tracker: &TaskTracker,
+    deletion_guard: DeletionGuard,
+    db: Database,
+    customer_id: u32,
+    job: CustomerDataDeletion,
+    ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    pcap_sensors: PcapSensors,
+    stream_direct_channels: StreamDirectChannels,
+    peer_notify: Option<Arc<Notify>>,
+) -> Result<tokio::task::JoinHandle<DeletionOutcome>, SpawnError> {
+    register_customer_deletion_worker(
+        tracker,
+        deletion_guard,
+        db,
+        customer_id,
+        job.service_fqdn_list,
+        ingest_sensors,
+        runtime_ingest_sensors,
+        pcap_sensors,
+        stream_direct_channels,
+        peer_notify,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn register_customer_deletion_worker(
+    tracker: &TaskTracker,
+    deletion_guard: DeletionGuard,
+    db: Database,
+    customer_id: u32,
+    service_fqdn_list: Vec<String>,
+    ingest_sensors: IngestSensors,
+    runtime_ingest_sensors: RunTimeIngestSensors,
+    pcap_sensors: PcapSensors,
+    stream_direct_channels: StreamDirectChannels,
+    peer_notify: Option<Arc<Notify>>,
+) -> Result<tokio::task::JoinHandle<DeletionOutcome>, SpawnError> {
+    tracker.spawn("customer-deletion", move |_cancel| async move {
         // Held for the whole deletion and dropped with this future, so every
         // way it can end — success, failure, a panic in the supervisor, or a
-        // registration that was refused — releases the store.
+        // registration that was refused — releases this customer's claim.
+        // A recovery guard keeps the batch exclusive between customers.
         let _deletion_guard = deletion_guard;
         let worker = tokio::task::spawn_blocking({
             let db = db.clone();
@@ -572,9 +636,8 @@ fn start_customer_deletion_worker(
             stream_direct_channels,
             peer_notify,
         )
-        .await;
-    })?;
-    Ok(())
+        .await
+    })
 }
 
 async fn cleanup_runtime_for_targets(
@@ -631,9 +694,24 @@ async fn cleanup_runtime_for_targets(
 }
 
 #[derive(Debug)]
-enum DeletionOutcome {
+pub(crate) enum DeletionOutcome {
+    StatusPersisted(WorkerOutcome),
+    StatusPersistenceFailed(WorkerOutcome),
+}
+
+#[derive(Debug)]
+pub(crate) enum WorkerOutcome {
     Succeeded,
     Failed(String),
+}
+
+impl WorkerOutcome {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed(_) => "failed",
+        }
+    }
 }
 
 const TERMINAL_STATUS_UPDATE_ATTEMPTS: usize = 2;
@@ -658,7 +736,7 @@ async fn supervise_worker(
     pcap_sensors: PcapSensors,
     stream_direct_channels: StreamDirectChannels,
     peer_notify: Option<Arc<Notify>>,
-) {
+) -> DeletionOutcome {
     let outcome = match worker.await {
         Ok(Ok(())) => {
             info!(customer_id, "Customer database deletion succeeded");
@@ -672,27 +750,27 @@ async fn supervise_worker(
             )
             .await;
             info!(customer_id, "Customer data deletion succeeded");
-            DeletionOutcome::Succeeded
+            WorkerOutcome::Succeeded
         }
         Ok(Err(err)) => {
             let message = format!("{err:#}");
             error!(customer_id, "Customer data deletion failed: {message}");
-            DeletionOutcome::Failed(message)
+            WorkerOutcome::Failed(message)
         }
         Err(join_error) => {
             let message = format!("Customer data deletion task join failure: {join_error}");
             error!(customer_id, "{message}");
-            DeletionOutcome::Failed(message)
+            WorkerOutcome::Failed(message)
         }
     };
 
     for attempt in 1..=TERMINAL_STATUS_UPDATE_ATTEMPTS {
         let update = match &outcome {
-            DeletionOutcome::Succeeded => mark_job_succeeded(&db, customer_id),
-            DeletionOutcome::Failed(message) => mark_job_failed(&db, customer_id, message.clone()),
+            WorkerOutcome::Succeeded => mark_job_succeeded(&db, customer_id),
+            WorkerOutcome::Failed(message) => mark_job_failed(&db, customer_id, message.clone()),
         };
         match update {
-            Ok(()) => return,
+            Ok(()) => return DeletionOutcome::StatusPersisted(outcome),
             Err(err) => error!(
                 customer_id,
                 attempt,
@@ -701,6 +779,8 @@ async fn supervise_worker(
             ),
         }
     }
+
+    DeletionOutcome::StatusPersistenceFailed(outcome)
 }
 
 fn mark_job_succeeded(db: &Database, customer_id: u32) -> AnyhowResult<()> {
@@ -743,10 +823,11 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::{
-        CustomerDataDeletionRequestStatus, PIGLET_COLUMN_FAMILIES, REPRODUCE_COLUMN_FAMILIES,
-        cleanup_runtime_for_targets, delete_customer_data_from_db, delete_customer_data_with,
-        refuse_registration, restore_previous_job, start_customer_deletion_worker,
-        supervise_worker, validate_service_fqdn_list,
+        CustomerDataDeletionRequestStatus, DeletionOutcome, PIGLET_COLUMN_FAMILIES,
+        REPRODUCE_COLUMN_FAMILIES, WorkerOutcome, cleanup_runtime_for_targets,
+        delete_customer_data_from_db, delete_customer_data_with, refuse_registration,
+        restore_previous_job, start_customer_deletion_worker, supervise_worker,
+        validate_service_fqdn_list,
     };
     use crate::{
         cancellation::{SpawnError, TaskTracker},
@@ -808,7 +889,7 @@ mod tests {
         service_fqdn_list: Vec<String>,
         runtime_state: &RuntimeState,
         peer_notify: Option<Arc<Notify>>,
-    ) {
+    ) -> DeletionOutcome {
         supervise_worker(
             worker,
             db,
@@ -820,7 +901,7 @@ mod tests {
             runtime_state.3.clone(),
             peer_notify,
         )
-        .await;
+        .await
     }
 
     async fn seed_runtime_target(runtime_state: &RuntimeState, target: &str) -> StreamChannelKey {
@@ -1526,6 +1607,50 @@ mod tests {
         );
     }
 
+    /// The supervisor's returned outcome must distinguish a completed deletion
+    /// from a deletion whose terminal job status could not be made durable.
+    #[tokio::test]
+    async fn terminal_status_persistence_failure_is_returned_with_deletion_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let runtime_state = runtime_state(&db);
+
+        let succeeded = supervise_test_worker(
+            tokio::task::spawn_blocking(|| Ok(())),
+            db.clone(),
+            300,
+            Vec::new(),
+            &runtime_state,
+            None,
+        )
+        .await;
+        assert!(
+            matches!(
+                &succeeded,
+                DeletionOutcome::StatusPersistenceFailed(WorkerOutcome::Succeeded)
+            ),
+            "unexpected successful deletion outcome: {succeeded:?}"
+        );
+
+        let failed = supervise_test_worker(
+            tokio::task::spawn_blocking(|| anyhow::bail!("injected deletion failure")),
+            db,
+            301,
+            Vec::new(),
+            &runtime_state,
+            None,
+        )
+        .await;
+        assert!(
+            matches!(
+                &failed,
+                DeletionOutcome::StatusPersistenceFailed(WorkerOutcome::Failed(error))
+                    if error.as_str() == "injected deletion failure"
+            ),
+            "unexpected failed deletion outcome: {failed:?}"
+        );
+    }
+
     #[tokio::test]
     async fn supervisor_owns_terminal_job_updates() {
         let dir = tempfile::tempdir().unwrap();
@@ -1645,6 +1770,115 @@ mod tests {
         assert_eq!(
             wait_for_terminal_job(&schema.db, 202).await.status,
             CustomerDataDeletionStatus::Succeeded
+        );
+    }
+
+    /// The batch reservation must reject new GraphQL deletions even when no
+    /// recovered worker is active, while preserving the active customer's reply.
+    #[tokio::test]
+    async fn recovery_blocks_new_requests_until_the_whole_batch_finishes() {
+        const RECOVERING: u32 = 302;
+        const REQUESTING: u32 = 303;
+        let target = "piglet.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[target]);
+        let recovery = schema
+            .deletion_coordination
+            .begin_recovery()
+            .expect("claim recovery");
+
+        let query = delete_customer_data_mutation(&[target], REQUESTING);
+        let before_first_job = schema.execute(&query).await;
+        assert!(before_first_job.errors.is_empty());
+        assert_eq!(
+            before_first_job.data.to_string(),
+            "{deleteCustomerData: BLOCKED_BY_ANOTHER_DELETION}"
+        );
+
+        let worker = recovery.begin_deletion(RECOVERING).expect("first job");
+        let repeat = schema
+            .execute(&delete_customer_data_mutation(&[target], RECOVERING))
+            .await;
+        assert!(repeat.errors.is_empty());
+        assert_eq!(
+            repeat.data.to_string(),
+            "{deleteCustomerData: DELETION_IN_PROGRESS}"
+        );
+        drop(worker);
+
+        let between_jobs = schema.execute(&query).await;
+        assert!(between_jobs.errors.is_empty());
+        assert_eq!(
+            between_jobs.data.to_string(),
+            "{deleteCustomerData: BLOCKED_BY_ANOTHER_DELETION}"
+        );
+        assert_eq!(job_status(&schema.db, REQUESTING), None);
+        assert_eq!(job_status(&schema.db, RECOVERING), None);
+
+        let no_local_target = schema
+            .execute(&delete_customer_data_mutation(
+                &["piglet.absent.example.test"],
+                304,
+            ))
+            .await;
+        assert_eq!(
+            no_local_target.data.to_string(),
+            "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
+        );
+
+        drop(recovery);
+        let accepted = schema.execute(&query).await;
+        assert!(accepted.errors.is_empty());
+        assert_eq!(accepted.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        assert_eq!(
+            wait_for_terminal_job(&schema.db, REQUESTING).await.status,
+            CustomerDataDeletionStatus::Succeeded
+        );
+    }
+
+    /// A tracker closure after recovery acquired a customer must leave the
+    /// batch reserved until its outer guard is released, without doing deletion.
+    #[tokio::test]
+    async fn a_refused_recovery_worker_releases_only_its_customer_claim() {
+        let schema = TestSchema::new_with_ingest_sensors(&["piglet.node1.example.test"]);
+        let recovery = schema
+            .deletion_coordination
+            .begin_recovery()
+            .expect("claim recovery");
+        let worker = recovery.begin_deletion(305).expect("first job");
+        schema.top_level_tracker.close().expect("close tracker");
+
+        let refused = start_customer_deletion_worker(
+            &schema.top_level_tracker,
+            worker,
+            schema.db.clone(),
+            305,
+            vec!["piglet.node1.example.test".to_string()],
+            schema.ingest_sensors.clone(),
+            schema.runtime_ingest_sensors.clone(),
+            schema.pcap_sensors.clone(),
+            schema.stream_direct_channels.clone(),
+            None,
+        );
+        assert!(matches!(refused, Err(SpawnError::Closed)));
+        assert!(
+            schema
+                .ingest_sensors
+                .read()
+                .await
+                .contains("piglet.node1.example.test")
+        );
+        assert!(schema.deletion_coordination.begin_retention().is_none());
+        drop(
+            recovery
+                .begin_deletion(306)
+                .expect("customer slot released"),
+        );
+        drop(recovery);
+        drop(
+            schema
+                .deletion_coordination
+                .begin_retention()
+                .expect("batch released"),
         );
     }
 
@@ -2035,9 +2269,9 @@ mod tests {
     /// refusal, whichever refusal it followed.
     ///
     /// Nothing ran the job the request wrote and nothing has removed it, so
-    /// reporting `BLOCKED_BY_SHUTDOWN` would tell the caller to retry
-    /// elsewhere while leaving this node answering `DELETION_IN_PROGRESS` for
-    /// the customer until #1725 recovers the job at startup.
+    /// reporting `BLOCKED_BY_SHUTDOWN` would tell the caller to retry elsewhere
+    /// while this node continues answering `DELETION_IN_PROGRESS` until startup
+    /// recovery retries the persisted job in the next generation.
     #[test]
     fn an_undo_that_fails_is_an_error_not_a_refusal() {
         const CUSTOMER: u32 = 704;

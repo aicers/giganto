@@ -1,7 +1,7 @@
 #[cfg(feature = "cluster")]
 mod client;
 #[cfg(feature = "bootroot")]
-mod customer_deletion;
+pub(crate) mod customer_deletion;
 mod export;
 #[cfg(test)]
 pub(crate) use export::{ExportTestControl, register_export_test_control};

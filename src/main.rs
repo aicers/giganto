@@ -56,6 +56,14 @@ use crate::{
     tls_reload::{CertPaths, ReloadHandle, load_tls_material},
     web::WebController,
 };
+#[cfg(feature = "bootroot")]
+use crate::{
+    comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels},
+    graphql::customer_deletion::{
+        DeletionOutcome, WorkerOutcome, start_customer_deletion_worker_from_stored_job,
+    },
+    storage::{CustomerDataDeletionStatus, Database},
+};
 
 const ONE_DAY: Duration = Duration::from_hours(24);
 const WAIT_SHUTDOWN: u64 = 15;
@@ -540,6 +548,134 @@ struct GenerationOutcome {
     health: GenerationHealth,
 }
 
+/// Recovers persisted `InProgress` deletion jobs sequentially in a tracked
+/// startup task.
+///
+/// Recovery reserves the coordinator for the entire batch so new GraphQL
+/// deletions cannot claim it between recovered customers.
+///
+/// Other subsystems may start while recovery is running, but the retention
+/// entry task waits for recovery to finish. Shutdown does not cancel the
+/// currently running deletion and waits for the tracked recovery task before
+/// closing the database.
+///
+/// # Errors
+///
+/// Returns an error if the persisted jobs cannot be read.
+#[cfg(feature = "bootroot")]
+#[allow(clippy::too_many_arguments)]
+async fn recover_inprogress_deletions(
+    database: &Database,
+    top_level_tracker: &TaskTracker,
+    deletion_coordination: &Arc<CustomerDeletionCoordinator>,
+    ingest_sensors: &IngestSensors,
+    runtime_ingest_sensors: &RunTimeIngestSensors,
+    pcap_sensors: &PcapSensors,
+    stream_direct_channels: &StreamDirectChannels,
+    peer_notify: Option<Arc<Notify>>,
+) -> Result<()> {
+    let recovery_guard = match deletion_coordination.begin_recovery() {
+        Ok(guard) => guard,
+        Err(blocked) => {
+            warn!(
+                ?blocked,
+                "Deferring customer data deletion recovery because the store is already claimed"
+            );
+            return Ok(());
+        }
+    };
+    let mut jobs = database.customer_deletion_job_store()?.list_all()?;
+    jobs.retain(|(_, job)| job.status == CustomerDataDeletionStatus::InProgress);
+
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    info!(
+        job_count = jobs.len(),
+        "Recovering interrupted customer data deletions"
+    );
+
+    for (customer_id, job) in jobs {
+        if top_level_tracker.is_closed() {
+            info!(
+                customer_id,
+                "Stopping customer data deletion recovery because shutdown has started"
+            );
+            break;
+        }
+
+        let deletion_guard = match recovery_guard.begin_deletion(customer_id) {
+            Ok(guard) => guard,
+            Err(blocked) => {
+                warn!(
+                    customer_id,
+                    ?blocked,
+                    "Could not claim the next recovered customer data deletion"
+                );
+                break;
+            }
+        };
+
+        info!(
+            customer_id,
+            target_count = job.service_fqdn_list.len(),
+            requested_at = job.requested_at,
+            "Starting recovered customer data deletion"
+        );
+        let handle = match start_customer_deletion_worker_from_stored_job(
+            top_level_tracker,
+            deletion_guard,
+            database.clone(),
+            customer_id,
+            job,
+            ingest_sensors.clone(),
+            runtime_ingest_sensors.clone(),
+            pcap_sensors.clone(),
+            stream_direct_channels.clone(),
+            peer_notify.clone(),
+        ) {
+            Ok(handle) => handle,
+            Err(error) => {
+                warn!(
+                    customer_id,
+                    %error,
+                    "Could not register recovered customer data deletion"
+                );
+                break;
+            }
+        };
+
+        match handle.await {
+            Ok(DeletionOutcome::StatusPersisted(WorkerOutcome::Succeeded)) => info!(
+                customer_id,
+                outcome = "succeeded",
+                "Finished recovered customer data deletion"
+            ),
+            Ok(DeletionOutcome::StatusPersisted(WorkerOutcome::Failed(error))) => warn!(
+                customer_id,
+                outcome = "failed",
+                %error,
+                "Finished recovered customer data deletion"
+            ),
+            Ok(DeletionOutcome::StatusPersistenceFailed(worker_outcome)) => error!(
+                customer_id,
+                outcome = "status_persistence_failed",
+                deletion_outcome = worker_outcome.as_str(),
+                "Recovered customer data deletion did not reach a durable terminal status"
+            ),
+            Err(error) => {
+                error!(
+                    customer_id,
+                    %error,
+                    "Recovered customer data deletion supervisor did not finish normally"
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Runs one generation and reports why it ended.
 ///
 /// A generation is one turn of the process lifecycle: it opens the database,
@@ -556,11 +692,11 @@ struct GenerationOutcome {
 /// # Errors
 ///
 /// Returns an error if the data directory fails compression validation or
-/// migration, if the database cannot be opened, if the node certificate
-/// carries no usable node name, if the peer subsystem cannot be built, or if
-/// the teardown could not shut the store down. A generation that ended
-/// degraded is not one of them: that is carried out as a value, because the
-/// ending's final action must still be taken.
+/// migration, if the database cannot be opened, if a required task cannot be
+/// registered, if the node certificate carries no usable node name, if the
+/// peer subsystem cannot be built, or if the teardown could not shut the store
+/// down. A generation that ended degraded is not one of them: that is carried
+/// out as a value, because the ending's final action must still be taken.
 #[allow(clippy::too_many_lines)]
 async fn run_generation(
     settings: &mut Settings,
@@ -634,6 +770,33 @@ async fn run_generation(
     // outlive the store it was claimed over.
     let deletion_coordination = Arc::new(CustomerDeletionCoordinator::new());
 
+    #[cfg(feature = "bootroot")]
+    let recovery_handle = {
+        let database = database.clone();
+        let tracker = top_level_tracker.clone();
+        let deletion_coordination = Arc::clone(&deletion_coordination);
+        let ingest_sensors = ingest_sensors.clone();
+        let runtime_ingest_sensors = runtime_ingest_sensors.clone();
+        let pcap_sensors = pcap_sensors.clone();
+        let stream_direct_channels = stream_direct_channels.clone();
+        let peer_notify = notify_sensor_change.clone();
+        top_level_tracker
+            .spawn("customer-deletion-recovery", move |_cancel| async move {
+                recover_inprogress_deletions(
+                    &database,
+                    &tracker,
+                    &deletion_coordination,
+                    &ingest_sensors,
+                    &runtime_ingest_sensors,
+                    &pcap_sensors,
+                    &stream_direct_channels,
+                    peer_notify,
+                )
+                .await
+            })
+            .context("failed to register customer data deletion recovery")?
+    };
+
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
     let certs = Arc::clone(&tls.certs);
 
@@ -687,14 +850,32 @@ async fn run_generation(
 
     // Retention is tracked, not detached: the tracker's cancellation is what
     // stops it, the tracker's drain is what waits for it, and the handle kept
-    // here is what says how it ended. Its child token reaches it through the
-    // closure argument, which is the only thing its shutdown travels on.
+    // here is what says how it ended. In `bootroot` builds, this entry task
+    // first awaits the tracked startup recovery handle, keeping recovery and
+    // retention ordered without blocking the rest of generation startup. Its
+    // child token reaches retention through the closure argument, which is the
+    // only thing its shutdown travels on.
     let retention = settings.config.visible.retention;
     let retain_task_handle: ObservedHandle<Result<()>> = top_level_tracker
         .spawn_observed("retention", {
             let db = database.clone();
             let deletion_coordination = Arc::clone(&deletion_coordination);
-            move |cancel| run_retention(ONE_DAY, retention, db, cancel, deletion_coordination)
+            move |cancel| async move {
+                #[cfg(feature = "bootroot")]
+                match recovery_handle.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => error!(
+                        error = %format_args!("{error:#}"),
+                        "Failed to recover in-progress customer data deletions"
+                    ),
+                    Err(error) => error!(
+                        %error,
+                        "Customer data deletion recovery task did not finish normally"
+                    ),
+                }
+
+                run_retention(ONE_DAY, retention, db, cancel, deletion_coordination).await
+            }
         })
         .map_err(|e| anyhow!("failed to register the retention task: {e}"))?;
 
@@ -2411,6 +2592,443 @@ mod tests {
 
     fn captured(buf: &Arc<Mutex<Vec<u8>>>) -> String {
         String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 log output")
+    }
+
+    #[cfg(feature = "bootroot")]
+    fn in_progress_job(target: &str, requested_at: i64) -> storage::CustomerDataDeletion {
+        storage::CustomerDataDeletion {
+            service_fqdn_list: vec![target.to_string()],
+            requested_at,
+            status: storage::CustomerDataDeletionStatus::InProgress,
+            completed_at: None,
+            error: None,
+        }
+    }
+
+    #[cfg(feature = "bootroot")]
+    fn recovery_state(
+        database: &storage::Database,
+    ) -> (
+        IngestSensors,
+        RunTimeIngestSensors,
+        PcapSensors,
+        StreamDirectChannels,
+    ) {
+        (
+            new_ingest_sensors(database),
+            new_runtime_ingest_sensors(),
+            new_pcap_sensors(),
+            new_stream_direct_channels(),
+        )
+    }
+
+    #[cfg(feature = "bootroot")]
+    async fn recover_with_state(
+        database: &storage::Database,
+        tracker: &TaskTracker,
+        coordination: &Arc<CustomerDeletionCoordinator>,
+        state: &(
+            IngestSensors,
+            RunTimeIngestSensors,
+            PcapSensors,
+            StreamDirectChannels,
+        ),
+        peer_notify: Option<Arc<Notify>>,
+    ) -> Result<()> {
+        recover_inprogress_deletions(
+            database,
+            tracker,
+            coordination,
+            &state.0,
+            &state.1,
+            &state.2,
+            &state.3,
+            peer_notify,
+        )
+        .await
+    }
+
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn recovery_preserves_requested_at_and_uses_stored_targets() {
+        const CUSTOMER_ID: u32 = 42;
+        const REQUESTED_AT: i64 = 123_456;
+        let target = "piglet.recovery.example.test";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let mut event_key = target.as_bytes().to_vec();
+        event_key.push(0);
+        event_key.extend_from_slice(b"event");
+        database
+            .put_cf_for_test("conn", &event_key, b"customer event")
+            .expect("seed customer event");
+        database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .create(CUSTOMER_ID, &in_progress_job(target, REQUESTED_AT))
+            .expect("seed interrupted job");
+
+        let state = recovery_state(&database);
+        assert!(
+            !state.0.read().await.contains(target),
+            "the runtime sensor list must not supply the recovered target"
+        );
+        let tracker = TaskTracker::new();
+        recover_with_state(
+            &database,
+            &tracker,
+            &Arc::new(CustomerDeletionCoordinator::new()),
+            &state,
+            None,
+        )
+        .await
+        .expect("recover interrupted deletion");
+
+        let recovered = database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .get(CUSTOMER_ID)
+            .expect("read recovered job")
+            .expect("job remains recorded");
+        assert_eq!(
+            recovered.status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        assert_eq!(recovered.requested_at, REQUESTED_AT);
+        assert_eq!(recovered.service_fqdn_list, [target]);
+        assert!(recovered.completed_at.is_some());
+        assert!(recovered.error.is_none());
+        assert_eq!(
+            database
+                .get_cf_for_test("conn", &event_key)
+                .expect("read customer event"),
+            None,
+            "recovery must delete data for the persisted target"
+        );
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    /// Verifies that startup recovery removes the recovered sensor from the
+    /// shared runtime sensor set and signals the peer sensor-change notifier.
+    ///
+    /// No task is waiting on the notifier during recovery, so consuming the stored
+    /// permit afterward confirms that recovery emitted the notification.
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn recovery_notifies_peer_sensor_change_after_runtime_cleanup() {
+        const CUSTOMER_ID: u32 = 43;
+        let target = "piglet.peer-recovery.example.test";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        database
+            .sensors_store()
+            .expect("open sensor store")
+            .insert(target, crate::datetime::DateTime::now())
+            .expect("seed persisted sensor");
+        database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .create(CUSTOMER_ID, &in_progress_job(target, 123))
+            .expect("seed interrupted job");
+
+        let state = recovery_state(&database);
+        assert!(
+            state.0.read().await.contains(target),
+            "startup must initially restore the persisted sensor"
+        );
+        let tracker = TaskTracker::new();
+        let peer_notify = Arc::new(Notify::new());
+
+        recover_with_state(
+            &database,
+            &tracker,
+            &Arc::new(CustomerDeletionCoordinator::new()),
+            &state,
+            Some(Arc::clone(&peer_notify)),
+        )
+        .await
+        .expect("recover interrupted deletion");
+
+        assert!(
+            !state.0.read().await.contains(target),
+            "notification must follow removal from the shared sensor snapshot"
+        );
+        tokio::time::timeout(Duration::from_secs(1), peer_notify.notified())
+            .await
+            .expect("recovery did not leave a peer sensor-change notification");
+    }
+
+    /// Awaiting the recovery handle is a strict completion dependency rather
+    /// than a reliance on Tokio's task scheduling order.
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn retention_waits_for_startup_recovery() {
+        let tracker = TaskTracker::new();
+        let (release_recovery_tx, release_recovery_rx) = oneshot::channel();
+        let recovery_handle = tracker
+            .spawn("customer-deletion-recovery", move |_cancel| async move {
+                let _ = release_recovery_rx.await;
+                Ok::<(), anyhow::Error>(())
+            })
+            .expect("register recovery");
+        let (observer_started_tx, observer_started_rx) = oneshot::channel();
+        let (retention_started_tx, mut retention_started_rx) = oneshot::channel();
+        let retention_handle = tracker
+            .spawn("retention", move |_cancel| async move {
+                observer_started_tx.send(()).expect("announce observer");
+                let _ = recovery_handle.await;
+                retention_started_tx.send(()).expect("announce retention");
+            })
+            .expect("register retention observer");
+
+        observer_started_rx.await.expect("observer should start");
+        assert_eq!(
+            retention_started_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty),
+            "retention must remain gated while recovery is pending"
+        );
+
+        release_recovery_tx.send(()).expect("release recovery");
+        retention_started_rx
+            .await
+            .expect("retention should start after recovery");
+        retention_handle
+            .await
+            .expect("retention observer should join");
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn recovered_jobs_run_sequentially_under_the_shared_coordinator() {
+        use storage::deletion_coordination::DeletionBlocked;
+
+        const FIRST: u32 = 10;
+        const SECOND: u32 = 20;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let store = database
+            .customer_deletion_job_store()
+            .expect("open job store");
+        // Insert in reverse order: the big-endian keys, not insertion order,
+        // determine which recovery worker owns the coordinator first.
+        store
+            .create(SECOND, &in_progress_job("piglet.second.example.test", 2))
+            .expect("seed second job");
+        store
+            .create(FIRST, &in_progress_job("piglet.first.example.test", 1))
+            .expect("seed first job");
+
+        let state = recovery_state(&database);
+        let hold_runtime_cleanup = state.0.read().await;
+        let tracker = TaskTracker::new();
+        let coordination = Arc::new(CustomerDeletionCoordinator::new());
+        let recovery = task::spawn({
+            let database = database.clone();
+            let tracker = tracker.clone();
+            let coordination = Arc::clone(&coordination);
+            let state = state.clone();
+            async move { recover_with_state(&database, &tracker, &coordination, &state, None).await }
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while tracker.pending_count() != 1 {
+                task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first recovered supervisor should be tracked");
+        assert_eq!(
+            coordination.begin_deletion(FIRST).unwrap_err(),
+            DeletionBlocked::SameCustomer,
+            "the lowest customer ID must recover first"
+        );
+        assert_eq!(
+            coordination.begin_deletion(SECOND).unwrap_err(),
+            DeletionBlocked::AnotherDeletion
+        );
+        assert!(coordination.begin_retention().is_none());
+        assert_eq!(tracker.pending_count(), 1, "only one recovery may run");
+        assert_eq!(
+            store.get(SECOND).expect("read second job").unwrap().status,
+            storage::CustomerDataDeletionStatus::InProgress,
+            "the second job must remain untouched while the first is active"
+        );
+
+        drop(hold_runtime_cleanup);
+        recovery
+            .await
+            .expect("recovery task should not panic")
+            .expect("recover both jobs");
+        assert_eq!(
+            store.get(FIRST).expect("read first job").unwrap().status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        assert_eq!(
+            store.get(SECOND).expect("read second job").unwrap().status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        assert_eq!(tracker.pending_count(), 0);
+        drop(
+            coordination
+                .begin_retention()
+                .expect("recovery released the coordinator"),
+        );
+    }
+
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn closed_generation_leaves_recovery_jobs_in_progress() {
+        const CUSTOMER_ID: u32 = 7;
+        let target = "piglet.shutdown.example.test";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let job = in_progress_job(target, 99);
+        database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .create(CUSTOMER_ID, &job)
+            .expect("seed interrupted job");
+        let tracker = TaskTracker::new();
+        tracker.close().expect("close generation tracker");
+
+        recover_with_state(
+            &database,
+            &tracker,
+            &Arc::new(CustomerDeletionCoordinator::new()),
+            &recovery_state(&database),
+            None,
+        )
+        .await
+        .expect("a closed tracker cleanly defers recovery");
+
+        assert_eq!(
+            database
+                .customer_deletion_job_store()
+                .expect("open job store")
+                .get(CUSTOMER_ID)
+                .expect("read deferred job"),
+            Some(job)
+        );
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    /// A batch that never starts a worker must still release its reservation,
+    /// including the early `?` return when a persisted record is corrupt.
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn empty_or_unreadable_jobs_release_the_recovery_claim() {
+        for corrupt_record in [false, true] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+                .expect("open database");
+            if corrupt_record {
+                database
+                    .put_cf_for_test("customer deletion jobs", &7_u32.to_be_bytes(), b"invalid")
+                    .expect("seed unreadable job");
+            }
+            let tracker = TaskTracker::new();
+            let coordination = Arc::new(CustomerDeletionCoordinator::new());
+            let result = recover_with_state(
+                &database,
+                &tracker,
+                &coordination,
+                &recovery_state(&database),
+                None,
+            )
+            .await;
+
+            assert_eq!(result.is_err(), corrupt_record);
+            assert_eq!(tracker.pending_count(), 0);
+            drop(
+                coordination
+                    .begin_deletion(8)
+                    .expect("recovery released store"),
+            );
+            drop(
+                coordination
+                    .begin_retention()
+                    .expect("recovery released store"),
+            );
+        }
+    }
+
+    /// Close the real tracker while the first recovered customer is parked in
+    /// cleanup. Shutdown must wait for that customer without starting the next.
+    #[cfg(feature = "bootroot")]
+    #[tokio::test]
+    async fn shutdown_finishes_the_active_recovery_and_leaves_the_next_job() {
+        use crate::cancellation::DrainOutcome;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let store = database.customer_deletion_job_store().expect("job store");
+        let first = in_progress_job("piglet.first.example.test", 1);
+        let second = in_progress_job("piglet.second.example.test", 2);
+        store.create(1, &first).expect("seed first job");
+        store.create(2, &second).expect("seed second job");
+        let state = recovery_state(&database);
+        let hold_cleanup = state.0.read().await;
+        let tracker = TaskTracker::new();
+        let coordination = Arc::new(CustomerDeletionCoordinator::new());
+        let recovery = tracker
+            .spawn("customer-deletion-recovery", {
+                let tracker = tracker.clone();
+                let database = database.clone();
+                let coordination = Arc::clone(&coordination);
+                let state = state.clone();
+                move |_cancel| async move {
+                    recover_with_state(&database, &tracker, &coordination, &state, None).await
+                }
+            })
+            .expect("register recovery");
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while tracker.pending_count() != 2 {
+                task::yield_now().await;
+            }
+        })
+        .await
+        .expect("outer recovery and first worker should be tracked");
+
+        assert!(
+            matches!(
+                tracker.cancel_and_drain(Duration::from_millis(1)).await.expect("drain"),
+                DrainOutcome::Pending(pending) if pending.len() == 2
+            ),
+            "shutdown must wait for the active recovery"
+        );
+        assert!(coordination.begin_retention().is_none());
+        assert_eq!(store.get(2).expect("second job"), Some(second.clone()));
+
+        drop(hold_cleanup);
+        assert_eq!(
+            tracker.drain(Duration::from_secs(5)).await.expect("drain"),
+            DrainOutcome::Drained
+        );
+        recovery
+            .await
+            .expect("join recovery")
+            .expect("recover first job");
+        assert_eq!(
+            store
+                .get(1)
+                .expect("first job")
+                .expect("persisted job")
+                .status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        assert_eq!(store.get(2).expect("second job"), Some(second));
+        drop(
+            coordination
+                .begin_retention()
+                .expect("recovery released store"),
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -5441,6 +6059,65 @@ mod tests {
             assert!(
                 captured(&logs).contains("Migration failed"),
                 "the migration error itself should be reported, not just the summary"
+            );
+        }
+
+        /// Exercise the actual recovery observer in `run_generation`: a bad
+        /// job must be reported even though no per-customer worker ever starts,
+        /// and retention and the rest of the generation must still run.
+        #[cfg(feature = "bootroot")]
+        #[tokio::test]
+        async fn a_recovery_read_failure_is_logged_and_retention_still_runs() {
+            let dir = tempdir().expect("tempdir");
+            let notify_terminate = Arc::new(Notify::new());
+            let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
+            let mut settings = test_settings(dir.path());
+            let database = test_database(&settings.config.visible.data_dir);
+            database
+                .put_cf_for_test("customer deletion jobs", &7_u32.to_be_bytes(), b"invalid")
+                .expect("seed unreadable job");
+            drop(database);
+
+            let (logs, _guard) = capture_logs();
+            let (outcome, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_generation(&mut settings, &process, &HostEffects)
+                ),
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &[
+                            "Failed to recover in-progress customer data deletions",
+                            "Ingest listening on",
+                            "Publish listening on",
+                            "Database cleanup completed.",
+                        ],
+                    )
+                    .await;
+                    notify_terminate.notify_one();
+                }
+            );
+            assert_eq!(
+                outcome
+                    .expect("generation should stop")
+                    .expect("generation outcome"),
+                clean(GenerationEnd::Terminate)
+            );
+            let report = sole_record(
+                &logs,
+                "Failed to recover in-progress customer data deletions",
+            );
+            assert!(report.contains("ERROR"), "{report}");
+            assert!(
+                report.contains("invalid customer deletion job for customer 7"),
+                "{report}"
+            );
+            assert_precedes(
+                &logs,
+                "Failed to recover in-progress customer data deletions",
+                "Database cleanup completed.",
+                "recovery read failure",
             );
         }
 
