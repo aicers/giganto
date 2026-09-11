@@ -220,7 +220,8 @@ where
         .await
         .map_err(|e| Error::new(format!("Peer giganto did not respond {e}")))?;
 
-    resp.error_for_status()
+    let graphql_res = resp
+        .error_for_status()
         .map_err(|e| {
             Error::new(format!(
                 "Peer giganto's response status is not success. {e}"
@@ -228,8 +229,20 @@ where
         })?
         .json::<GraphQlResponse<ResponseDataType>>()
         .await
-        .map_err(|_| Error::new("Peer giganto's response failed to deserialize."))
-        .map(|graphql_res| response_to_result_converter(graphql_res.data))
+        .map_err(|_| Error::new("Peer giganto's response failed to deserialize."))?;
+
+    if let Some(errors) = graphql_res.errors.filter(|errors| !errors.is_empty()) {
+        let messages = errors
+            .into_iter()
+            .map(|error| error.message)
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(Error::new(format!(
+            "Peer giganto returned GraphQL errors: {messages}"
+        )));
+    }
+
+    Ok(response_to_result_converter(graphql_res.data))
 }
 
 // This macro helps to reduce boilerplate for handling
@@ -1459,6 +1472,36 @@ mod tests {
                     .contains("Peer giganto's response status is not success.")
             }),
             "expected a peer response error, got {res:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_peer_graphql_error() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data": null, "errors": [{"message": "peer resolver failed"}]}"#)
+            .create_async()
+            .await;
+
+        let schema = Schema::build(
+            RequestPeerTestQuery::new(server.socket_address()),
+            EmptyMutation,
+            EmptySubscription,
+        )
+        .data(reqwest::Client::new())
+        .finish();
+
+        let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
+        assert_eq!(res.data.to_string(), "null");
+        assert!(
+            res.errors
+                .iter()
+                .any(|err| err.message
+                    == "Peer giganto returned GraphQL errors: peer resolver failed"),
+            "expected a peer GraphQL error, got {res:?}"
         );
     }
 
