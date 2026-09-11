@@ -39,7 +39,7 @@ use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
     KeyPair, KeyUsagePurpose,
 };
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio::time::{Instant, sleep};
 
 // ---------------------------------------------------------------------------
@@ -168,6 +168,19 @@ const FORBIDDEN_RECORDS: [&str; 3] = [
 /// What a child logs when the store it was pointed at had to be rebuilt.
 const REPAIR_MARKER: &str = "Starting DB repair";
 
+/// What every subsystem reports after applying refreshed TLS material.
+const TLS_RELOAD_MARKERS: [&str; 5] = [
+    "TLS material reloaded successfully",
+    "Ingest listener: server config reloaded",
+    "Publish listener: server config reloaded",
+    "peer TLS state reloaded; generation",
+    "HTTPS reload: new GraphQL server started",
+];
+
+/// What the common reload path reports when validation preserves the current
+/// material.
+const TLS_RELOAD_FAILURE_MARKER: &str = "TLS reload failed, keeping previous material";
+
 // ---------------------------------------------------------------------------
 // Test PKI
 // ---------------------------------------------------------------------------
@@ -185,6 +198,8 @@ struct TestPki {
     node_key_path: PathBuf,
     node_cert_pem: String,
     node_key_pem: String,
+    node_cert_b_path: PathBuf,
+    node_key_b_path: PathBuf,
     sensor_cert_pem: String,
     sensor_key_pem: String,
 }
@@ -222,6 +237,25 @@ fn leaf_params(common_name: &str, dns_name: &str) -> CertificateParams {
     params
 }
 
+/// Writes a second node identity under `ca`. Its names are deliberately the
+/// same as material A, while its fresh key pair makes the leaf distinguishable.
+fn write_additional_node_material(
+    dir: &Path,
+    ca: &CertifiedIssuer<'_, KeyPair>,
+) -> (PathBuf, PathBuf) {
+    let key = KeyPair::generate().expect("generate the replacement node key");
+    let cert = leaf_params(NODE_CN, NODE_SAN)
+        .signed_by(&key, ca)
+        .expect("sign the replacement node certificate");
+    let cert_pem = cert.pem();
+    let key_pem = key.serialize_pem();
+    let cert_path = dir.join("node-cert-b.pem");
+    let key_path = dir.join("node-key-b.pem");
+    fs::write(&cert_path, &cert_pem).expect("write the replacement node certificate");
+    fs::write(&key_path, &key_pem).expect("write the replacement node key");
+    (cert_path, key_path)
+}
+
 fn write_test_pki(dir: &Path) -> TestPki {
     let ca_key = KeyPair::generate().expect("generate the CA key");
     let ca = CertifiedIssuer::self_signed(ca_params("Giganto Process Test CA"), ca_key)
@@ -236,6 +270,8 @@ fn write_test_pki(dir: &Path) -> TestPki {
     let sensor_cert = leaf_params(SENSOR_CN, SENSOR_SAN)
         .signed_by(&sensor_key, &ca)
         .expect("sign the sensor certificate");
+
+    let (node_cert_b_path, node_key_b_path) = write_additional_node_material(dir, &ca);
 
     let ca_pem = ca.pem();
     let node_cert_pem = node_cert.pem();
@@ -255,6 +291,8 @@ fn write_test_pki(dir: &Path) -> TestPki {
         node_key_path,
         node_cert_pem,
         node_key_pem,
+        node_cert_b_path,
+        node_key_b_path,
         sensor_cert_pem: sensor_cert.pem(),
         sensor_key_pem: sensor_key.serialize_pem(),
     }
@@ -287,6 +325,13 @@ fn write_config(path: &Path, data_dir: &Path, export_dir: &Path, graphql_addr: S
         export = export_dir.display(),
     );
     fs::write(path, config).expect("write the child configuration");
+}
+
+/// Enables the peer TLS consumer without configuring any outbound peers.
+fn enable_ephemeral_peer(path: &Path) {
+    let mut config = fs::read_to_string(path).expect("read the child configuration");
+    config.push_str("peer_srv_addr = \"127.0.0.1:0\"\npeers = []\n");
+    fs::write(path, config).expect("enable the ephemeral peer listener");
 }
 
 /// Rewrites the two port-0 entries with the addresses the first process
@@ -501,6 +546,46 @@ impl Node {
             sleep(POLL).await;
         }
     }
+
+    /// Waits for every marker to be appended after `start`, without imposing
+    /// an ordering on independent subsystem reloads.
+    async fn wait_for_log_markers(
+        &mut self,
+        targets: &BindTargets,
+        start: usize,
+        markers: &[&str],
+        description: &str,
+    ) {
+        let deadline = Instant::now() + READY_TIMEOUT;
+        loop {
+            let log = self.log();
+            let appended = log.get(start..).unwrap_or(&log);
+            if markers.iter().all(|marker| appended.contains(marker)) {
+                return;
+            }
+            if let Some(reason) = bind_failure(&log, targets) {
+                panic!("{}: {reason}\n{}", self.label, self.diagnostics());
+            }
+            if let Some(status) = self.reap_if_exited() {
+                panic!(
+                    "{}: the child exited with {status} while waiting for {description}\n{}",
+                    self.label,
+                    self.diagnostics(),
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{}: did not observe {description} within {READY_TIMEOUT:?}; missing: {:?}\n{}",
+                self.label,
+                markers
+                    .iter()
+                    .filter(|marker| !appended.contains(**marker))
+                    .collect::<Vec<_>>(),
+                self.diagnostics(),
+            );
+            sleep(POLL).await;
+        }
+    }
 }
 
 /// Leaves no child and no port behind, on the success path and on the failure
@@ -572,6 +657,12 @@ fn bind_failure(log: &str, targets: &BindTargets) -> Option<String> {
     if log.contains("Failed to start GraphQL server") {
         return Some(format!(
             "the GraphQL listener could not bind {}",
+            targets.graphql
+        ));
+    }
+    if log.contains("HTTPS reload: failed to start new GraphQL server") {
+        return Some(format!(
+            "the reloaded GraphQL listener could not bind {}",
             targets.graphql
         ));
     }
@@ -660,6 +751,149 @@ fn key_from_pem(pem: &str) -> PrivateKeyDer<'static> {
     rustls_pemfile::private_key(&mut pem.as_bytes())
         .expect("read the private key")
         .expect("the key file should hold a private key")
+}
+
+/// SHA-256 of a certificate's DER encoding.
+#[allow(
+    clippy::chunks_exact_to_as_chunks,
+    clippy::many_single_char_names,
+    clippy::unreadable_literal
+)]
+fn certificate_fingerprint(cert: &CertificateDer<'_>) -> [u8; 32] {
+    const INITIAL: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    const ROUND: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    let bytes = cert.as_ref();
+    let bit_len = u64::try_from(bytes.len())
+        .expect("certificate length fits in u64")
+        .checked_mul(8)
+        .expect("certificate bit length fits in u64");
+    let mut padded = bytes.to_vec();
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+
+    let mut state = INITIAL;
+    for chunk in padded.chunks_exact(64) {
+        let mut words = [0_u32; 64];
+        for (word, input) in words[..16].iter_mut().zip(chunk.chunks_exact(4)) {
+            *word = u32::from_be_bytes(input.try_into().expect("four-byte SHA-256 word"));
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for (constant, word) in ROUND.into_iter().zip(words) {
+            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choice = (e & f) ^ (!e & g);
+            let temp1 = h
+                .wrapping_add(sum1)
+                .wrapping_add(choice)
+                .wrapping_add(constant)
+                .wrapping_add(word);
+            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = sum0.wrapping_add(majority);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+        for (value, compressed) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *value = value.wrapping_add(compressed);
+        }
+    }
+
+    let mut digest = [0_u8; 32];
+    for (output, value) in digest.chunks_exact_mut(4).zip(state) {
+        output.copy_from_slice(&value.to_be_bytes());
+    }
+    digest
+}
+
+/// Opens one bounded mTLS connection and returns the presented server leaf's
+/// fingerprint. Material A remains a valid client identity after the server
+/// rotates because both leaves are signed by the same test CA.
+async fn server_leaf_fingerprint(node: &Node, addr: SocketAddr, pki: &TestPki) -> [u8; 32] {
+    let handshake = async {
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in certs_from_pem(&pki.ca_pem) {
+            roots
+                .add(cert)
+                .map_err(|e| format!("the test CA could not be trusted: {e}"))?;
+        }
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_client_auth_cert(
+                certs_from_pem(&pki.node_cert_pem),
+                key_from_pem(&pki.node_key_pem),
+            )
+            .map_err(|e| format!("the mTLS client configuration could not be built: {e}"))?;
+        let tcp = tokio::net::TcpStream::connect(addr)
+            .await
+            .map_err(|e| format!("the GraphQL TCP connection to {addr} failed: {e}"))?;
+        let server_name = ServerName::try_from(NODE_SAN)
+            .map_err(|e| format!("the node server name is invalid: {e}"))?;
+        let stream = tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(server_name, tcp)
+            .await
+            .map_err(|e| format!("the GraphQL TLS handshake with {addr} failed: {e}"))?;
+        let leaf = stream
+            .get_ref()
+            .1
+            .peer_certificates()
+            .and_then(|certificates| certificates.first())
+            .ok_or_else(|| "the GraphQL TLS peer presented no leaf certificate".to_string())?;
+        Ok::<_, String>(certificate_fingerprint(leaf))
+    };
+
+    match tokio::time::timeout(REQUEST_TIMEOUT, handshake).await {
+        Ok(Ok(fingerprint)) => fingerprint,
+        Ok(Err(reason)) => panic!("{}: {reason}\n{}", node.label, node.diagnostics()),
+        Err(error) => panic!(
+            "{}: the GraphQL TLS handshake did not finish within {REQUEST_TIMEOUT:?}: {error}\n{}",
+            node.label,
+            node.diagnostics(),
+        ),
+    }
+}
+
+/// Replaces one credential file without exposing partially-written contents.
+fn atomic_replace(path: &Path, contents: &[u8]) {
+    let file_name = path.file_name().expect("credential path has a file name");
+    let staged = path.with_file_name(format!(".{}.replacement", file_name.to_string_lossy()));
+    fs::write(&staged, contents).expect("write the staged credential");
+    fs::rename(&staged, path).expect("atomically replace the credential");
 }
 
 /// The QUIC client configuration the sensor connects with.
@@ -918,6 +1152,154 @@ async fn assert_marker_is_queryable(
 // ---------------------------------------------------------------------------
 // The test
 // ---------------------------------------------------------------------------
+
+/// SIGHUP rotates every live TLS endpoint without replacing the process, and
+/// a rejected follow-up rotation leaves the last validated leaf in service.
+#[tokio::test]
+#[serial_test::serial(runtime_lifecycle_process)]
+async fn process_sighup_tls_reload() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let dir = tempfile::tempdir().expect("create the run directory");
+    let root = dir.path();
+    let data_dir = root.join("data");
+    let export_dir = root.join("export");
+    fs::create_dir_all(&data_dir).expect("create the data directory");
+    fs::create_dir_all(&export_dir).expect("create the export directory");
+    let pki = write_test_pki(root);
+    let cfg_path = root.join("config.toml");
+    let graphql_addr = free_loopback_addr();
+    write_config(&cfg_path, &data_dir, &export_dir, graphql_addr);
+    enable_ephemeral_peer(&cfg_path);
+    let mut targets = BindTargets {
+        ingest: EPHEMERAL.to_string(),
+        publish: EPHEMERAL.to_string(),
+        graphql: graphql_addr.to_string(),
+    };
+
+    let mut node = Node::spawn("sighup", root, &cfg_path, &pki);
+    node.wait_until_ready(&targets).await;
+    node.wait_for_log_markers(
+        &targets,
+        0,
+        &["INFO listening on"],
+        "peer listener readiness",
+    )
+    .await;
+    let ingest_addr = addr_after(&node, "Ingest listening on");
+    let publish_addr = addr_after(&node, "Publish listening on");
+    targets.ingest = ingest_addr.to_string();
+    targets.publish = publish_addr.to_string();
+
+    let cert_a = certs_from_pem(&pki.node_cert_pem)
+        .into_iter()
+        .next()
+        .expect("material A has a leaf certificate");
+    let cert_b_pem = read_text(&pki.node_cert_b_path);
+    let cert_b = certs_from_pem(&cert_b_pem)
+        .into_iter()
+        .next()
+        .expect("material B has a leaf certificate");
+    let fingerprint_a = certificate_fingerprint(&cert_a);
+    let fingerprint_b = certificate_fingerprint(&cert_b);
+    assert_ne!(
+        fingerprint_a,
+        fingerprint_b,
+        "fresh node key pairs should produce distinguishable leaves\n{}",
+        node.diagnostics(),
+    );
+    assert_eq!(
+        server_leaf_fingerprint(&node, graphql_addr, &pki).await,
+        fingerprint_a,
+        "the child should initially serve material A\n{}",
+        node.diagnostics(),
+    );
+
+    let pid = node.child.id();
+    let reload_start = node.log().len();
+    atomic_replace(
+        &pki.node_cert_path,
+        &fs::read(&pki.node_cert_b_path).expect("read material B's certificate"),
+    );
+    atomic_replace(
+        &pki.node_key_path,
+        &fs::read(&pki.node_key_b_path).expect("read material B's key"),
+    );
+    node.signal(libc::SIGHUP);
+    node.wait_for_log_markers(
+        &targets,
+        reload_start,
+        &TLS_RELOAD_MARKERS,
+        "all successful TLS reload markers",
+    )
+    .await;
+
+    assert_eq!(
+        node.child.id(),
+        pid,
+        "SIGHUP should not replace the child process\n{}",
+        node.diagnostics(),
+    );
+    assert!(
+        node.reap_if_exited().is_none(),
+        "the child exited after its successful TLS reload\n{}",
+        node.diagnostics(),
+    );
+    let reload_log = node.log();
+    for marker in [
+        "shutting the database down",
+        "final action, returning from the lifecycle",
+    ] {
+        assert!(
+            !reload_log.contains(marker),
+            "SIGHUP should not enter the terminate path ({marker:?})\n{}",
+            node.diagnostics(),
+        );
+    }
+    assert_eq!(
+        server_leaf_fingerprint(&node, graphql_addr, &pki).await,
+        fingerprint_b,
+        "the reloaded GraphQL listener should serve material B\n{}",
+        node.diagnostics(),
+    );
+
+    let failed_reload_start = node.log().len();
+    atomic_replace(
+        &pki.node_cert_path,
+        &fs::read(&pki.node_cert_b_path).expect("reread material B's certificate"),
+    );
+    atomic_replace(&pki.node_key_path, pki.node_key_pem.as_bytes());
+    node.signal(libc::SIGHUP);
+    node.wait_for_log_markers(
+        &targets,
+        failed_reload_start,
+        &[TLS_RELOAD_FAILURE_MARKER],
+        "the rejected TLS reload marker",
+    )
+    .await;
+    assert_eq!(
+        node.child.id(),
+        pid,
+        "a rejected SIGHUP reload should not replace the child process\n{}",
+        node.diagnostics(),
+    );
+    assert_eq!(
+        server_leaf_fingerprint(&node, graphql_addr, &pki).await,
+        fingerprint_b,
+        "a rejected key/certificate pair should leave material B in service\n{}",
+        node.diagnostics(),
+    );
+
+    node.signal(libc::SIGTERM);
+    let status = node.wait_for_exit().await;
+    assert!(
+        status.success(),
+        "SIGTERM should exit the process successfully after reloads, got {status}\n{}",
+        node.diagnostics(),
+    );
+    assert_shutdown_sequence(&node, "SIGTERM");
+    assert_clean_shutdown(&node);
+}
 
 /// The real binary shuts down on `SIGTERM`, restarts against what it left
 /// behind, and shuts down again on `SIGINT`.
