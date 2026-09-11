@@ -1,4 +1,9 @@
 use std::{borrow::Cow, collections::HashSet, future, sync::Arc};
+#[cfg(feature = "cluster")]
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::{IpAddr, SocketAddr},
+};
 
 use anyhow::{Context as AnyhowContext, Result as AnyhowResult, anyhow};
 use async_graphql::{
@@ -9,9 +14,15 @@ use async_graphql::{
     registry::{Deprecation, MetaEnumValue, MetaType, MetaTypeId, Registry},
     resolver_utils::{EnumItem, EnumType},
 };
+#[cfg(feature = "cluster")]
+use futures_util::future::join_all;
+#[cfg(feature = "cluster")]
+use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tracing::{error, info, warn};
 
+#[cfg(feature = "cluster")]
+use super::NodeName;
 use super::StringNumberU32;
 use crate::{
     cancellation::{SpawnError, TaskTracker},
@@ -25,6 +36,43 @@ use crate::{
         deletion_coordination::{CustomerDeletionCoordinator, DeletionBlocked, DeletionGuard},
     },
 };
+#[cfg(feature = "cluster")]
+use crate::{comm::peer::Peers, graphql::client::cluster::request_peer};
+
+#[cfg(feature = "cluster")]
+const PEER_DELETE_CUSTOMER_DATA_MUTATION: &str = r"
+    mutation DeleteCustomerDataForPeer(
+        $serviceFqdnList: [String!]!
+        $customerId: StringNumberU32!
+        $requestFromPeer: Boolean
+    ) {
+        deleteCustomerData(
+            serviceFqdnList: $serviceFqdnList
+            customerId: $customerId
+            requestFromPeer: $requestFromPeer
+        )
+    }
+";
+
+#[cfg(feature = "cluster")]
+const PEER_CUSTOMER_DATA_DELETION_RESULT_QUERY: &str = r"
+    query CustomerDataDeletionResultForPeer(
+        $customerId: StringNumberU32!
+        $requestFromPeer: Boolean
+    ) {
+        customerDataDeletionResult(
+            customerId: $customerId
+            requestFromPeer: $requestFromPeer
+        ) {
+            customerId
+            requestedAt
+            serviceFqdnList
+            status
+            completedAt
+            error
+        }
+    }
+";
 
 const PIGLET_COLUMN_FAMILIES: [&str; 21] = [
     "conn",
@@ -72,6 +120,8 @@ const REPRODUCE_COLUMN_FAMILIES: [&str; 18] = [
 ];
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "cluster", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "cluster", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum CustomerDataDeletionRequestStatus {
     /// Terminal mutation response: this node accepted the request and started the deletion job.
     Accepted,
@@ -86,8 +136,6 @@ pub enum CustomerDataDeletionRequestStatus {
     /// Retry after restart or on another node: shutdown blocks this request, which was not accepted.
     BlockedByShutdown,
     /// Node-local no-op: none of the requested targets are stored on this node.
-    ///
-    /// This response remains node-local until cluster aggregation is implemented in #1727.
     NoLocalTargetOnThisNode,
 }
 
@@ -164,7 +212,7 @@ impl OutputType for CustomerDataDeletionRequestStatus {
                 ),
                 (
                     "NO_LOCAL_TARGET_ON_THIS_NODE",
-                    "Node-local no-op: none of the requested targets are stored on this node.\n\nThis response remains node-local until cluster aggregation is implemented in #1727.",
+                    "Node-local no-op: none of the requested targets are stored on this node.",
                 ),
             ]
             .into_iter()
@@ -202,6 +250,8 @@ impl OutputType for CustomerDataDeletionRequestStatus {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "cluster", derive(serde::Deserialize))]
+#[cfg_attr(feature = "cluster", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum CustomerDataDeletionStatusOutput {
     InProgress,
     Succeeded,
@@ -271,7 +321,9 @@ impl OutputType for CustomerDataDeletionStatusOutput {
     }
 }
 
-#[derive(SimpleObject)]
+#[derive(Clone, Debug, PartialEq, SimpleObject)]
+#[cfg_attr(feature = "cluster", derive(serde::Deserialize))]
+#[cfg_attr(feature = "cluster", serde(rename_all = "camelCase"))]
 pub struct CustomerDataDeletionResult {
     customer_id: StringNumberU32,
     requested_at: DateTime,
@@ -286,34 +338,299 @@ pub(super) struct CustomerDeletionQuery;
 
 #[Object]
 impl CustomerDeletionQuery {
-    /// Returns the persisted customer data deletion job for the requested customer.
+    /// Returns the aggregated customer data deletion job for the requested customer.
     async fn customer_data_deletion_result(
         &self,
         ctx: &Context<'_>,
         customer_id: StringNumberU32,
+        request_from_peer: Option<bool>,
     ) -> Result<Option<CustomerDataDeletionResult>> {
-        let db = ctx.data::<Database>()?;
-        let store = db.customer_deletion_job_store()?;
-        let Some(job) = store.get(customer_id.0)? else {
-            return Ok(None);
-        };
+        let local_result = local_customer_data_deletion_result(ctx, customer_id.0)?;
 
-        let status = match job.status {
-            CustomerDataDeletionStatus::InProgress => CustomerDataDeletionStatusOutput::InProgress,
-            CustomerDataDeletionStatus::Succeeded => CustomerDataDeletionStatusOutput::Succeeded,
-            CustomerDataDeletionStatus::Failed => CustomerDataDeletionStatusOutput::Failed,
-        };
+        #[cfg(not(feature = "cluster"))]
+        {
+            let _ = request_from_peer;
+            crate::graphql::ready(Ok(local_result)).await
+        }
 
-        crate::graphql::ready(Ok(Some(CustomerDataDeletionResult {
-            customer_id,
-            requested_at: DateTime::from_timestamp_nanos(job.requested_at),
-            service_fqdn_list: job.service_fqdn_list,
-            status,
-            completed_at: job.completed_at.map(DateTime::from_timestamp_nanos),
-            error: job.error,
-        })))
-        .await
+        #[cfg(feature = "cluster")]
+        {
+            if !request_from_peer.unwrap_or_default() {
+                let endpoints = peer_graphql_endpoints(ctx).await?;
+                if endpoints.is_empty() {
+                    return Ok(local_result);
+                }
+                let peer_requests = endpoints.iter().map(|(_, endpoint)| {
+                    request_customer_data_deletion_result_from_peer(ctx, *endpoint, customer_id.0)
+                });
+                let peer_responses = join_all(peer_requests).await;
+
+                let local_name = ctx.data::<NodeName>()?.0.clone();
+                let mut node_results = Vec::with_capacity(peer_responses.len() + 1);
+                if let Some(result) = local_result {
+                    node_results.push((local_name, result));
+                }
+                for ((node, _), response) in endpoints.into_iter().zip(peer_responses) {
+                    if let Some(result) = response? {
+                        node_results.push((node, result));
+                    }
+                }
+                return Ok(merge_customer_data_deletion_results(
+                    customer_id.0,
+                    node_results,
+                ));
+            }
+            Ok(local_result)
+        }
     }
+}
+
+fn local_customer_data_deletion_result(
+    ctx: &Context<'_>,
+    customer_id: u32,
+) -> Result<Option<CustomerDataDeletionResult>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.customer_deletion_job_store()?;
+    let Some(job) = store.get(customer_id)? else {
+        return Ok(None);
+    };
+
+    let status = match job.status {
+        CustomerDataDeletionStatus::InProgress => CustomerDataDeletionStatusOutput::InProgress,
+        CustomerDataDeletionStatus::Succeeded => CustomerDataDeletionStatusOutput::Succeeded,
+        CustomerDataDeletionStatus::Failed => CustomerDataDeletionStatusOutput::Failed,
+    };
+
+    Ok(Some(CustomerDataDeletionResult {
+        customer_id: StringNumberU32(customer_id),
+        requested_at: DateTime::from_timestamp_nanos(job.requested_at),
+        service_fqdn_list: job.service_fqdn_list,
+        status,
+        completed_at: job.completed_at.map(DateTime::from_timestamp_nanos),
+        error: job.error,
+    }))
+}
+
+#[cfg(feature = "cluster")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerDeletionMutationVariables {
+    service_fqdn_list: Vec<String>,
+    customer_id: String,
+    request_from_peer: bool,
+}
+
+#[cfg(feature = "cluster")]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerDeletionMutationResponse {
+    delete_customer_data: CustomerDataDeletionRequestStatus,
+}
+
+#[cfg(feature = "cluster")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerDeletionResultVariables {
+    customer_id: String,
+    request_from_peer: bool,
+}
+
+#[cfg(feature = "cluster")]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerDeletionResultResponse {
+    customer_data_deletion_result: Option<CustomerDataDeletionResult>,
+}
+
+/// Returns every currently connected peer GraphQL endpoint exactly once.
+#[cfg(feature = "cluster")]
+async fn peer_graphql_endpoints(ctx: &Context<'_>) -> Result<Vec<(String, SocketAddr)>> {
+    let Some(peers) = ctx.data_opt::<Peers>() else {
+        return Ok(Vec::new());
+    };
+    let peers = peers.read().await;
+    let mut endpoints = BTreeMap::new();
+    for (peer_addr, peer_info) in peers.iter() {
+        let ip = peer_addr.parse::<IpAddr>().map_err(|e| {
+            async_graphql::Error::new(format!(
+                "Currently connected peer {peer_addr} has an invalid address: {e}"
+            ))
+        })?;
+        let port = peer_info.graphql_port.ok_or_else(|| {
+            async_graphql::Error::new(format!(
+                "Currently connected peer {peer_addr} has no GraphQL port"
+            ))
+        })?;
+        let endpoint = SocketAddr::new(ip, port);
+        endpoints
+            .entry(endpoint)
+            .or_insert_with(|| endpoint.to_string());
+    }
+    Ok(endpoints
+        .into_iter()
+        .map(|(endpoint, node)| (node, endpoint))
+        .collect())
+}
+
+#[cfg(feature = "cluster")]
+async fn request_delete_customer_data_from_peer(
+    ctx: &Context<'_>,
+    endpoint: SocketAddr,
+    service_fqdn_list: Vec<String>,
+    customer_id: u32,
+) -> Result<CustomerDataDeletionRequestStatus> {
+    let body = graphql_client::QueryBody {
+        variables: PeerDeletionMutationVariables {
+            service_fqdn_list,
+            customer_id: customer_id.to_string(),
+            request_from_peer: true,
+        },
+        query: PEER_DELETE_CUSTOMER_DATA_MUTATION,
+        operation_name: "DeleteCustomerDataForPeer",
+    };
+    let response = request_peer(ctx, endpoint, body, |data: Option<_>| data).await?;
+    response
+        .map(|data: PeerDeletionMutationResponse| data.delete_customer_data)
+        .ok_or_else(|| {
+            async_graphql::Error::new(format!(
+                "Currently connected peer {endpoint} could not process the customer data deletion request"
+            ))
+        })
+}
+
+#[cfg(feature = "cluster")]
+async fn request_customer_data_deletion_result_from_peer(
+    ctx: &Context<'_>,
+    endpoint: SocketAddr,
+    customer_id: u32,
+) -> Result<Option<CustomerDataDeletionResult>> {
+    let body = graphql_client::QueryBody {
+        variables: PeerDeletionResultVariables {
+            customer_id: customer_id.to_string(),
+            request_from_peer: true,
+        },
+        query: PEER_CUSTOMER_DATA_DELETION_RESULT_QUERY,
+        operation_name: "CustomerDataDeletionResultForPeer",
+    };
+    let response = request_peer(ctx, endpoint, body, |data: Option<_>| data).await?;
+    response
+        .map(
+            |data: PeerDeletionResultResponse| data.customer_data_deletion_result,
+        )
+        .ok_or_else(|| {
+            async_graphql::Error::new(format!(
+                "Currently connected peer {endpoint} could not return the customer data deletion result"
+            ))
+        })
+}
+
+#[cfg(feature = "cluster")]
+fn aggregate_deletion_request_statuses(
+    mut node_statuses: Vec<(String, CustomerDataDeletionRequestStatus)>,
+) -> Result<CustomerDataDeletionRequestStatus> {
+    node_statuses.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut target_statuses = node_statuses
+        .into_iter()
+        .filter(|(_, status)| *status != CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode)
+        .collect::<Vec<_>>();
+
+    if target_statuses.is_empty() {
+        return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
+    }
+    if target_statuses
+        .iter()
+        .all(|(_, status)| *status == target_statuses[0].1)
+    {
+        return Ok(target_statuses[0].1);
+    }
+
+    let any_accepted = target_statuses
+        .iter()
+        .any(|(_, status)| *status == CustomerDataDeletionRequestStatus::Accepted);
+    if any_accepted
+        && target_statuses.iter().all(|(_, status)| {
+            matches!(
+                status,
+                CustomerDataDeletionRequestStatus::Accepted
+                    | CustomerDataDeletionRequestStatus::AlreadyCompleted
+            )
+        })
+    {
+        return Ok(CustomerDataDeletionRequestStatus::Accepted);
+    }
+
+    if any_accepted {
+        target_statuses
+            .retain(|(_, status)| *status != CustomerDataDeletionRequestStatus::Accepted);
+        return Err(format!(
+            "Customer data deletion was accepted by only part of the target Giganto nodes. \
+             Accepted tasks will continue running. Non-accepted statuses: {target_statuses:?}"
+        )
+        .into());
+    }
+
+    Err(format!(
+        "Customer data deletion was not accepted by any target Giganto node. Target statuses: \
+         {target_statuses:?}"
+    )
+    .into())
+}
+
+#[cfg(feature = "cluster")]
+fn merge_customer_data_deletion_results(
+    customer_id: u32,
+    mut node_results: Vec<(String, CustomerDataDeletionResult)>,
+) -> Option<CustomerDataDeletionResult> {
+    if node_results.is_empty() {
+        return None;
+    }
+    node_results.sort_by(|left, right| left.0.cmp(&right.0));
+    let service_fqdn_list = node_results
+        .iter()
+        .flat_map(|(_, result)| result.service_fqdn_list.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let status = node_results
+        .iter()
+        .map(|(_, result)| result.status)
+        .max_by_key(|status| match status {
+            CustomerDataDeletionStatusOutput::Succeeded => 0,
+            CustomerDataDeletionStatusOutput::InProgress => 1,
+            CustomerDataDeletionStatusOutput::Failed => 2,
+        })
+        .expect("node_results is not empty");
+    let requested_at = node_results
+        .iter()
+        .map(|(_, result)| result.requested_at)
+        .min()
+        .expect("node_results is not empty");
+    let completed_at = (status != CustomerDataDeletionStatusOutput::InProgress)
+        .then(|| {
+            node_results
+                .iter()
+                .filter_map(|(_, result)| result.completed_at)
+                .max()
+        })
+        .flatten();
+    let errors = node_results
+        .iter()
+        .filter_map(|(node, result)| {
+            result
+                .error
+                .as_ref()
+                .map(|message| format!("{node}: {message}"))
+        })
+        .collect::<Vec<_>>();
+
+    Some(CustomerDataDeletionResult {
+        customer_id: StringNumberU32(customer_id),
+        requested_at,
+        service_fqdn_list,
+        status,
+        completed_at,
+        error: (!errors.is_empty()).then(|| errors.join("; ")),
+    })
 }
 
 #[derive(Default)]
@@ -321,7 +638,7 @@ pub(super) struct CustomerDeletionMutation;
 
 #[Object]
 impl CustomerDeletionMutation {
-    /// Starts asynchronous deletion of customer-owned data stored on this Giganto node.
+    /// Starts asynchronous deletion of customer-owned data across the Giganto cluster.
     // Kept to one line above, because async-graphql publishes a resolver's doc
     // comment as the field's GraphQL description; the rest belongs here.
     //
@@ -343,135 +660,172 @@ impl CustomerDeletionMutation {
         ctx: &Context<'_>,
         service_fqdn_list: Vec<String>,
         customer_id: StringNumberU32,
+        request_from_peer: Option<bool>,
     ) -> Result<CustomerDataDeletionRequestStatus> {
         let provided_targets = validate_service_fqdn_list(service_fqdn_list)?;
-        let db = ctx.data::<Database>()?;
-        let ingest_sensors = ctx.data::<IngestSensors>()?.clone();
-        let runtime_ingest_sensors = ctx.data::<RunTimeIngestSensors>()?.clone();
-        let pcap_sensors = ctx.data::<PcapSensors>()?.clone();
-        let stream_direct_channels = ctx.data::<StreamDirectChannels>()?.clone();
-        let peer_notify = ctx.data_opt::<Arc<Notify>>().cloned();
-        let tracker = ctx.data::<TaskTracker>()?.clone();
-        let coordination = ctx.data::<Arc<CustomerDeletionCoordinator>>()?;
+        #[cfg(not(feature = "cluster"))]
+        let _ = request_from_peer;
 
-        let store = db.customer_deletion_job_store()?;
-        // Asked first, and asked without claiming anything: a node with no
-        // stake in the request answers it instead of refusing it, and a
-        // refusal it never needed must not make a retention cycle give way or
-        // turn another customer away.
-        if store.get(customer_id.0)?.is_none()
-            && local_targets(&provided_targets, &ingest_sensors)
-                .await
-                .is_empty()
-        {
-            return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
+        #[cfg(feature = "cluster")]
+        if !request_from_peer.unwrap_or_default() {
+            let endpoints = peer_graphql_endpoints(ctx).await?;
+            let local_targets = provided_targets.clone();
+            let peer_requests = endpoints.iter().map(|(_, endpoint)| {
+                request_delete_customer_data_from_peer(
+                    ctx,
+                    *endpoint,
+                    provided_targets.clone(),
+                    customer_id.0,
+                )
+            });
+            let (local_response, peer_responses) = futures_util::future::join(
+                delete_customer_data_locally(ctx, local_targets, customer_id.0),
+                join_all(peer_requests),
+            )
+            .await;
+
+            let local_name = ctx.data::<NodeName>()?.0.clone();
+            let mut node_responses = Vec::with_capacity(peer_responses.len() + 1);
+            node_responses.push((local_name, local_response?));
+            for ((node, _), response) in endpoints.into_iter().zip(peer_responses) {
+                node_responses.push((node, response?));
+            }
+            return aggregate_deletion_request_statuses(node_responses);
         }
 
-        // Asked before anything is written. The tracker is closed for the
-        // whole of shutdown, so a request that arrives after it began can
-        // never be finished here, and accepting one would leave an
-        // `InProgress` job behind that nothing in this generation will ever
-        // resolve.
-        if tracker.is_closed() {
-            return Ok(CustomerDataDeletionRequestStatus::BlockedByShutdown);
-        }
+        delete_customer_data_locally(ctx, provided_targets, customer_id.0).await
+    }
+}
 
-        // The claim on the store, and the only serialization this resolver
-        // needs: it is taken without awaiting, two concurrent requests cannot
-        // both hold it, and dropping the guard on any path below — including
-        // every early return between here and the registration — releases it.
-        let deletion_guard = match coordination.begin_deletion(customer_id.0) {
-            Ok(guard) => guard,
-            Err(DeletionBlocked::SameCustomer) => {
+async fn delete_customer_data_locally(
+    ctx: &Context<'_>,
+    provided_targets: Vec<String>,
+    customer_id: u32,
+) -> Result<CustomerDataDeletionRequestStatus> {
+    let db = ctx.data::<Database>()?;
+    let ingest_sensors = ctx.data::<IngestSensors>()?.clone();
+    let runtime_ingest_sensors = ctx.data::<RunTimeIngestSensors>()?.clone();
+    let pcap_sensors = ctx.data::<PcapSensors>()?.clone();
+    let stream_direct_channels = ctx.data::<StreamDirectChannels>()?.clone();
+    let peer_notify = ctx.data_opt::<Arc<Notify>>().cloned();
+    let tracker = ctx.data::<TaskTracker>()?.clone();
+    let coordination = ctx.data::<Arc<CustomerDeletionCoordinator>>()?;
+
+    let store = db.customer_deletion_job_store()?;
+    // Asked first, and asked without claiming anything: a node with no
+    // stake in the request answers it instead of refusing it, and a
+    // refusal it never needed must not make a retention cycle give way or
+    // turn another customer away.
+    if store.get(customer_id)?.is_none()
+        && local_targets(&provided_targets, &ingest_sensors)
+            .await
+            .is_empty()
+    {
+        return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
+    }
+
+    // Asked before anything is written. The tracker is closed for the
+    // whole of shutdown, so a request that arrives after it began can
+    // never be finished here, and accepting one would leave an
+    // `InProgress` job behind that nothing in this generation will ever
+    // resolve.
+    if tracker.is_closed() {
+        return Ok(CustomerDataDeletionRequestStatus::BlockedByShutdown);
+    }
+
+    // The claim on the store, and the only serialization this resolver
+    // needs: it is taken without awaiting, two concurrent requests cannot
+    // both hold it, and dropping the guard on any path below — including
+    // every early return between here and the registration — releases it.
+    let deletion_guard = match coordination.begin_deletion(customer_id) {
+        Ok(guard) => guard,
+        Err(DeletionBlocked::SameCustomer) => {
+            return Ok(CustomerDataDeletionRequestStatus::DeletionInProgress);
+        }
+        Err(DeletionBlocked::AnotherDeletion) => {
+            return Ok(CustomerDataDeletionRequestStatus::BlockedByAnotherDeletion);
+        }
+        Err(DeletionBlocked::Retention) => {
+            return Ok(CustomerDataDeletionRequestStatus::BlockedByRetention);
+        }
+    };
+
+    // Read again rather than reused from the check above: that read
+    // answered a question no claim was needed for, and the job store can
+    // have moved on between the two. This one is taken under the claim,
+    // which is what makes it the state the request acts on — without it a
+    // request that saw no job before waiting for the sensor list could
+    // overwrite a deletion that succeeded while it waited.
+    //
+    // Kept whole rather than consumed: it is both what this request reads
+    // its decision off and what the job store is put back to if the
+    // registration below loses a race with shutdown.
+    let previous_job = store.get(customer_id)?;
+    let local_targets = if let Some(job) = &previous_job {
+        match job.status {
+            // This is the persisted job's answer rather than the
+            // coordinator's: an `InProgress` job can outlive the
+            // generation-local claim that originally started it. Startup
+            // recovery resumes such a job, and normal requests report it
+            // as running until it reaches a terminal state.
+            CustomerDataDeletionStatus::InProgress => {
                 return Ok(CustomerDataDeletionRequestStatus::DeletionInProgress);
             }
-            Err(DeletionBlocked::AnotherDeletion) => {
-                return Ok(CustomerDataDeletionRequestStatus::BlockedByAnotherDeletion);
+            CustomerDataDeletionStatus::Succeeded => {
+                return Ok(CustomerDataDeletionRequestStatus::AlreadyCompleted);
             }
-            Err(DeletionBlocked::Retention) => {
-                return Ok(CustomerDataDeletionRequestStatus::BlockedByRetention);
-            }
-        };
-
-        // Read again rather than reused from the check above: that read
-        // answered a question no claim was needed for, and the job store can
-        // have moved on between the two. This one is taken under the claim,
-        // which is what makes it the state the request acts on — without it a
-        // request that saw no job before waiting for the sensor list could
-        // overwrite a deletion that succeeded while it waited.
-        //
-        // Kept whole rather than consumed: it is both what this request reads
-        // its decision off and what the job store is put back to if the
-        // registration below loses a race with shutdown.
-        let previous_job = store.get(customer_id.0)?;
-        let local_targets = if let Some(job) = &previous_job {
-            match job.status {
-                // This is the persisted job's answer rather than the
-                // coordinator's: an `InProgress` job can outlive the
-                // generation-local claim that originally started it. Startup
-                // recovery resumes such a job, and normal requests report it
-                // as running until it reaches a terminal state.
-                CustomerDataDeletionStatus::InProgress => {
-                    return Ok(CustomerDataDeletionRequestStatus::DeletionInProgress);
+            CustomerDataDeletionStatus::Failed => {
+                let provided: HashSet<&str> = provided_targets.iter().map(String::as_str).collect();
+                if !job
+                    .service_fqdn_list
+                    .iter()
+                    .all(|target| provided.contains(target.as_str()))
+                {
+                    return Err(
+                        "Retry request must include every service FQDN from the failed job".into(),
+                    );
                 }
-                CustomerDataDeletionStatus::Succeeded => {
-                    return Ok(CustomerDataDeletionRequestStatus::AlreadyCompleted);
-                }
-                CustomerDataDeletionStatus::Failed => {
-                    let provided: HashSet<&str> =
-                        provided_targets.iter().map(String::as_str).collect();
-                    if !job
-                        .service_fqdn_list
-                        .iter()
-                        .all(|target| provided.contains(target.as_str()))
-                    {
-                        return Err(
-                            "Retry request must include every service FQDN from the failed job"
-                                .into(),
-                        );
-                    }
-                    job.service_fqdn_list.clone()
-                }
+                job.service_fqdn_list.clone()
             }
-        } else {
-            let targets = local_targets(&provided_targets, &ingest_sensors).await;
-            if targets.is_empty() {
-                return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
-            }
-            targets
-        };
-
-        let in_progress = CustomerDataDeletion {
-            service_fqdn_list: local_targets,
-            requested_at: now_nanos(),
-            status: CustomerDataDeletionStatus::InProgress,
-            completed_at: None,
-            error: None,
-        };
-        if previous_job.is_some() {
-            store.update(customer_id.0, &in_progress)?;
-        } else {
-            store.create(customer_id.0, &in_progress)?;
         }
-
-        if let Err(e) = start_customer_deletion_worker(
-            &tracker,
-            deletion_guard,
-            db.clone(),
-            customer_id.0,
-            in_progress.service_fqdn_list,
-            ingest_sensors,
-            runtime_ingest_sensors,
-            pcap_sensors,
-            stream_direct_channels,
-            peer_notify,
-        ) {
-            return refuse_registration(&e, customer_id.0, || {
-                restore_previous_job(&store, customer_id.0, previous_job.as_ref())
-            });
+    } else {
+        let targets = local_targets(&provided_targets, &ingest_sensors).await;
+        if targets.is_empty() {
+            return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
         }
-        Ok(CustomerDataDeletionRequestStatus::Accepted)
+        targets
+    };
+
+    let in_progress = CustomerDataDeletion {
+        service_fqdn_list: local_targets,
+        requested_at: now_nanos(),
+        status: CustomerDataDeletionStatus::InProgress,
+        completed_at: None,
+        error: None,
+    };
+    if previous_job.is_some() {
+        store.update(customer_id, &in_progress)?;
+    } else {
+        store.create(customer_id, &in_progress)?;
     }
+
+    if let Err(e) = start_customer_deletion_worker(
+        &tracker,
+        deletion_guard,
+        db.clone(),
+        customer_id,
+        in_progress.service_fqdn_list,
+        ingest_sensors,
+        runtime_ingest_sensors,
+        pcap_sensors,
+        stream_direct_channels,
+        peer_notify,
+    ) {
+        return refuse_registration(&e, customer_id, || {
+            restore_previous_job(&store, customer_id, previous_job.as_ref())
+        });
+    }
+    Ok(CustomerDataDeletionRequestStatus::Accepted)
 }
 
 /// The service FQDNs of `provided` this node ingests, in the order given.
@@ -936,6 +1290,8 @@ mod tests {
 
     use anyhow::anyhow;
     use giganto_client::publish::stream::{RequestStreamRecord, STREAM_REQUEST_ALL_SENSOR};
+    #[cfg(feature = "cluster")]
+    use mockito::{Matcher, Server};
     use tokio::sync::Notify;
 
     use super::{
@@ -945,6 +1301,14 @@ mod tests {
         restore_previous_job, start_customer_deletion_worker, supervise_worker,
         validate_service_fqdn_list,
     };
+    #[cfg(feature = "cluster")]
+    use super::{
+        CustomerDataDeletionResult, CustomerDataDeletionStatusOutput,
+        PEER_CUSTOMER_DATA_DELETION_RESULT_QUERY, PEER_DELETE_CUSTOMER_DATA_MUTATION,
+        aggregate_deletion_request_statuses, merge_customer_data_deletion_results,
+    };
+    #[cfg(feature = "cluster")]
+    use crate::graphql::StringNumberU32;
     use crate::{
         cancellation::{SpawnError, TaskTracker},
         comm::{
@@ -1133,6 +1497,378 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[cfg(feature = "cluster")]
+    #[test]
+    fn mutation_status_aggregation_follows_cluster_rules() {
+        use CustomerDataDeletionRequestStatus::{
+            Accepted, AlreadyCompleted, BlockedByRetention, BlockedByShutdown,
+            NoLocalTargetOnThisNode,
+        };
+
+        assert_eq!(
+            aggregate_deletion_request_statuses(vec![
+                ("node-b".to_string(), Accepted),
+                ("node-a".to_string(), NoLocalTargetOnThisNode),
+                ("node-c".to_string(), AlreadyCompleted),
+            ])
+            .unwrap(),
+            Accepted
+        );
+        assert_eq!(
+            aggregate_deletion_request_statuses(vec![
+                ("node-b".to_string(), NoLocalTargetOnThisNode),
+                ("node-a".to_string(), NoLocalTargetOnThisNode),
+            ])
+            .unwrap(),
+            NoLocalTargetOnThisNode
+        );
+        assert_eq!(
+            aggregate_deletion_request_statuses(vec![
+                ("node-b".to_string(), AlreadyCompleted),
+                ("node-a".to_string(), NoLocalTargetOnThisNode),
+            ])
+            .unwrap(),
+            AlreadyCompleted
+        );
+
+        let partial = aggregate_deletion_request_statuses(vec![
+            ("node-c".to_string(), BlockedByShutdown),
+            ("node-a".to_string(), Accepted),
+            ("node-b".to_string(), BlockedByRetention),
+        ])
+        .unwrap_err()
+        .message;
+        assert_eq!(
+            partial,
+            "Customer data deletion was accepted by only part of the target Giganto nodes. \
+             Accepted tasks will continue running. Non-accepted statuses: \
+             [(\"node-b\", BlockedByRetention), (\"node-c\", BlockedByShutdown)]"
+        );
+
+        let rejected = aggregate_deletion_request_statuses(vec![
+            ("node-b".to_string(), BlockedByShutdown),
+            ("node-a".to_string(), BlockedByRetention),
+        ])
+        .unwrap_err()
+        .message;
+        assert_eq!(
+            rejected,
+            "Customer data deletion was not accepted by any target Giganto node. Target \
+             statuses: [(\"node-a\", BlockedByRetention), (\"node-b\", BlockedByShutdown)]"
+        );
+    }
+
+    #[cfg(feature = "cluster")]
+    #[test]
+    fn deletion_results_merge_targets_timestamps_status_and_errors() {
+        let first_requested = DateTime::from_timestamp_nanos(10);
+        let later_requested = DateTime::from_timestamp_nanos(20);
+        let first_completed = DateTime::from_timestamp_nanos(30);
+        let later_completed = DateTime::from_timestamp_nanos(40);
+        let merged = merge_customer_data_deletion_results(
+            77,
+            vec![
+                (
+                    "node-b".to_string(),
+                    CustomerDataDeletionResult {
+                        customer_id: StringNumberU32(77),
+                        requested_at: later_requested,
+                        service_fqdn_list: vec![
+                            "reproduce.b.example.test".to_string(),
+                            "piglet.shared.example.test".to_string(),
+                        ],
+                        status: CustomerDataDeletionStatusOutput::Failed,
+                        completed_at: Some(later_completed),
+                        error: Some("disk failure".to_string()),
+                    },
+                ),
+                (
+                    "node-a".to_string(),
+                    CustomerDataDeletionResult {
+                        customer_id: StringNumberU32(77),
+                        requested_at: first_requested,
+                        service_fqdn_list: vec![
+                            "piglet.a.example.test".to_string(),
+                            "piglet.shared.example.test".to_string(),
+                        ],
+                        status: CustomerDataDeletionStatusOutput::Succeeded,
+                        completed_at: Some(first_completed),
+                        error: None,
+                    },
+                ),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(merged.customer_id, StringNumberU32(77));
+        assert_eq!(merged.requested_at, first_requested);
+        assert_eq!(merged.completed_at, Some(later_completed));
+        assert_eq!(merged.status, CustomerDataDeletionStatusOutput::Failed);
+        assert_eq!(
+            merged.service_fqdn_list,
+            [
+                "piglet.a.example.test",
+                "piglet.shared.example.test",
+                "reproduce.b.example.test",
+            ]
+        );
+        assert_eq!(merged.error.as_deref(), Some("node-b: disk failure"));
+
+        let in_progress = merge_customer_data_deletion_results(
+            77,
+            vec![
+                (
+                    "node-a".to_string(),
+                    CustomerDataDeletionResult {
+                        customer_id: StringNumberU32(77),
+                        requested_at: first_requested,
+                        service_fqdn_list: vec!["piglet.a.example.test".to_string()],
+                        status: CustomerDataDeletionStatusOutput::Succeeded,
+                        completed_at: Some(later_completed),
+                        error: None,
+                    },
+                ),
+                (
+                    "node-c".to_string(),
+                    CustomerDataDeletionResult {
+                        customer_id: StringNumberU32(77),
+                        requested_at: later_requested,
+                        service_fqdn_list: Vec::new(),
+                        status: CustomerDataDeletionStatusOutput::InProgress,
+                        completed_at: None,
+                        error: None,
+                    },
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            in_progress.status,
+            CustomerDataDeletionStatusOutput::InProgress
+        );
+        assert_eq!(in_progress.completed_at, None);
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn mutation_broadcasts_original_input_without_requested_at() {
+        let target = "piglet.peer.example.test";
+        let customer_id = 91;
+        let mut server = Server::new_async().await;
+        let expected_body = serde_json::json!({
+            "variables": {
+                "serviceFqdnList": [target],
+                "customerId": customer_id.to_string(),
+                "requestFromPeer": true,
+            },
+            "query": PEER_DELETE_CUSTOMER_DATA_MUTATION,
+            "operationName": "DeleteCustomerDataForPeer",
+        });
+        assert!(expected_body["variables"].get("requestedAt").is_none());
+        let peer = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Json(expected_body))
+            .with_status(200)
+            .with_body(r#"{"data":{"deleteCustomerData":"ACCEPTED"}}"#)
+            .create_async()
+            .await;
+        let schema = TestSchema::new_with_graphql_peer(server.socket_address().port());
+
+        let response = schema
+            .execute(&delete_customer_data_mutation(&[target], customer_id))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        peer.assert_async().await;
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn peer_requests_do_not_relay_recursively() {
+        let mut server = Server::new_async().await;
+        let no_relay = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let schema = TestSchema::new_with_graphql_peer(server.socket_address().port());
+        let response = schema
+            .execute(
+                r#"mutation {
+                    deleteCustomerData(
+                        serviceFqdnList: ["piglet.peer.example.test"]
+                        customerId: "92"
+                        requestFromPeer: true
+                    )
+                }"#,
+            )
+            .await;
+        assert_eq!(
+            response.data.to_string(),
+            "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
+        );
+        let response = schema
+            .execute(
+                r#"query {
+                    customerDataDeletionResult(customerId: "92" requestFromPeer: true) {
+                        customerId
+                    }
+                }"#,
+            )
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.to_string(),
+            "{customerDataDeletionResult: null}"
+        );
+        no_relay.assert_async().await;
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn split_nodes_store_only_local_targets_and_generate_local_timestamps() {
+        let piglet = "piglet.node-a.example.test";
+        let reproduce = "reproduce.node-b.example.test";
+        let first = TestSchema::new_with_ingest_sensors(&[piglet]);
+        let second = TestSchema::new_with_ingest_sensors(&[reproduce]);
+        let request = format!(
+            r#"mutation {{
+                deleteCustomerData(
+                    serviceFqdnList: ["{piglet}", "{reproduce}"]
+                    customerId: "93"
+                    requestFromPeer: true
+                )
+            }}"#
+        );
+
+        let first_response = first.execute(&request).await;
+        let second_response = second.execute(&request).await;
+        assert_eq!(
+            first_response.data.to_string(),
+            "{deleteCustomerData: ACCEPTED}"
+        );
+        assert_eq!(
+            second_response.data.to_string(),
+            "{deleteCustomerData: ACCEPTED}"
+        );
+        let first_job = wait_for_terminal_job(&first.db, 93).await;
+        let second_job = wait_for_terminal_job(&second.db, 93).await;
+        assert_eq!(first_job.service_fqdn_list, [piglet]);
+        assert_eq!(second_job.service_fqdn_list, [reproduce]);
+        assert_ne!(first_job.requested_at, second_job.requested_at);
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn result_query_reads_every_peer_and_merges_node_local_jobs() {
+        let customer_id = 94;
+        let local_target = "piglet.local.example.test";
+        let peer_target = "reproduce.peer.example.test";
+        let local_requested = 10;
+        let local_completed = 30;
+        let peer_requested = 20;
+        let peer_completed = 40;
+        let mut server = Server::new_async().await;
+        let expected_body = serde_json::json!({
+            "variables": {
+                "customerId": customer_id.to_string(),
+                "requestFromPeer": true,
+            },
+            "query": PEER_CUSTOMER_DATA_DELETION_RESULT_QUERY,
+            "operationName": "CustomerDataDeletionResultForPeer",
+        });
+        let peer = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Json(expected_body))
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "data": {
+                        "customerDataDeletionResult": {
+                            "customerId": customer_id.to_string(),
+                            "requestedAt": DateTime::from_timestamp_nanos(peer_requested),
+                            "serviceFqdnList": [peer_target, local_target],
+                            "status": "FAILED",
+                            "completedAt": DateTime::from_timestamp_nanos(peer_completed),
+                            "error": "peer failure",
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let endpoint = server.socket_address();
+        let schema = TestSchema::new_with_graphql_peer(endpoint.port());
+        schema
+            .db
+            .customer_deletion_job_store()
+            .unwrap()
+            .create(
+                customer_id,
+                &CustomerDataDeletion {
+                    service_fqdn_list: vec![local_target.to_string()],
+                    requested_at: local_requested,
+                    status: CustomerDataDeletionStatus::Succeeded,
+                    completed_at: Some(local_completed),
+                    error: None,
+                },
+            )
+            .unwrap();
+
+        let result = customer_data_deletion_result(&schema, customer_id).await;
+        assert_eq!(result["status"], "FAILED");
+        assert_eq!(
+            result["requestedAt"],
+            serde_json::json!(DateTime::from_timestamp_nanos(local_requested))
+        );
+        assert_eq!(
+            result["completedAt"],
+            serde_json::json!(DateTime::from_timestamp_nanos(peer_completed))
+        );
+        assert_eq!(
+            result["serviceFqdnList"],
+            serde_json::json!([local_target, peer_target])
+        );
+        assert_eq!(result["error"], format!("{endpoint}: peer failure"));
+        peer.assert_async().await;
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn peer_communication_failure_is_an_error_but_local_work_continues() {
+        let target = "piglet.local.example.test";
+        let mut server = Server::new_async().await;
+        let peer = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Any)
+            .with_status(500)
+            .create_async()
+            .await;
+        let schema = TestSchema::new_with_graphql_peer(server.socket_address().port());
+        schema
+            .ingest_sensors
+            .write()
+            .await
+            .insert(target.to_string());
+
+        let response = schema
+            .execute(&delete_customer_data_mutation(&[target], 95))
+            .await;
+        assert_eq!(response.data.to_string(), "null");
+        assert!(
+            response.errors[0]
+                .message
+                .contains("Peer giganto's response status is not success")
+        );
+        assert_eq!(
+            wait_for_terminal_job(&schema.db, 95).await.status,
+            CustomerDataDeletionStatus::Succeeded
+        );
+        peer.assert_async().await;
     }
 
     #[tokio::test]
