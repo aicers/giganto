@@ -8,6 +8,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Added the `bootroot`-only `customerDataDeletionResult` GraphQL query to
+  retrieve a customer's persisted deletion status and failure details on the
+  local node. Cluster-wide aggregation is not yet included.
 - Added the `bootroot`-only `deleteCustomerData` GraphQL mutation for
   asynchronous, node-local customer data deletion. The mutation validates and
   deduplicates Piglet and Reproduce service FQDNs, deletes their event ranges

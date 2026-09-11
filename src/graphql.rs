@@ -82,6 +82,7 @@ pub struct Query(
     sysmon::SysmonQuery,
     security::SecurityLogQuery,
     netflow::NetflowQuery,
+    #[cfg(feature = "bootroot")] customer_deletion::CustomerDeletionQuery,
 );
 
 #[derive(Default, MergedObject)]
