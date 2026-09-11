@@ -3579,6 +3579,27 @@ mod tests {
             tokio::time::timeout(limit, wait).await.is_ok()
         }
 
+        /// Unwraps `outcome`, reporting `what` with the captured log when it
+        /// is an error.
+        ///
+        /// A wait that ran out says only that something did not happen; what
+        /// the generation did instead is in the log. Reading it here keeps
+        /// every call site's failure path down to the call itself, rather
+        /// than a closure that has to name the log again at each one.
+        fn in_time<T, E>(what: &str, logs: &Arc<Mutex<Vec<u8>>>, outcome: Result<T, E>) -> T {
+            outcome.unwrap_or_else(|_| panic!("{what}, got: {}", captured(logs)))
+        }
+
+        /// Awaits `fut` under [`READY_TIMEOUT`], reporting `what` with the
+        /// captured log when it does not finish in time.
+        async fn before_timeout<T>(
+            what: &str,
+            logs: &Arc<Mutex<Vec<u8>>>,
+            fut: impl Future<Output = T>,
+        ) -> T {
+            in_time(what, logs, tokio::time::timeout(READY_TIMEOUT, fut).await)
+        }
+
         struct TestQuery;
 
         #[Object]
@@ -7250,23 +7271,19 @@ mod tests {
                         .await
                         .expect("the subscription should open its stream")
                         .expect("accept the subscription stream");
-                    let started = tokio::time::timeout(
-                        READY_TIMEOUT,
+                    let started = before_timeout(
+                        "the subscription should have started",
+                        &logs,
                         receive_semi_supervised_stream_start_message(&mut stream),
                     )
                     .await
-                    .unwrap_or_else(|_| {
-                        panic!(
-                            "the subscription should have started, got: {}",
-                            captured(&logs)
-                        )
-                    })
                     .expect("the start message should decode");
+                    let output = captured(&logs);
                     assert_eq!(
                         started,
                         RequestStreamRecord::Log,
-                        "the subscription should have started on the record it asked for, got: {}",
-                        captured(&logs)
+                        "the subscription should have started on the record it asked for, \
+                         got: {output}"
                     );
 
                     // Bound on IPv4 because the listener is: quinn will not
@@ -7294,56 +7311,42 @@ mod tests {
                         .expect("serialize the log batch");
                     send_raw(&mut send, &batch).await.expect("send the marker");
 
-                    let acked =
-                        tokio::time::timeout(READY_TIMEOUT, receive_ack_timestamp(&mut recv))
-                            .await
-                            .unwrap_or_else(|_| {
-                                panic!(
-                                    "the generation should acknowledge the marker, got: {}",
-                                    captured(&logs)
-                                )
-                            })
-                            .expect("the acknowledgement should decode");
+                    let acked = before_timeout(
+                        "the generation should acknowledge the marker",
+                        &logs,
+                        receive_ack_timestamp(&mut recv),
+                    )
+                    .await
+                    .expect("the acknowledgement should decode");
+                    let output = captured(&logs);
                     assert_eq!(
-                        acked,
-                        TIMESTAMP,
-                        "the acknowledgement should name the marker's timestamp, got: {}",
-                        captured(&logs)
+                        acked, TIMESTAMP,
+                        "the acknowledgement should name the marker's timestamp, got: {output}"
                     );
 
-                    let frame = tokio::time::timeout(
-                        READY_TIMEOUT,
+                    let frame = before_timeout(
+                        "the subscription should have carried the marker",
+                        &logs,
                         receive_semi_supervised_data(&mut stream),
                     )
                     .await
-                    .unwrap_or_else(|_| {
-                        panic!(
-                            "the subscription should have carried the marker, got: {}",
-                            captured(&logs)
-                        )
-                    })
                     .expect("the published frame should arrive");
                     let (published_at, published_sensor, published) =
                         decode_semi_supervised(&frame);
+                    let output = captured(&logs);
                     assert_eq!(
-                        published_at,
-                        TIMESTAMP,
-                        "the published frame should carry the marker's timestamp, got: {}",
-                        captured(&logs)
+                        published_at, TIMESTAMP,
+                        "the published frame should carry the marker's timestamp, got: {output}"
                     );
                     assert_eq!(
-                        published_sensor,
-                        expected_sensor,
+                        published_sensor, expected_sensor,
                         "the publish payload should name the sensor the ingest certificate \
-                         resolves to, got: {}",
-                        captured(&logs)
+                         resolves to, got: {output}"
                     );
                     assert_eq!(
-                        published,
-                        marker_bytes,
+                        published, marker_bytes,
                         "the subscription should have carried the record that was ingested, \
-                         got: {}",
-                        captured(&logs)
+                         got: {output}"
                     );
 
                     // The peer connection, the ingest stream and the
@@ -7354,21 +7357,19 @@ mod tests {
                     let expected_sequence = full_marker_sequence(GenerationEnd::Terminate);
                     wait_for_logs(&logs, &expected_sequence).await;
                     let markers = phase_markers(&logs);
+                    let output = captured(&logs);
                     assert_eq!(
                         markers.len(),
                         expected_sequence.len(),
                         "the target should have run the six shutdown phases once, got: \
-                         {markers:#?}, log: {}",
-                        captured(&logs)
+                         {markers:#?}, log: {output}"
                     );
                     for (marker, needle) in markers.iter().zip(&expected_sequence) {
                         assert!(
                             marker.contains(needle),
-                            "expected a marker for {needle:?}, got: {markers:#?}, log: {}",
-                            captured(&logs)
+                            "expected a marker for {needle:?}, got: {markers:#?}, log: {output}"
                         );
                     }
-                    let output = captured(&logs);
                     for forbidden in FORBIDDEN_RECORDS {
                         assert!(
                             !output.contains(forbidden),
@@ -7404,22 +7405,18 @@ mod tests {
                     publish_endpoint.wait_idle().await;
                 }
             );
-            target_outcome
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "live connections should not hold the target lifecycle open, got: {}",
-                        captured(&logs)
-                    )
-                })
-                .expect("the target lifecycle should not fail");
-            support_outcome
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "the supporting lifecycle should end on its terminate intent, got: {}",
-                        captured(&logs)
-                    )
-                })
-                .expect("the supporting lifecycle should not fail");
+            in_time(
+                "live connections should not hold the target lifecycle open",
+                &logs,
+                target_outcome,
+            )
+            .expect("the target lifecycle should not fail");
+            in_time(
+                "the supporting lifecycle should end on its terminate intent",
+                &logs,
+                support_outcome,
+            )
+            .expect("the supporting lifecycle should not fail");
 
             // Each node shut its own store down exactly once, and neither was
             // asked for a host action.
