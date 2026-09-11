@@ -292,10 +292,10 @@ impl CustomerDeletionQuery {
         ctx: &Context<'_>,
         customer_id: StringNumberU32,
     ) -> Result<Option<CustomerDataDeletionResult>> {
-        let db = ctx.data::<Database>()?.clone();
+        let db = ctx.data::<Database>()?;
         let store = db.customer_deletion_job_store()?;
         let customer_id_bytes = customer_id.0.to_be_bytes();
-        let Some(job) = crate::graphql::ready(store.get(customer_id.0)).await? else {
+        let Some(job) = store.get(customer_id.0)? else {
             return Ok(None);
         };
 
@@ -305,14 +305,15 @@ impl CustomerDeletionQuery {
             CustomerDataDeletionStatus::Failed => CustomerDataDeletionStatusOutput::Failed,
         };
 
-        Ok(Some(CustomerDataDeletionResult {
+        crate::graphql::ready(Ok(Some(CustomerDataDeletionResult {
             customer_id: StringNumberU32(u32::from_be_bytes(customer_id_bytes)),
             requested_at: DateTime::from_timestamp_nanos(job.requested_at),
             service_fqdn_list: job.service_fqdn_list,
             status,
             completed_at: job.completed_at.map(DateTime::from_timestamp_nanos),
             error: job.error,
-        }))
+        })))
+        .await
     }
 }
 
@@ -345,7 +346,7 @@ impl CustomerDeletionMutation {
         customer_id: StringNumberU32,
     ) -> Result<CustomerDataDeletionRequestStatus> {
         let provided_targets = validate_service_fqdn_list(service_fqdn_list)?;
-        let db = ctx.data::<Database>()?.clone();
+        let db = ctx.data::<Database>()?;
         let ingest_sensors = ctx.data::<IngestSensors>()?.clone();
         let runtime_ingest_sensors = ctx.data::<RunTimeIngestSensors>()?.clone();
         let pcap_sensors = ctx.data::<PcapSensors>()?.clone();
