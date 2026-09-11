@@ -2594,6 +2594,100 @@ mod tests {
         String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 log output")
     }
 
+    thread_local! {
+        /// Whether the panic hook reports to this thread's subscriber.
+        static REPORT_PANICS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Holds panic reporting open on the thread that asked for it.
+    struct PanicReports;
+
+    impl Drop for PanicReports {
+        fn drop(&mut self) {
+            REPORT_PANICS.with(|on| on.set(false));
+        }
+    }
+
+    /// Routes panics raised on this thread into the captured log, for as long
+    /// as the returned guard is held.
+    ///
+    /// Rust's panic hook writes to stderr, which no assertion here reads, and
+    /// a task the generation only keeps a dropped handle of can panic without
+    /// leaving anything in the log at all. Reporting the panic through
+    /// `tracing` is what puts it where a test asserting that a shutdown
+    /// carried no panic can actually see it.
+    ///
+    /// The hook is installed once for the process and never taken back off:
+    /// [`std::panic::set_hook`] is global, and a test that restored the
+    /// previous hook on its way out could drop one a parallel test had
+    /// installed in the meantime. What is scoped is the reporting. The hook
+    /// forwards to the previous one either way and logs only on a thread that
+    /// asked it to, which lines up with the capturing subscriber — that is
+    /// thread-local too — so a panic reported here reaches the buffer of the
+    /// test standing on this thread and a parallel test's panics stay out of
+    /// it.
+    ///
+    /// Threads are what this covers, not the process: a panic on a blocking or
+    /// database thread is raised somewhere that never opted in, and goes to
+    /// stderr alone.
+    fn report_panics_to_logs() -> PanicReports {
+        static HOOK: std::sync::Once = std::sync::Once::new();
+        HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                // Cleared across the report, so that a panic raised by the
+                // reporting itself cannot re-enter this hook without end.
+                if REPORT_PANICS.with(|on| on.replace(false)) {
+                    let payload = info.payload();
+                    let message = payload
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                        .unwrap_or("a payload that is not a string");
+                    let location = info
+                        .location()
+                        .map_or_else(|| "an unknown location".to_string(), ToString::to_string);
+                    // Not a `message` field: `tracing` reserves that name for
+                    // the record's own text, which is the needle to search for.
+                    error!(location = %location, panic = message, "panicked at");
+                    REPORT_PANICS.with(|on| on.set(true));
+                }
+                previous(info);
+            }));
+        });
+        REPORT_PANICS.with(|on| on.set(true));
+        PanicReports
+    }
+
+    /// A task that panics where only its join handle would have seen it is
+    /// reported to the captured log.
+    ///
+    /// What [`report_panics_to_logs`] exists for is the assertion that a
+    /// window carried no panic, and a search that could never match would pass
+    /// that assertion for the wrong reason. So the reporting is checked here
+    /// rather than assumed wherever it is relied on.
+    #[tokio::test]
+    async fn a_panicking_task_is_reported_to_the_captured_log() {
+        let (logs, _guard) = capture_logs();
+        let _panic_reports = report_panics_to_logs();
+
+        let joined = tokio::spawn(async { panic!("a task that could not go on") }).await;
+
+        assert!(
+            joined.is_err_and(|e| e.is_panic()),
+            "the spawned task should have panicked"
+        );
+        let output = captured(&logs);
+        assert!(
+            output.contains("panicked at"),
+            "the panic should have reached the log, got: {output}"
+        );
+        assert!(
+            output.contains("a task that could not go on"),
+            "the report should carry the panic's own message, got: {output}"
+        );
+    }
+
     #[cfg(feature = "bootroot")]
     fn in_progress_job(target: &str, requested_at: i64) -> storage::CustomerDataDeletion {
         storage::CustomerDataDeletion {
@@ -3304,19 +3398,58 @@ mod tests {
             path.to_str().expect("utf-8 path").to_string()
         }
 
+        /// The `{hostname}` label the single-node tests' PKI is named after.
+        const DEFAULT_NODE_HOSTNAME: &str = "node1";
+
+        /// The service label every node certificate these tests generate
+        /// carries.
+        ///
+        /// Ingest classifies a connection as a PCAP sensor by looking for
+        /// `piglet` in the certificate's service name, so a node certificate
+        /// reused as a client certificate is a plain sensor precisely because
+        /// the label is this one.
+        const NODE_SERVICE: &str = "giganto";
+
+        /// The SAN DNS name of the node called `hostname`.
+        ///
+        /// Four labels, the way the `bootroot` build reads them:
+        /// `{instance}.{service}.{hostname}.{domain}`, with everything after
+        /// the third dot taken as the domain.
+        fn node_san(hostname: &str) -> String {
+            format!("001.{NODE_SERVICE}.{hostname}.example.test")
+        }
+
         /// Writes a self-signed node certificate carrying both identities
         /// giganto knows how to read — the legacy `{service}@{hostname}` CN of
         /// the default build and the four-label SAN DNS name of the `bootroot`
         /// build — so the generation resolves a node name in either build.
         fn write_node_pki(dir: &Path) -> CertPaths {
+            write_node_pki_named(dir, DEFAULT_NODE_HOSTNAME)
+        }
+
+        /// The same certificate, named after `hostname` in both identities.
+        ///
+        /// A cluster test needs the two nodes told apart under either build,
+        /// so the one label that feeds both the CN and the SAN is what a
+        /// caller chooses. The files go under `dir`, which is what keeps two
+        /// nodes' material from landing on the same paths.
+        fn write_node_pki_named(dir: &Path, hostname: &str) -> CertPaths {
             let key_pair = KeyPair::generate().expect("generate key pair");
-            let mut params =
-                CertificateParams::new(vec!["001.giganto.node1.example.test".to_string()])
-                    .expect("cert params");
+            // Both names a node can be dialed by. The peer subsystem announces
+            // itself to the cluster under the identity of the build it was
+            // compiled for — the SAN under `bootroot`, the bare CN hostname
+            // otherwise — and the node that dials back verifies the
+            // certificate against exactly that name. A certificate carrying
+            // only one of them leaves half the cluster unable to reach this
+            // node under one of the two builds. `bootroot` reads the first SAN
+            // that parses into four labels, so the bare hostname alongside it
+            // changes nothing there.
+            let mut params = CertificateParams::new(vec![node_san(hostname), hostname.to_string()])
+                .expect("cert params");
             params.distinguished_name = rcgen::DistinguishedName::new();
             params
                 .distinguished_name
-                .push(DnType::CommonName, "giganto@node1");
+                .push(DnType::CommonName, format!("{NODE_SERVICE}@{hostname}"));
             params.extended_key_usages = vec![
                 ExtendedKeyUsagePurpose::ServerAuth,
                 ExtendedKeyUsagePurpose::ClientAuth,
@@ -3337,6 +3470,21 @@ mod tests {
             }
         }
 
+        /// Puts each node's certificate in the other's CA bundle.
+        ///
+        /// Each node's certificate is its own trust anchor, so on its own a
+        /// node trusts nothing but itself and the mTLS handshake between two
+        /// of them fails in both directions. Extending the bundles rather than
+        /// replacing them keeps each node trusting its own material, which is
+        /// what the client certificate a test presents to its own node relies
+        /// on.
+        fn trust_each_other(one: &mut CertPaths, other: &mut CertPaths) {
+            let one_cas = one.ca_certs_paths.clone();
+            one.ca_certs_paths
+                .extend(other.ca_certs_paths.iter().cloned());
+            other.ca_certs_paths.extend(one_cas);
+        }
+
         /// Port 0 on the loopback: the kernel picks a free port at bind time,
         /// so no port has to be reserved and nothing depends on which it picks.
         fn ephemeral_addr() -> SocketAddr {
@@ -3353,6 +3501,35 @@ mod tests {
             let listener =
                 std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve port");
             listener.local_addr().expect("local addr")
+        }
+
+        /// `N` loopback addresses QUIC listeners can be named at in advance.
+        ///
+        /// [`free_addr`] reserves its port with a TCP listener, and ingest,
+        /// publish and peer all bind UDP: the two port namespaces are
+        /// separate, so a port free for one says nothing about the other. The
+        /// sockets are bound only to learn which ports the kernel handed out
+        /// and are released together at the end of this call, before any
+        /// address is used and so before any lifecycle starts, leaving the
+        /// listeners that are told to bind them free to do so.
+        ///
+        /// All `N` are held at once rather than reserved one at a time,
+        /// because the kernel is free to hand the same port back the moment it
+        /// is released: a caller that asked twice could be given one port for
+        /// two listeners, and the second bind would fail on an address a test
+        /// had already promised to something else.
+        fn free_udp_addrs<const N: usize>() -> [SocketAddr; N] {
+            let reserved: Vec<std::net::UdpSocket> = (0..N)
+                .map(|_| {
+                    std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve udp port")
+                })
+                .collect();
+            reserved
+                .iter()
+                .map(|socket| socket.local_addr().expect("local addr"))
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("one address per reserved socket")
         }
 
         fn test_settings(dir: &Path) -> Settings {
@@ -3400,14 +3577,54 @@ mod tests {
             fs::write(&settings.cfg_path, toml).expect("write config file");
         }
 
-        fn test_process_context(dir: &Path, notify_terminate: Arc<Notify>) -> ProcessContext {
+        /// The same file, with the `peers` array the peer subsystem edits.
+        ///
+        /// Serde renders a list of peers as an array of tables, and
+        /// `insert_toml_peers` — the production writer that records a peer
+        /// discovered during the init exchange — looks for `peers` as an
+        /// inline array and fails on anything else. So the array is rendered
+        /// here in the shape that writer expects, and it is written even when
+        /// it is empty, because a node that starts with no peers is precisely
+        /// the one that needs somewhere to record the first peer it meets.
+        ///
+        /// The array goes last because everything `Config` serializes is a
+        /// plain key and value, so nothing is left after it that TOML would
+        /// read as belonging to a table.
+        fn write_config_file_with_peers(settings: &Settings) {
+            let mut config = settings.config.clone();
+            let peers = config.peers.take().unwrap_or_default();
+            let toml = toml::to_string(&config).expect("serialize config");
+            let entries = peers
+                .iter()
+                .map(|peer| {
+                    format!(
+                        "{{ addr = \"{}\", hostname = \"{}\" }}",
+                        peer.addr, peer.hostname
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            fs::write(&settings.cfg_path, format!("{toml}peers = [{entries}]\n"))
+                .expect("write config file");
+        }
+
+        /// The process-wide state one node's generations borrow, built from
+        /// PKI a test has already written.
+        ///
+        /// Separate from [`test_process_context`] because a cluster test has
+        /// to generate both nodes' certificates before either node's CA bundle
+        /// is complete, so it cannot let the context build its own.
+        fn process_context_from(
+            cert_paths: CertPaths,
+            notify_terminate: Arc<Notify>,
+        ) -> ProcessContext {
             install_crypto_provider();
-            ProcessContext::new(
-                write_node_pki(dir),
-                notify_terminate,
-                Arc::new(Notify::new()),
-            )
-            .expect("the generated PKI should build a process context")
+            ProcessContext::new(cert_paths, notify_terminate, Arc::new(Notify::new()))
+                .expect("the generated PKI should build a process context")
+        }
+
+        fn test_process_context(dir: &Path, notify_terminate: Arc<Notify>) -> ProcessContext {
+            process_context_from(write_node_pki(dir), notify_terminate)
         }
 
         fn test_database(data_dir: &Path) -> storage::Database {
@@ -3454,6 +3671,42 @@ mod tests {
                 }
             };
             tokio::time::timeout(limit, wait).await.is_ok()
+        }
+
+        /// Unwraps `outcome`, reporting `what` with the captured log when it
+        /// is an error.
+        ///
+        /// A wait that ran out says only that something did not happen; what
+        /// the generation did instead is in the log. Reading it here keeps
+        /// every call site's failure path down to the call itself, rather
+        /// than a closure that has to name the log again at each one.
+        fn in_time<T, E>(what: &str, logs: &Arc<Mutex<Vec<u8>>>, outcome: Result<T, E>) -> T {
+            outcome.unwrap_or_else(|_| panic!("{what}, got: {}", captured(logs)))
+        }
+
+        /// Awaits `fut` under [`READY_TIMEOUT`], reporting `what` with the
+        /// captured log when it does not finish in time.
+        async fn before_timeout<T>(
+            what: &str,
+            logs: &Arc<Mutex<Vec<u8>>>,
+            fut: impl Future<Output = T>,
+        ) -> T {
+            in_time(what, logs, tokio::time::timeout(READY_TIMEOUT, fut).await)
+        }
+
+        /// [`before_timeout`], for a future whose value is itself fallible.
+        ///
+        /// A transition that never arrived and one that arrived broken are the
+        /// same thing to a test waiting on it — neither happened — and the
+        /// captured log is what says which. Unwrapping both layers under one
+        /// `what` keeps the two from being reported differently at a call site
+        /// that cares about neither distinction.
+        async fn ok_before_timeout<T, E>(
+            what: &str,
+            logs: &Arc<Mutex<Vec<u8>>>,
+            fut: impl Future<Output = Result<T, E>>,
+        ) -> T {
+            in_time(what, logs, before_timeout(what, logs, fut).await)
         }
 
         struct TestQuery;
@@ -6804,7 +7057,7 @@ mod tests {
                         config_client(&certs).expect("build the sensor client config"),
                     );
                     let conn = endpoint
-                        .connect(ingest_addr, "001.giganto.node1.example.test")
+                        .connect(ingest_addr, &node_san(DEFAULT_NODE_HOSTNAME))
                         .expect("the sensor client config should build")
                         .await
                         .expect("the sensor should reach the ingest listener");
@@ -6864,6 +7117,495 @@ mod tests {
                 stored,
                 vec![expected],
                 "the event the generation acknowledged did not survive its shutdown"
+            );
+        }
+
+        /// A generation with a peer connection, an ingest stream and the
+        /// realtime subscription that ingest feeds all live at once ends on a
+        /// terminate intent.
+        ///
+        /// Each of the three has a test of its own above; what is untested
+        /// until here is the three of them together. Every one of them is a
+        /// connection the generation has to let go of on its way out — the
+        /// outbound peer connection to the supporting node, the sensor's
+        /// ingest stream, and the publish subscription registered in the
+        /// direct-stream channels — and the drain waits for all three through
+        /// their subsystems' entry tasks. A connection nothing released would
+        /// hold the target lifecycle to `GENERATION_TIMEOUT` rather than
+        /// ending it on the intent.
+        ///
+        /// Two nodes, two lifecycles, one process. Nothing here is about the
+        /// OS process boundary: the peer connection only needs a second node
+        /// that is really listening, really presents a certificate of its own
+        /// and really completes the init exchange, which is what the
+        /// supporting lifecycle is for.
+        #[tokio::test]
+        #[allow(clippy::too_many_lines)]
+        async fn active_ingest_publish_and_peer_connections_terminate_cleanly() {
+            use giganto_client::{
+                RawEventKind,
+                connection::client_handshake,
+                frame::send_raw,
+                ingest::{log::Log, receive_ack_timestamp, send_record_header},
+                publish::{
+                    receive_semi_supervised_data, receive_semi_supervised_stream_start_message,
+                    send_stream_request,
+                    stream::{
+                        RequestSemiSupervisedStream, RequestStreamRecord,
+                        STREAM_REQUEST_ALL_SENSOR, StreamRequestPayload,
+                    },
+                },
+            };
+
+            use crate::server::{config_client, peer_dedup_key_from_cert, service_fqdn_from_cert};
+
+            /// The `{hostname}` of the node that is only here to be a peer.
+            const SUPPORT_HOSTNAME: &str = "support";
+            /// The `{hostname}` of the node whose teardown is under test.
+            ///
+            /// Neither name is a prefix of the other, so the two identities
+            /// these generate are told apart by their whole value under either
+            /// build rather than by where they stop agreeing.
+            const TARGET_HOSTNAME: &str = "target";
+
+            const TIMESTAMP: i64 = 1_700_000_000_000_000_000;
+            /// What makes the one record this test ingests its own, so that
+            /// the ACK and the publish payload are both answers to it and not
+            /// to something else the generation happened to carry.
+            const MARKER_KIND: &str = "generation teardown marker";
+
+            /// The three records whose absence says the target's shutdown was
+            /// the ordinary one.
+            ///
+            /// Deliberately just these three. The supporting node loses its
+            /// connection to the target the moment the target is gone, and the
+            /// warning it may emit about retrying is the behavior it is
+            /// supposed to have; a condition widened to "no WARN and no ERROR"
+            /// would read that as a failure.
+            const FORBIDDEN_RECORDS: [&str; 3] = [ABNORMAL_RECORD, DEGRADED_RECORD, "panicked at"];
+
+            /// What a node logs once a peer it learned of in the init exchange
+            /// is in its peer list and in its configuration file, the write
+            /// having already succeeded by the time this is emitted.
+            const PEER_LIST_RECORDED: &str = "Peer list updated";
+
+            /// Splits one semi-supervised frame into its three parts.
+            ///
+            /// The frame is a timestamp, a bincode-encoded sensor and the
+            /// record, concatenated. `comm::publish` has a decoder of its own,
+            /// but it belongs to that module's tests, and widening either it
+            /// or a production API to reach here would put a test helper in
+            /// the crate's surface for the sake of one assertion.
+            ///
+            /// A frame that will not decode is a payload failure like any
+            /// other, so the log the lifecycles share is reported with it.
+            fn decode_semi_supervised(
+                frame: &[u8],
+                logs: &Arc<Mutex<Vec<u8>>>,
+            ) -> (i64, String, Vec<u8>) {
+                assert!(
+                    frame.len() >= size_of::<i64>(),
+                    "a semi-supervised frame opens with a timestamp, got: {frame:?}, log: {}",
+                    captured(logs)
+                );
+                let (timestamp, rest) = frame.split_at(size_of::<i64>());
+                let timestamp =
+                    i64::from_le_bytes(timestamp.try_into().expect("eight bytes of timestamp"));
+                let mut cursor = std::io::Cursor::new(rest);
+                let sensor: String = in_time(
+                    "the frame's sensor should decode",
+                    logs,
+                    bincode::deserialize_from(&mut cursor),
+                );
+                let consumed = usize::try_from(cursor.position()).expect("frame position");
+                (timestamp, sensor, rest[consumed..].to_vec())
+            }
+
+            let support_dir = tempdir().expect("tempdir");
+            let target_dir = tempdir().expect("tempdir");
+
+            // Both certificates exist before either node's trust is settled,
+            // because each one's bundle has to name the other.
+            let mut support_pki = write_node_pki_named(support_dir.path(), SUPPORT_HOSTNAME);
+            let mut target_pki = write_node_pki_named(target_dir.path(), TARGET_HOSTNAME);
+            trust_each_other(&mut support_pki, &mut target_pki);
+
+            let support_terminate = Arc::new(Notify::new());
+            let target_terminate = Arc::new(Notify::new());
+            let support_process = process_context_from(support_pki, Arc::clone(&support_terminate));
+            let target_process = process_context_from(target_pki, Arc::clone(&target_terminate));
+
+            // Every address is known before either lifecycle starts: the
+            // clients have to name the target's listeners, and the target's
+            // configuration has to name the supporting node's peer listener.
+            // Drawn in one call so that no two of the six can be the same
+            // port.
+            let [
+                support_peer_addr,
+                target_peer_addr,
+                target_ingest_addr,
+                target_publish_addr,
+                support_ingest_addr,
+                support_publish_addr,
+            ] = free_udp_addrs();
+
+            let mut support_settings = test_settings(support_dir.path());
+            support_settings.config.visible.graphql_srv_addr = free_addr();
+            support_settings.config.visible.ingest_srv_addr = support_ingest_addr;
+            support_settings.config.visible.publish_srv_addr = support_publish_addr;
+            support_settings.config.peer_srv_addr = Some(support_peer_addr);
+            // The supporting node bootstraps from nothing: it learns about the
+            // target from the init exchange the target opens, which is what
+            // gives its own configuration file a peer to record.
+            support_settings.config.peers = None;
+            write_config_file_with_peers(&support_settings);
+
+            let mut target_settings = test_settings(target_dir.path());
+            target_settings.config.visible.graphql_srv_addr = free_addr();
+            target_settings.config.visible.ingest_srv_addr = target_ingest_addr;
+            target_settings.config.visible.publish_srv_addr = target_publish_addr;
+            target_settings.config.peer_srv_addr = Some(target_peer_addr);
+            // The hostname is the SAN DNS name of the supporting node's
+            // certificate because it is the name the TLS handshake verifies
+            // that certificate against, not merely a label.
+            target_settings.config.peers = Some(HashSet::from([peer::PeerIdentity {
+                addr: support_peer_addr,
+                hostname: node_san(SUPPORT_HOSTNAME),
+            }]));
+            // One event per acknowledgement, so the single marker below
+            // produces an ACK on its own and the test needs no second record
+            // to flush one out.
+            target_settings.config.visible.ack_transmission = 1;
+            write_config_file_with_peers(&target_settings);
+
+            // What the target's peer subsystem calls the supporting node once
+            // it has read its certificate: the legacy CN hostname under a
+            // default build, the whole SAN under `bootroot`. The address in
+            // the same record is a loopback IP with no port, so it is the same
+            // for both nodes and says nothing about which one answered.
+            let support_dedup_key = peer_dedup_key_from_cert(&support_process.cert)
+                .expect("the supporting node's certificate should carry a peer identity");
+            // The sensor ingest derives from the client certificate. The node
+            // certificate is what the clients present, and its service label
+            // is `giganto`, so ingest takes the connection for a plain sensor
+            // rather than a PCAP one.
+            let (_service, expected_sensor) = service_fqdn_from_cert(&target_process.cert)
+                .expect("the ingest client certificate should carry a sensor");
+
+            let support_peer_ready = format!("INFO listening on {support_peer_addr}");
+            let target_peer_ready = format!("INFO listening on {target_peer_addr}");
+            let target_ingest_ready = format!("Ingest listening on {target_ingest_addr}");
+            let target_publish_ready = format!("Publish listening on {target_publish_addr}");
+            // The whole name, with the role that follows it: a record whose
+            // name merely starts with the supporting node's does not match
+            // this, which is what keeps two nodes named alike apart.
+            let peer_established = format!(
+                "Peer connection established to {}/{support_dedup_key} (client role)",
+                Ipv4Addr::LOCALHOST
+            );
+
+            let marker = Log {
+                kind: MARKER_KIND.to_string(),
+                log: b"active ingest, publish and peer".to_vec(),
+            };
+            let marker_bytes = bincode::serialize(&marker).expect("serialize the marker");
+
+            let (logs, _guard) = capture_logs();
+            // A panic anywhere the two lifecycles reach on this thread ends up
+            // in that same log, which is what the assertion below is able to
+            // read. Without this the search for a panic finds nothing because
+            // nothing put one there, not because none happened.
+            let _panic_reports = report_panics_to_logs();
+            let support_effects = RecordingEffects::new();
+            let target_effects = RecordingEffects::new();
+            let (support_outcome, target_outcome, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut support_settings, &support_process, &support_effects)
+                ),
+                async {
+                    // The supporting node is already bound to the address the
+                    // target's configuration names before the target starts,
+                    // so the target's first dial connects. A dial that found
+                    // nothing there would be retried only after
+                    // `PEER_RETRY_INTERVAL`, and the rest of this test would
+                    // wait it out for nothing.
+                    wait_for_logs(&logs, &[support_peer_ready.as_str()]).await;
+                    tokio::time::timeout(
+                        GENERATION_TIMEOUT,
+                        run_lifecycle(&mut target_settings, &target_process, &target_effects),
+                    )
+                    .await
+                },
+                async {
+                    wait_for_logs(
+                        &logs,
+                        &[
+                            target_ingest_ready.as_str(),
+                            target_publish_ready.as_str(),
+                            target_peer_ready.as_str(),
+                            peer_established.as_str(),
+                            // The supporting node, having written the peer it
+                            // just met back to its configuration file. Waited
+                            // on here rather than left to finish on its own,
+                            // so the file the assertion at the end reads is
+                            // one the peer subsystem was done with before the
+                            // shutdown that follows could cancel the write.
+                            PEER_LIST_RECORDED,
+                        ],
+                    )
+                    .await;
+
+                    let certs = Arc::clone(
+                        &tls_reload::get_current_tls_material(&target_process.tls_watch).certs,
+                    );
+                    let target_name = node_san(TARGET_HOSTNAME);
+
+                    // The subscription first: the marker is ingested only once
+                    // the direct-stream channel is registered, and the start
+                    // message is what says it is.
+                    let mut publish_endpoint =
+                        quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
+                            .expect("create the publish endpoint");
+                    publish_endpoint.set_default_client_config(
+                        config_client(&certs).expect("build the publish client config"),
+                    );
+                    // Every step of getting a client onto the target is a
+                    // state transition like any the lifecycle makes, and one
+                    // that stalls would hold this branch open past the
+                    // lifecycle timeouts the other two are under.
+                    let publish_conn = ok_before_timeout(
+                        "the subscriber should reach the publish listener",
+                        &logs,
+                        publish_endpoint
+                            .connect(target_publish_addr, &target_name)
+                            .expect("the publish client config should build"),
+                    )
+                    .await;
+                    let (mut publish_send, _publish_recv) = ok_before_timeout(
+                        "the publish version handshake should succeed",
+                        &logs,
+                        client_handshake(&publish_conn, env!("CARGO_PKG_VERSION")),
+                    )
+                    .await;
+                    ok_before_timeout(
+                        "the semi-supervised stream request should be sent",
+                        &logs,
+                        send_stream_request(
+                            &mut publish_send,
+                            StreamRequestPayload::SemiSupervised {
+                                record_type: RequestStreamRecord::Log,
+                                request: RequestSemiSupervisedStream {
+                                    start: 0,
+                                    sensor: Some(vec![STREAM_REQUEST_ALL_SENSOR.to_string()]),
+                                },
+                            },
+                        ),
+                    )
+                    .await;
+                    let mut stream = ok_before_timeout(
+                        "the subscription should open its stream",
+                        &logs,
+                        publish_conn.accept_uni(),
+                    )
+                    .await;
+                    let started = ok_before_timeout(
+                        "the subscription should have started",
+                        &logs,
+                        receive_semi_supervised_stream_start_message(&mut stream),
+                    )
+                    .await;
+                    let output = captured(&logs);
+                    assert_eq!(
+                        started,
+                        RequestStreamRecord::Log,
+                        "the subscription should have started on the record it asked for, \
+                         got: {output}"
+                    );
+
+                    // Bound on IPv4 because the listener is: quinn will not
+                    // send from a v6 socket to a v4 peer.
+                    let mut ingest_endpoint =
+                        quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
+                            .expect("create the sensor endpoint");
+                    ingest_endpoint.set_default_client_config(
+                        config_client(&certs).expect("build the sensor client config"),
+                    );
+                    let ingest_conn = ok_before_timeout(
+                        "the sensor should reach the ingest listener",
+                        &logs,
+                        ingest_endpoint
+                            .connect(target_ingest_addr, &target_name)
+                            .expect("the sensor client config should build"),
+                    )
+                    .await;
+                    let _ingest_handshake = ok_before_timeout(
+                        "the ingest version handshake should succeed",
+                        &logs,
+                        client_handshake(&ingest_conn, env!("CARGO_PKG_VERSION")),
+                    )
+                    .await;
+                    let (mut send, mut recv) = ok_before_timeout(
+                        "the sensor stream should open",
+                        &logs,
+                        ingest_conn.open_bi(),
+                    )
+                    .await;
+                    ok_before_timeout(
+                        "the record header should be sent",
+                        &logs,
+                        send_record_header(&mut send, RawEventKind::Log),
+                    )
+                    .await;
+                    let batch = bincode::serialize(&vec![(TIMESTAMP, marker_bytes.clone())])
+                        .expect("serialize the log batch");
+                    ok_before_timeout(
+                        "the marker should be sent",
+                        &logs,
+                        send_raw(&mut send, &batch),
+                    )
+                    .await;
+
+                    let acked = ok_before_timeout(
+                        "the generation should acknowledge the marker",
+                        &logs,
+                        receive_ack_timestamp(&mut recv),
+                    )
+                    .await;
+                    let output = captured(&logs);
+                    assert_eq!(
+                        acked, TIMESTAMP,
+                        "the acknowledgement should name the marker's timestamp, got: {output}"
+                    );
+
+                    let frame = ok_before_timeout(
+                        "the subscription should have carried the marker",
+                        &logs,
+                        receive_semi_supervised_data(&mut stream),
+                    )
+                    .await;
+                    let (published_at, published_sensor, published) =
+                        decode_semi_supervised(&frame, &logs);
+                    let output = captured(&logs);
+                    assert_eq!(
+                        published_at, TIMESTAMP,
+                        "the published frame should carry the marker's timestamp, got: {output}"
+                    );
+                    assert_eq!(
+                        published_sensor, expected_sensor,
+                        "the publish payload should name the sensor the ingest certificate \
+                         resolves to, got: {output}"
+                    );
+                    assert_eq!(
+                        published, marker_bytes,
+                        "the subscription should have carried the record that was ingested, \
+                         got: {output}"
+                    );
+
+                    // The peer connection, the ingest stream and the
+                    // subscription are all still open here, and stay open:
+                    // they are what the target's shutdown has to release.
+                    target_terminate.notify_one();
+
+                    let expected_sequence = full_marker_sequence(GenerationEnd::Terminate);
+                    wait_for_logs(&logs, &expected_sequence).await;
+                    let markers = phase_markers(&logs);
+                    let output = captured(&logs);
+                    assert_eq!(
+                        markers.len(),
+                        expected_sequence.len(),
+                        "the target should have run the six shutdown phases once, got: \
+                         {markers:#?}, log: {output}"
+                    );
+                    for (marker, needle) in markers.iter().zip(&expected_sequence) {
+                        assert!(
+                            marker.contains(needle),
+                            "expected a marker for {needle:?}, got: {markers:#?}, log: {output}"
+                        );
+                    }
+                    for forbidden in FORBIDDEN_RECORDS {
+                        assert!(
+                            !output.contains(forbidden),
+                            "the target's shutdown should have carried no {forbidden:?}, \
+                             got: {output}"
+                        );
+                    }
+                    // Each of the three subsystems holding a live connection
+                    // announced that it was letting go of it. Read here, in
+                    // the same window as the markers above, because the
+                    // supporting node emits these lines too once it is asked
+                    // to stop, and after that point the log no longer says
+                    // which node released what.
+                    for released in [
+                        "Shutting down ingest",
+                        "Shutting down publish",
+                        "Shutting down peer",
+                    ] {
+                        assert!(
+                            output.contains(released),
+                            "the target should have released every live connection, expected \
+                             {released:?} in: {output}"
+                        );
+                    }
+
+                    // Only now: the supporting node's own six markers would
+                    // otherwise land in the log the assertions above read.
+                    support_terminate.notify_one();
+
+                    // Bounded like every other wait here: a drain that never
+                    // settles is a listener left behind, which is the thing
+                    // this is checking, not a reason to hang.
+                    ingest_conn.close(0_u32.into(), b"test done");
+                    before_timeout(
+                        "the sensor endpoint should drain",
+                        &logs,
+                        ingest_endpoint.wait_idle(),
+                    )
+                    .await;
+                    publish_conn.close(0_u32.into(), b"test done");
+                    before_timeout(
+                        "the publish endpoint should drain",
+                        &logs,
+                        publish_endpoint.wait_idle(),
+                    )
+                    .await;
+                }
+            );
+            in_time(
+                "live connections should not hold the target lifecycle open",
+                &logs,
+                target_outcome,
+            )
+            .expect("the target lifecycle should not fail");
+            in_time(
+                "the supporting lifecycle should end on its terminate intent",
+                &logs,
+                support_outcome,
+            )
+            .expect("the supporting lifecycle should not fail");
+
+            // Each node shut its own store down exactly once, and neither was
+            // asked for a host action.
+            assert_eq!(target_effects.calls(), vec![EffectCall::ShutdownDatabase]);
+            assert_eq!(support_effects.calls(), vec![EffectCall::ShutdownDatabase]);
+
+            // The peer the supporting node met is in the file it started from.
+            // The init exchange is only half of what the peer subsystem does
+            // with a configuration file, and the writing half fails on a
+            // `peers` array in the wrong shape — quietly, as a logged error on
+            // a path no connection depends on. Read after both lifecycles have
+            // returned, so nothing is still writing it.
+            let persisted: Config = toml::from_str(
+                &fs::read_to_string(&support_settings.cfg_path)
+                    .expect("read the supporting config"),
+            )
+            .expect("the supporting config should still parse after the peer subsystem wrote it");
+            let recorded = persisted.peers.unwrap_or_default();
+            assert!(
+                recorded.iter().any(|peer| peer.addr == target_peer_addr),
+                "the supporting node should have recorded the target it met at \
+                 {target_peer_addr}, got: {recorded:?}, log: {}",
+                captured(&logs)
             );
         }
 
