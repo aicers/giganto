@@ -2594,6 +2594,100 @@ mod tests {
         String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 log output")
     }
 
+    thread_local! {
+        /// Whether the panic hook reports to this thread's subscriber.
+        static REPORT_PANICS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Holds panic reporting open on the thread that asked for it.
+    struct PanicReports;
+
+    impl Drop for PanicReports {
+        fn drop(&mut self) {
+            REPORT_PANICS.with(|on| on.set(false));
+        }
+    }
+
+    /// Routes panics raised on this thread into the captured log, for as long
+    /// as the returned guard is held.
+    ///
+    /// Rust's panic hook writes to stderr, which no assertion here reads, and
+    /// a task the generation only keeps a dropped handle of can panic without
+    /// leaving anything in the log at all. Reporting the panic through
+    /// `tracing` is what puts it where a test asserting that a shutdown
+    /// carried no panic can actually see it.
+    ///
+    /// The hook is installed once for the process and never taken back off:
+    /// [`std::panic::set_hook`] is global, and a test that restored the
+    /// previous hook on its way out could drop one a parallel test had
+    /// installed in the meantime. What is scoped is the reporting. The hook
+    /// forwards to the previous one either way and logs only on a thread that
+    /// asked it to, which lines up with the capturing subscriber — that is
+    /// thread-local too — so a panic reported here reaches the buffer of the
+    /// test standing on this thread and a parallel test's panics stay out of
+    /// it.
+    ///
+    /// Threads are what this covers, not the process: a panic on a blocking or
+    /// database thread is raised somewhere that never opted in, and goes to
+    /// stderr alone.
+    fn report_panics_to_logs() -> PanicReports {
+        static HOOK: std::sync::Once = std::sync::Once::new();
+        HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                // Cleared across the report, so that a panic raised by the
+                // reporting itself cannot re-enter this hook without end.
+                if REPORT_PANICS.with(|on| on.replace(false)) {
+                    let payload = info.payload();
+                    let message = payload
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                        .unwrap_or("a payload that is not a string");
+                    let location = info
+                        .location()
+                        .map_or_else(|| "an unknown location".to_string(), ToString::to_string);
+                    // Not a `message` field: `tracing` reserves that name for
+                    // the record's own text, which is the needle to search for.
+                    error!(location = %location, panic = message, "panicked at");
+                    REPORT_PANICS.with(|on| on.set(true));
+                }
+                previous(info);
+            }));
+        });
+        REPORT_PANICS.with(|on| on.set(true));
+        PanicReports
+    }
+
+    /// A task that panics where only its join handle would have seen it is
+    /// reported to the captured log.
+    ///
+    /// What [`report_panics_to_logs`] exists for is the assertion that a
+    /// window carried no panic, and a search that could never match would pass
+    /// that assertion for the wrong reason. So the reporting is checked here
+    /// rather than assumed wherever it is relied on.
+    #[tokio::test]
+    async fn a_panicking_task_is_reported_to_the_captured_log() {
+        let (logs, _guard) = capture_logs();
+        let _panic_reports = report_panics_to_logs();
+
+        let joined = tokio::spawn(async { panic!("a task that could not go on") }).await;
+
+        assert!(
+            joined.is_err_and(|e| e.is_panic()),
+            "the spawned task should have panicked"
+        );
+        let output = captured(&logs);
+        assert!(
+            output.contains("panicked at"),
+            "the panic should have reached the log, got: {output}"
+        );
+        assert!(
+            output.contains("a task that could not go on"),
+            "the report should carry the panic's own message, got: {output}"
+        );
+    }
+
     #[cfg(feature = "bootroot")]
     fn in_progress_job(target: &str, requested_at: i64) -> storage::CustomerDataDeletion {
         storage::CustomerDataDeletion {
@@ -3598,6 +3692,21 @@ mod tests {
             fut: impl Future<Output = T>,
         ) -> T {
             in_time(what, logs, tokio::time::timeout(READY_TIMEOUT, fut).await)
+        }
+
+        /// [`before_timeout`], for a future whose value is itself fallible.
+        ///
+        /// A transition that never arrived and one that arrived broken are the
+        /// same thing to a test waiting on it — neither happened — and the
+        /// captured log is what says which. Unwrapping both layers under one
+        /// `what` keeps the two from being reported differently at a call site
+        /// that cares about neither distinction.
+        async fn ok_before_timeout<T, E>(
+            what: &str,
+            logs: &Arc<Mutex<Vec<u8>>>,
+            fut: impl Future<Output = Result<T, E>>,
+        ) -> T {
+            in_time(what, logs, before_timeout(what, logs, fut).await)
         }
 
         struct TestQuery;
@@ -7087,17 +7196,27 @@ mod tests {
             /// but it belongs to that module's tests, and widening either it
             /// or a production API to reach here would put a test helper in
             /// the crate's surface for the sake of one assertion.
-            fn decode_semi_supervised(frame: &[u8]) -> (i64, String, Vec<u8>) {
+            ///
+            /// A frame that will not decode is a payload failure like any
+            /// other, so the log the lifecycles share is reported with it.
+            fn decode_semi_supervised(
+                frame: &[u8],
+                logs: &Arc<Mutex<Vec<u8>>>,
+            ) -> (i64, String, Vec<u8>) {
                 assert!(
                     frame.len() >= size_of::<i64>(),
-                    "a semi-supervised frame opens with a timestamp, got: {frame:?}"
+                    "a semi-supervised frame opens with a timestamp, got: {frame:?}, log: {}",
+                    captured(logs)
                 );
                 let (timestamp, rest) = frame.split_at(size_of::<i64>());
                 let timestamp =
                     i64::from_le_bytes(timestamp.try_into().expect("eight bytes of timestamp"));
                 let mut cursor = std::io::Cursor::new(rest);
-                let sensor: String =
-                    bincode::deserialize_from(&mut cursor).expect("decode the frame's sensor");
+                let sensor: String = in_time(
+                    "the frame's sensor should decode",
+                    logs,
+                    bincode::deserialize_from(&mut cursor),
+                );
                 let consumed = usize::try_from(cursor.position()).expect("frame position");
                 (timestamp, sensor, rest[consumed..].to_vec())
             }
@@ -7192,6 +7311,11 @@ mod tests {
             let marker_bytes = bincode::serialize(&marker).expect("serialize the marker");
 
             let (logs, _guard) = capture_logs();
+            // A panic anywhere the two lifecycles reach on this thread ends up
+            // in that same log, which is what the assertion below is able to
+            // read. Without this the search for a panic finds nothing because
+            // nothing put one there, not because none happened.
+            let _panic_reports = report_panics_to_logs();
             let support_effects = RecordingEffects::new();
             let target_effects = RecordingEffects::new();
             let (support_outcome, target_outcome, ()) = tokio::join!(
@@ -7246,38 +7370,51 @@ mod tests {
                     publish_endpoint.set_default_client_config(
                         config_client(&certs).expect("build the publish client config"),
                     );
-                    let publish_conn = publish_endpoint
-                        .connect(target_publish_addr, &target_name)
-                        .expect("the publish client config should build")
-                        .await
-                        .expect("the subscriber should reach the publish listener");
-                    let (mut publish_send, _publish_recv) =
-                        client_handshake(&publish_conn, env!("CARGO_PKG_VERSION"))
-                            .await
-                            .expect("the publish version handshake should succeed");
-                    send_stream_request(
-                        &mut publish_send,
-                        StreamRequestPayload::SemiSupervised {
-                            record_type: RequestStreamRecord::Log,
-                            request: RequestSemiSupervisedStream {
-                                start: 0,
-                                sensor: Some(vec![STREAM_REQUEST_ALL_SENSOR.to_string()]),
-                            },
-                        },
+                    // Every step of getting a client onto the target is a
+                    // state transition like any the lifecycle makes, and one
+                    // that stalls would hold this branch open past the
+                    // lifecycle timeouts the other two are under.
+                    let publish_conn = ok_before_timeout(
+                        "the subscriber should reach the publish listener",
+                        &logs,
+                        publish_endpoint
+                            .connect(target_publish_addr, &target_name)
+                            .expect("the publish client config should build"),
                     )
-                    .await
-                    .expect("send the semi-supervised stream request");
-                    let mut stream = tokio::time::timeout(READY_TIMEOUT, publish_conn.accept_uni())
-                        .await
-                        .expect("the subscription should open its stream")
-                        .expect("accept the subscription stream");
-                    let started = before_timeout(
+                    .await;
+                    let (mut publish_send, _publish_recv) = ok_before_timeout(
+                        "the publish version handshake should succeed",
+                        &logs,
+                        client_handshake(&publish_conn, env!("CARGO_PKG_VERSION")),
+                    )
+                    .await;
+                    ok_before_timeout(
+                        "the semi-supervised stream request should be sent",
+                        &logs,
+                        send_stream_request(
+                            &mut publish_send,
+                            StreamRequestPayload::SemiSupervised {
+                                record_type: RequestStreamRecord::Log,
+                                request: RequestSemiSupervisedStream {
+                                    start: 0,
+                                    sensor: Some(vec![STREAM_REQUEST_ALL_SENSOR.to_string()]),
+                                },
+                            },
+                        ),
+                    )
+                    .await;
+                    let mut stream = ok_before_timeout(
+                        "the subscription should open its stream",
+                        &logs,
+                        publish_conn.accept_uni(),
+                    )
+                    .await;
+                    let started = ok_before_timeout(
                         "the subscription should have started",
                         &logs,
                         receive_semi_supervised_stream_start_message(&mut stream),
                     )
-                    .await
-                    .expect("the start message should decode");
+                    .await;
                     let output = captured(&logs);
                     assert_eq!(
                         started,
@@ -7294,45 +7431,61 @@ mod tests {
                     ingest_endpoint.set_default_client_config(
                         config_client(&certs).expect("build the sensor client config"),
                     );
-                    let ingest_conn = ingest_endpoint
-                        .connect(target_ingest_addr, &target_name)
-                        .expect("the sensor client config should build")
-                        .await
-                        .expect("the sensor should reach the ingest listener");
-                    client_handshake(&ingest_conn, env!("CARGO_PKG_VERSION"))
-                        .await
-                        .expect("the ingest version handshake should succeed");
-                    let (mut send, mut recv) =
-                        ingest_conn.open_bi().await.expect("open the sensor stream");
-                    send_record_header(&mut send, RawEventKind::Log)
-                        .await
-                        .expect("send the record header");
+                    let ingest_conn = ok_before_timeout(
+                        "the sensor should reach the ingest listener",
+                        &logs,
+                        ingest_endpoint
+                            .connect(target_ingest_addr, &target_name)
+                            .expect("the sensor client config should build"),
+                    )
+                    .await;
+                    let _ingest_handshake = ok_before_timeout(
+                        "the ingest version handshake should succeed",
+                        &logs,
+                        client_handshake(&ingest_conn, env!("CARGO_PKG_VERSION")),
+                    )
+                    .await;
+                    let (mut send, mut recv) = ok_before_timeout(
+                        "the sensor stream should open",
+                        &logs,
+                        ingest_conn.open_bi(),
+                    )
+                    .await;
+                    ok_before_timeout(
+                        "the record header should be sent",
+                        &logs,
+                        send_record_header(&mut send, RawEventKind::Log),
+                    )
+                    .await;
                     let batch = bincode::serialize(&vec![(TIMESTAMP, marker_bytes.clone())])
                         .expect("serialize the log batch");
-                    send_raw(&mut send, &batch).await.expect("send the marker");
+                    ok_before_timeout(
+                        "the marker should be sent",
+                        &logs,
+                        send_raw(&mut send, &batch),
+                    )
+                    .await;
 
-                    let acked = before_timeout(
+                    let acked = ok_before_timeout(
                         "the generation should acknowledge the marker",
                         &logs,
                         receive_ack_timestamp(&mut recv),
                     )
-                    .await
-                    .expect("the acknowledgement should decode");
+                    .await;
                     let output = captured(&logs);
                     assert_eq!(
                         acked, TIMESTAMP,
                         "the acknowledgement should name the marker's timestamp, got: {output}"
                     );
 
-                    let frame = before_timeout(
+                    let frame = ok_before_timeout(
                         "the subscription should have carried the marker",
                         &logs,
                         receive_semi_supervised_data(&mut stream),
                     )
-                    .await
-                    .expect("the published frame should arrive");
+                    .await;
                     let (published_at, published_sensor, published) =
-                        decode_semi_supervised(&frame);
+                        decode_semi_supervised(&frame, &logs);
                     let output = captured(&logs);
                     assert_eq!(
                         published_at, TIMESTAMP,
@@ -7399,10 +7552,23 @@ mod tests {
                     // otherwise land in the log the assertions above read.
                     support_terminate.notify_one();
 
+                    // Bounded like every other wait here: a drain that never
+                    // settles is a listener left behind, which is the thing
+                    // this is checking, not a reason to hang.
                     ingest_conn.close(0_u32.into(), b"test done");
-                    ingest_endpoint.wait_idle().await;
+                    before_timeout(
+                        "the sensor endpoint should drain",
+                        &logs,
+                        ingest_endpoint.wait_idle(),
+                    )
+                    .await;
                     publish_conn.close(0_u32.into(), b"test done");
-                    publish_endpoint.wait_idle().await;
+                    before_timeout(
+                        "the publish endpoint should drain",
+                        &logs,
+                        publish_endpoint.wait_idle(),
+                    )
+                    .await;
                 }
             );
             in_time(
