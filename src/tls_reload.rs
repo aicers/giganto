@@ -840,7 +840,7 @@ mod listener_reload_contract_tests {
     /// and, unlike the primitive-level tests above, exercises the real
     /// `Server::run` loop rather than a standalone `Endpoint`.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::single_match, clippy::too_many_lines)]
     async fn ingest_server_run_reloads_tls_via_watch_end_to_end() {
         use std::sync::Arc;
 
@@ -941,9 +941,14 @@ mod listener_reload_contract_tests {
         for _ in 0..40 {
             sleep(Duration::from_millis(50)).await;
             let probe = client_endpoint(&set_b.client);
-            if try_connect(&probe, server_addr).await.is_ok() {
-                applied = true;
-                break;
+            match try_connect(&probe, server_addr).await {
+                Ok(conn) => {
+                    conn.close(0u32.into(), b"probe");
+                    probe.wait_idle().await;
+                    applied = true;
+                    break;
+                }
+                Err(_) => {}
             }
         }
         assert!(
@@ -986,7 +991,7 @@ mod listener_reload_contract_tests {
     /// channel, and applies it to new QUIC handshakes while preserving
     /// existing connections.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::single_match, clippy::too_many_lines)]
     async fn publish_server_run_reloads_tls_via_watch_end_to_end() {
         use std::sync::Arc;
 
@@ -1074,9 +1079,14 @@ mod listener_reload_contract_tests {
         for _ in 0..40 {
             sleep(Duration::from_millis(50)).await;
             let probe = client_endpoint(&set_b.client);
-            if try_connect(&probe, server_addr).await.is_ok() {
-                applied = true;
-                break;
+            match try_connect(&probe, server_addr).await {
+                Ok(conn) => {
+                    conn.close(0u32.into(), b"probe");
+                    probe.wait_idle().await;
+                    applied = true;
+                    break;
+                }
+                Err(_) => {}
             }
         }
         assert!(
@@ -1119,7 +1129,7 @@ mod listener_reload_contract_tests {
     /// the single test that ties the trigger -> watch and
     /// watch -> listener halves together and proves the end-to-end path.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::single_match, clippy::too_many_lines)]
     async fn reload_handle_reload_propagates_through_watch_to_ingest_listener_end_to_end() {
         use std::{fs, sync::Arc};
 
@@ -1237,9 +1247,14 @@ mod listener_reload_contract_tests {
         for _ in 0..40 {
             sleep(Duration::from_millis(50)).await;
             let probe = client_endpoint(&set_b.client);
-            if try_connect(&probe, server_addr).await.is_ok() {
-                applied = true;
-                break;
+            match try_connect(&probe, server_addr).await {
+                Ok(conn) => {
+                    conn.close(0u32.into(), b"probe");
+                    probe.wait_idle().await;
+                    applied = true;
+                    break;
+                }
+                Err(_) => {}
             }
         }
         assert!(
@@ -1282,7 +1297,7 @@ mod listener_reload_contract_tests {
     /// path rather than sending refreshed material directly through the
     /// watch, so the full chain is exercised for publish as well as ingest.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::single_match, clippy::too_many_lines)]
     async fn reload_handle_reload_propagates_through_watch_to_publish_listener_end_to_end() {
         use std::{fs, sync::Arc};
 
@@ -1386,9 +1401,14 @@ mod listener_reload_contract_tests {
         for _ in 0..40 {
             sleep(Duration::from_millis(50)).await;
             let probe = client_endpoint(&set_b.client);
-            if try_connect(&probe, server_addr).await.is_ok() {
-                applied = true;
-                break;
+            match try_connect(&probe, server_addr).await {
+                Ok(conn) => {
+                    conn.close(0u32.into(), b"probe");
+                    probe.wait_idle().await;
+                    applied = true;
+                    break;
+                }
+                Err(_) => {}
             }
         }
         assert!(
