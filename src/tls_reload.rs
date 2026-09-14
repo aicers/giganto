@@ -941,7 +941,9 @@ mod listener_reload_contract_tests {
         for _ in 0..40 {
             sleep(Duration::from_millis(50)).await;
             let probe = client_endpoint(&set_b.client);
-            if try_connect(&probe, server_addr).await.is_ok() {
+            if let Ok(conn) = try_connect(&probe, server_addr).await {
+                conn.close(0u32.into(), b"probe");
+                probe.wait_idle().await;
                 applied = true;
                 break;
             }
@@ -1074,7 +1076,9 @@ mod listener_reload_contract_tests {
         for _ in 0..40 {
             sleep(Duration::from_millis(50)).await;
             let probe = client_endpoint(&set_b.client);
-            if try_connect(&probe, server_addr).await.is_ok() {
+            if let Ok(conn) = try_connect(&probe, server_addr).await {
+                conn.close(0u32.into(), b"probe");
+                probe.wait_idle().await;
                 applied = true;
                 break;
             }
@@ -1237,7 +1241,9 @@ mod listener_reload_contract_tests {
         for _ in 0..40 {
             sleep(Duration::from_millis(50)).await;
             let probe = client_endpoint(&set_b.client);
-            if try_connect(&probe, server_addr).await.is_ok() {
+            if let Ok(conn) = try_connect(&probe, server_addr).await {
+                conn.close(0u32.into(), b"probe");
+                probe.wait_idle().await;
                 applied = true;
                 break;
             }
@@ -1386,7 +1392,9 @@ mod listener_reload_contract_tests {
         for _ in 0..40 {
             sleep(Duration::from_millis(50)).await;
             let probe = client_endpoint(&set_b.client);
-            if try_connect(&probe, server_addr).await.is_ok() {
+            if let Ok(conn) = try_connect(&probe, server_addr).await {
+                conn.close(0u32.into(), b"probe");
+                probe.wait_idle().await;
                 applied = true;
                 break;
             }
