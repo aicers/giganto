@@ -753,98 +753,14 @@ fn key_from_pem(pem: &str) -> PrivateKeyDer<'static> {
         .expect("the key file should hold a private key")
 }
 
-/// SHA-256 of a certificate's DER encoding.
-#[allow(
-    clippy::chunks_exact_to_as_chunks,
-    clippy::many_single_char_names,
-    clippy::unreadable_literal
-)]
-fn certificate_fingerprint(cert: &CertificateDer<'_>) -> [u8; 32] {
-    const INITIAL: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
-    const ROUND: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-        0xc67178f2,
-    ];
-
-    let bytes = cert.as_ref();
-    let bit_len = u64::try_from(bytes.len())
-        .expect("certificate length fits in u64")
-        .checked_mul(8)
-        .expect("certificate bit length fits in u64");
-    let mut padded = bytes.to_vec();
-    padded.push(0x80);
-    while padded.len() % 64 != 56 {
-        padded.push(0);
-    }
-    padded.extend_from_slice(&bit_len.to_be_bytes());
-
-    let mut state = INITIAL;
-    for chunk in padded.chunks_exact(64) {
-        let mut words = [0_u32; 64];
-        for (word, input) in words[..16].iter_mut().zip(chunk.chunks_exact(4)) {
-            *word = u32::from_be_bytes(input.try_into().expect("four-byte SHA-256 word"));
-        }
-        for index in 16..64 {
-            let s0 = words[index - 15].rotate_right(7)
-                ^ words[index - 15].rotate_right(18)
-                ^ (words[index - 15] >> 3);
-            let s1 = words[index - 2].rotate_right(17)
-                ^ words[index - 2].rotate_right(19)
-                ^ (words[index - 2] >> 10);
-            words[index] = words[index - 16]
-                .wrapping_add(s0)
-                .wrapping_add(words[index - 7])
-                .wrapping_add(s1);
-        }
-
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
-        for (constant, word) in ROUND.into_iter().zip(words) {
-            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let choice = (e & f) ^ (!e & g);
-            let temp1 = h
-                .wrapping_add(sum1)
-                .wrapping_add(choice)
-                .wrapping_add(constant)
-                .wrapping_add(word);
-            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let majority = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = sum0.wrapping_add(majority);
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
-        }
-        for (value, compressed) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
-            *value = value.wrapping_add(compressed);
-        }
-    }
-
-    let mut digest = [0_u8; 32];
-    for (output, value) in digest.chunks_exact_mut(4).zip(state) {
-        output.copy_from_slice(&value.to_be_bytes());
-    }
-    digest
-}
-
 /// Opens one bounded mTLS connection and returns the presented server leaf's
-/// fingerprint. Material A remains a valid client identity after the server
+/// DER. Material A remains a valid client identity after the server
 /// rotates because both leaves are signed by the same test CA.
-async fn server_leaf_fingerprint(node: &Node, addr: SocketAddr, pki: &TestPki) -> [u8; 32] {
+async fn server_leaf_certificate(
+    node: &Node,
+    addr: SocketAddr,
+    pki: &TestPki,
+) -> CertificateDer<'static> {
     let handshake = async {
         let mut roots = rustls::RootCertStore::empty();
         for cert in certs_from_pem(&pki.ca_pem) {
@@ -874,11 +790,11 @@ async fn server_leaf_fingerprint(node: &Node, addr: SocketAddr, pki: &TestPki) -
             .peer_certificates()
             .and_then(|certificates| certificates.first())
             .ok_or_else(|| "the GraphQL TLS peer presented no leaf certificate".to_string())?;
-        Ok::<_, String>(certificate_fingerprint(leaf))
+        Ok::<_, String>(leaf.clone())
     };
 
     match tokio::time::timeout(REQUEST_TIMEOUT, handshake).await {
-        Ok(Ok(fingerprint)) => fingerprint,
+        Ok(Ok(certificate)) => certificate,
         Ok(Err(reason)) => panic!("{}: {reason}\n{}", node.label, node.diagnostics()),
         Err(error) => panic!(
             "{}: the GraphQL TLS handshake did not finish within {REQUEST_TIMEOUT:?}: {error}\n{}",
@@ -1200,17 +1116,15 @@ async fn process_sighup_tls_reload() {
         .into_iter()
         .next()
         .expect("material B has a leaf certificate");
-    let fingerprint_a = certificate_fingerprint(&cert_a);
-    let fingerprint_b = certificate_fingerprint(&cert_b);
     assert_ne!(
-        fingerprint_a,
-        fingerprint_b,
+        cert_a,
+        cert_b,
         "fresh node key pairs should produce distinguishable leaves\n{}",
         node.diagnostics(),
     );
     assert_eq!(
-        server_leaf_fingerprint(&node, graphql_addr, &pki).await,
-        fingerprint_a,
+        server_leaf_certificate(&node, graphql_addr, &pki).await,
+        cert_a,
         "the child should initially serve material A\n{}",
         node.diagnostics(),
     );
@@ -1246,19 +1160,22 @@ async fn process_sighup_tls_reload() {
         node.diagnostics(),
     );
     let reload_log = node.log();
-    for marker in [
-        "shutting the database down",
-        "final action, returning from the lifecycle",
-    ] {
+    for marker in ["shutting the database down", "final action"] {
         assert!(
             !reload_log.contains(marker),
-            "SIGHUP should not enter the terminate path ({marker:?})\n{}",
+            "SIGHUP should not end the generation ({marker:?})\n{}",
             node.diagnostics(),
         );
     }
     assert_eq!(
-        server_leaf_fingerprint(&node, graphql_addr, &pki).await,
-        fingerprint_b,
+        reload_log.matches("Data store started").count(),
+        1,
+        "SIGHUP should not start a second generation\n{}",
+        node.diagnostics(),
+    );
+    assert_eq!(
+        server_leaf_certificate(&node, graphql_addr, &pki).await,
+        cert_b,
         "the reloaded GraphQL listener should serve material B\n{}",
         node.diagnostics(),
     );
@@ -1284,8 +1201,8 @@ async fn process_sighup_tls_reload() {
         node.diagnostics(),
     );
     assert_eq!(
-        server_leaf_fingerprint(&node, graphql_addr, &pki).await,
-        fingerprint_b,
+        server_leaf_certificate(&node, graphql_addr, &pki).await,
+        cert_b,
         "a rejected key/certificate pair should leave material B in service\n{}",
         node.diagnostics(),
     );
