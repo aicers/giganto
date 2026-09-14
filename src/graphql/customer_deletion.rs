@@ -1289,9 +1289,13 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::anyhow;
+    #[cfg(feature = "cluster")]
+    use async_graphql_poem::GraphQL;
     use giganto_client::publish::stream::{RequestStreamRecord, STREAM_REQUEST_ALL_SENSOR};
     #[cfg(feature = "cluster")]
     use mockito::{Matcher, Server};
+    #[cfg(feature = "cluster")]
+    use poem::{Route, Server as PoemServer, listener::TcpAcceptor};
     use tokio::sync::Notify;
 
     use super::{
@@ -1682,6 +1686,49 @@ mod tests {
         assert!(response.errors.is_empty(), "{:?}", response.errors);
         assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
         peer.assert_async().await;
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn relay_retries_failed_job_after_sensor_ownership_removal() {
+        let target = "piglet.peer.example.test";
+        let customer_id = 96;
+        let peer = TestSchema::new_with_ingest_sensors(&[]);
+        let failed = CustomerDataDeletion {
+            service_fqdn_list: vec![target.to_string()],
+            requested_at: 1,
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(2),
+            error: Some("old failure".to_string()),
+        };
+        peer.db
+            .customer_deletion_job_store()
+            .unwrap()
+            .create(customer_id, &failed)
+            .unwrap();
+        assert!(!peer.ingest_sensors.read().await.contains(target));
+
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let acceptor = TcpAcceptor::from_std(listener).unwrap();
+        let app = Route::new().at("/graphql", GraphQL::new(peer.schema.clone()));
+        let server = tokio::spawn(PoemServer::new_with_acceptor(acceptor).run(app));
+        let initiating_node = TestSchema::new_with_graphql_peer(port);
+
+        let response = initiating_node
+            .execute(&delete_customer_data_mutation(&[target], customer_id))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+
+        let completed = wait_for_terminal_job(&peer.db, customer_id).await;
+        assert!(completed.requested_at > failed.requested_at);
+        assert_eq!(completed.service_fqdn_list, [target]);
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+
+        server.abort();
+        let _ = server.await;
     }
 
     #[cfg(feature = "cluster")]
