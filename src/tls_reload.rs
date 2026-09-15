@@ -556,6 +556,12 @@ mod listener_reload_contract_tests {
     /// settings. No test here waits a round out, so the value only has to be
     /// non-zero.
     const TEST_DRAIN_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+    /// Test-only hang guard for server-task joins. This is not a production
+    /// deadline for subsystem drains; it is a deliberately loose upper bound
+    /// to fail tests that would otherwise hang forever. One minute is a
+    /// practical, generous choice that follows the order of magnitude used
+    /// by other test timeouts in the repository (e.g. generation tests' timeouts).
+    const SERVER_TASK_HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(60);
 
     static INSTALL_PROVIDER: Once = Once::new();
 
@@ -840,7 +846,7 @@ mod listener_reload_contract_tests {
     /// and, unlike the primitive-level tests above, exercises the real
     /// `Server::run` loop rather than a standalone `Endpoint`.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::match_wild_err_arm, clippy::too_many_lines)]
     async fn ingest_server_run_reloads_tls_via_watch_end_to_end() {
         use std::sync::Arc;
 
@@ -975,11 +981,13 @@ mod listener_reload_contract_tests {
 
         pre_reload_conn.close(0u32.into(), b"done");
         post_reload_conn.close(0u32.into(), b"done");
+        client_a.wait_idle().await;
+        client_b.wait_idle().await;
         ingest_token.cancel();
-        timeout(Duration::from_secs(5), server_task)
-            .await
-            .expect("ingest server should drain")
-            .expect("ingest server task should not panic");
+        match timeout(SERVER_TASK_HANG_GUARD, server_task).await {
+            Ok(join_res) => join_res.expect("ingest server task should not panic"),
+            Err(_) => panic!("server task did not return before the test hang guard"),
+        }
     }
 
     /// End-to-end counterpart of the ingest test for the publish listener.
@@ -988,7 +996,7 @@ mod listener_reload_contract_tests {
     /// channel, and applies it to new QUIC handshakes while preserving
     /// existing connections.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::match_wild_err_arm, clippy::too_many_lines)]
     async fn publish_server_run_reloads_tls_via_watch_end_to_end() {
         use std::sync::Arc;
 
@@ -1110,8 +1118,16 @@ mod listener_reload_contract_tests {
 
         pre_reload_conn.close(0u32.into(), b"done");
         post_reload_conn.close(0u32.into(), b"done");
+        client_a.wait_idle().await;
+        client_b.wait_idle().await;
         publish_token.cancel();
-        let _ = timeout(Duration::from_secs(3), server_task).await;
+        match timeout(SERVER_TASK_HANG_GUARD, server_task).await {
+            Ok(join_res) => match join_res {
+                Ok(run_res) => run_res.expect("publish server run returned an error"),
+                Err(join_err) => panic!("publish server task panicked: {join_err:?}"),
+            },
+            Err(_) => panic!("server task did not return before the test hang guard"),
+        }
     }
 
     /// Full-chain verification of the #1596 contract: a trigger at the
@@ -1123,7 +1139,7 @@ mod listener_reload_contract_tests {
     /// the single test that ties the trigger -> watch and
     /// watch -> listener halves together and proves the end-to-end path.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::match_wild_err_arm, clippy::too_many_lines)]
     async fn reload_handle_reload_propagates_through_watch_to_ingest_listener_end_to_end() {
         use std::{fs, sync::Arc};
 
@@ -1274,11 +1290,12 @@ mod listener_reload_contract_tests {
         );
 
         pre_reload_conn.close(0u32.into(), b"done");
+        client_a.wait_idle().await;
         ingest_token.cancel();
-        timeout(Duration::from_secs(5), server_task)
-            .await
-            .expect("ingest server should drain")
-            .expect("ingest server task should not panic");
+        match timeout(SERVER_TASK_HANG_GUARD, server_task).await {
+            Ok(join_res) => join_res.expect("ingest server task should not panic"),
+            Err(_) => panic!("server task did not return before the test hang guard"),
+        }
     }
 
     /// Publish counterpart of
@@ -1288,7 +1305,7 @@ mod listener_reload_contract_tests {
     /// path rather than sending refreshed material directly through the
     /// watch, so the full chain is exercised for publish as well as ingest.
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::match_wild_err_arm, clippy::too_many_lines)]
     async fn reload_handle_reload_propagates_through_watch_to_publish_listener_end_to_end() {
         use std::{fs, sync::Arc};
 
@@ -1421,7 +1438,14 @@ mod listener_reload_contract_tests {
         );
 
         pre_reload_conn.close(0u32.into(), b"done");
+        client_a.wait_idle().await;
         publish_token.cancel();
-        let _ = timeout(Duration::from_secs(3), server_task).await;
+        match timeout(SERVER_TASK_HANG_GUARD, server_task).await {
+            Ok(join_res) => match join_res {
+                Ok(run_res) => run_res.expect("publish server run returned an error"),
+                Err(join_err) => panic!("publish server task panicked: {join_err:?}"),
+            },
+            Err(_) => panic!("server task did not return before the test hang guard"),
+        }
     }
 }
