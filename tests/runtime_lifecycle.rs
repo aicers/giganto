@@ -187,10 +187,8 @@ const TLS_RELOAD_FAILURE_MARKER: &str = "TLS reload failed, keeping previous mat
 
 /// Throwaway PKI for one run, written under the run's own temp directory.
 ///
-/// Two leaves under one CA, because the node and the sensor have to be told
-/// apart: a single self-signed certificate serving as its own trust anchor can
-/// only ever present one identity, and the restart assertion turns on the
-/// sensor's being the client's.
+/// Three leaves are issued under one CA: materials A and B carry the same
+/// node identity, while the sensor carries a distinct client identity.
 struct TestPki {
     ca_path: PathBuf,
     ca_pem: String,
@@ -237,8 +235,8 @@ fn leaf_params(common_name: &str, dns_name: &str) -> CertificateParams {
     params
 }
 
-/// Writes a second node identity under `ca`. Its names are deliberately the
-/// same as material A, while its fresh key pair makes the leaf distinguishable.
+/// Writes replacement node material under `ca`. Its names deliberately match
+/// material A, while its fresh key pair makes the leaf distinguishable.
 fn write_additional_node_material(
     dir: &Path,
     ca: &CertifiedIssuer<'_, KeyPair>,
