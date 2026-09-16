@@ -10,7 +10,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Added the `bootroot`-only `customerDataDeletionResult` GraphQL query to
   retrieve a customer's persisted deletion status and failure details on the
-  local node. Cluster-wide aggregation is not yet included.
+  local node.
 - Added the `bootroot`-only `deleteCustomerData` GraphQL mutation for
   asynchronous, node-local customer data deletion. The mutation validates and
   deduplicates Piglet and Reproduce service FQDNs, deletes their event ranges
@@ -31,8 +31,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   accepted deletion always finishes before the node shuts its database down.
   On startup, `bootroot` nodes resume interrupted `InProgress` jobs from their
   persisted targets before retention begins. Once recovery starts, new deletion
-  requests cannot interrupt the remaining recovery jobs. Cluster-wide
-  aggregation is not yet included.
+  requests cannot interrupt the remaining recovery jobs.
 - Customer deletion now runs on Tokio's blocking pool with batched RocksDB
   range deletes. Worker failures, including task panics, are recorded as
   failed jobs, and terminal status writes are retried without repeating data

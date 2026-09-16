@@ -330,6 +330,7 @@ pub struct CustomerDataDeletionResult {
     service_fqdn_list: Vec<String>,
     status: CustomerDataDeletionStatusOutput,
     completed_at: Option<DateTime>,
+    /// Node failure details, which may be present while the aggregated status is in progress.
     error: Option<String>,
 }
 
@@ -547,16 +548,20 @@ fn aggregate_deletion_request_statuses(
     let any_accepted = target_statuses
         .iter()
         .any(|(_, status)| *status == CustomerDataDeletionRequestStatus::Accepted);
-    if any_accepted
-        && target_statuses.iter().all(|(_, status)| {
-            matches!(
-                status,
-                CustomerDataDeletionRequestStatus::Accepted
-                    | CustomerDataDeletionRequestStatus::AlreadyCompleted
-            )
-        })
-    {
-        return Ok(CustomerDataDeletionRequestStatus::Accepted);
+    let all_active_or_completed = target_statuses.iter().all(|(_, status)| {
+        matches!(
+            status,
+            CustomerDataDeletionRequestStatus::Accepted
+                | CustomerDataDeletionRequestStatus::DeletionInProgress
+                | CustomerDataDeletionRequestStatus::AlreadyCompleted
+        )
+    });
+    if all_active_or_completed {
+        return Ok(if any_accepted {
+            CustomerDataDeletionRequestStatus::Accepted
+        } else {
+            CustomerDataDeletionRequestStatus::DeletionInProgress
+        });
     }
 
     if any_accepted {
@@ -596,8 +601,8 @@ fn merge_customer_data_deletion_results(
         .map(|(_, result)| result.status)
         .max_by_key(|status| match status {
             CustomerDataDeletionStatusOutput::Succeeded => 0,
-            CustomerDataDeletionStatusOutput::InProgress => 1,
-            CustomerDataDeletionStatusOutput::Failed => 2,
+            CustomerDataDeletionStatusOutput::Failed => 1,
+            CustomerDataDeletionStatusOutput::InProgress => 2,
         })
         .expect("node_results is not empty");
     let requested_at = node_results
@@ -1507,7 +1512,7 @@ mod tests {
     #[test]
     fn mutation_status_aggregation_follows_cluster_rules() {
         use CustomerDataDeletionRequestStatus::{
-            Accepted, AlreadyCompleted, BlockedByRetention, BlockedByShutdown,
+            Accepted, AlreadyCompleted, BlockedByRetention, BlockedByShutdown, DeletionInProgress,
             NoLocalTargetOnThisNode,
         };
 
@@ -1535,6 +1540,31 @@ mod tests {
             ])
             .unwrap(),
             AlreadyCompleted
+        );
+        assert_eq!(
+            aggregate_deletion_request_statuses(vec![
+                ("node-a".to_string(), Accepted),
+                ("node-b".to_string(), DeletionInProgress),
+            ])
+            .unwrap(),
+            Accepted
+        );
+        assert_eq!(
+            aggregate_deletion_request_statuses(vec![
+                ("node-a".to_string(), Accepted),
+                ("node-b".to_string(), DeletionInProgress),
+                ("node-c".to_string(), AlreadyCompleted),
+            ])
+            .unwrap(),
+            Accepted
+        );
+        assert_eq!(
+            aggregate_deletion_request_statuses(vec![
+                ("node-a".to_string(), DeletionInProgress),
+                ("node-b".to_string(), AlreadyCompleted),
+            ])
+            .unwrap(),
+            DeletionInProgress
         );
 
         let partial = aggregate_deletion_request_statuses(vec![
@@ -1629,8 +1659,19 @@ mod tests {
                         customer_id: StringNumberU32(77),
                         requested_at: first_requested,
                         service_fqdn_list: vec!["piglet.a.example.test".to_string()],
-                        status: CustomerDataDeletionStatusOutput::Succeeded,
+                        status: CustomerDataDeletionStatusOutput::Failed,
                         completed_at: Some(later_completed),
+                        error: Some("disk failure".to_string()),
+                    },
+                ),
+                (
+                    "node-b".to_string(),
+                    CustomerDataDeletionResult {
+                        customer_id: StringNumberU32(77),
+                        requested_at: first_requested,
+                        service_fqdn_list: Vec::new(),
+                        status: CustomerDataDeletionStatusOutput::Succeeded,
+                        completed_at: Some(first_completed),
                         error: None,
                     },
                 ),
@@ -1653,6 +1694,7 @@ mod tests {
             CustomerDataDeletionStatusOutput::InProgress
         );
         assert_eq!(in_progress.completed_at, None);
+        assert_eq!(in_progress.error.as_deref(), Some("node-a: disk failure"));
     }
 
     #[cfg(feature = "cluster")]
