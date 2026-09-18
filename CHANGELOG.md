@@ -10,9 +10,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Added the `bootroot`-only `customerDataDeletionResult` GraphQL query to
   retrieve a customer's persisted deletion status and failure details on the
-  local node. Cluster-wide aggregation is not yet included.
+  local node. When the `cluster` feature is enabled, results from the local
+  node and connected peers are aggregated.
 - Added the `bootroot`-only `deleteCustomerData` GraphQL mutation for
-  asynchronous, node-local customer data deletion. The mutation validates and
+  asynchronous customer data deletion on the local node and, when the `cluster`
+  feature is enabled, connected peers. The mutation validates and
   deduplicates Piglet and Reproduce service FQDNs, deletes their event ranges
   and sensor metadata, and reports accepted, in-progress, already-completed,
   and no-local-target results. Jobs are persisted in a RocksDB column family
@@ -21,9 +23,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   succeeds, Giganto removes the target services from its in-memory ingest,
   runtime-ingest, packet-capture, and direct-stream routing state and, when
   configured, propagates the updated sensor list to connected peers. Only one
-  deletion runs at a time, and a deletion never overlaps a retention cleanup
-  cycle: a request that arrives while another customer is being deleted, while
-  retention is running, or after the node has begun shutting down is refused
+  deletion runs at a time per node, and a deletion never overlaps a retention
+  cleanup cycle: a request that arrives while another customer is being deleted,
+  while retention is running, or after the node has begun shutting down is refused
   without starting a job, and a retention cycle that comes due while a deletion
   is running is skipped until the next one. A node that holds neither a job for
   the customer nor any of the requested services reports no-local-target
@@ -31,8 +33,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   accepted deletion always finishes before the node shuts its database down.
   On startup, `bootroot` nodes resume interrupted `InProgress` jobs from their
   persisted targets before retention begins. Once recovery starts, new deletion
-  requests cannot interrupt the remaining recovery jobs. Cluster-wide
-  aggregation is not yet included.
+  requests cannot interrupt the remaining recovery jobs.
 - Customer deletion now runs on Tokio's blocking pool with batched RocksDB
   range deletes. Worker failures, including task panics, are recorded as
   failed jobs, and terminal status writes are retried without repeating data
