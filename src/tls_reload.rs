@@ -556,6 +556,13 @@ mod listener_reload_contract_tests {
     /// settings. No test here waits a round out, so the value only has to be
     /// non-zero.
     const TEST_DRAIN_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+    /// Test-only hang guard for endpoint drains and server-task joins. This is
+    /// not a production deadline for subsystem drains; it is a deliberately
+    /// loose upper bound to fail tests that would otherwise hang forever. One
+    /// minute is a practical, generous choice that follows the order of
+    /// magnitude used by other test timeouts in the repository (e.g. generation
+    /// tests' timeouts).
+    const TEST_HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(60);
 
     static INSTALL_PROVIDER: Once = Once::new();
 
@@ -975,10 +982,16 @@ mod listener_reload_contract_tests {
 
         pre_reload_conn.close(0u32.into(), b"done");
         post_reload_conn.close(0u32.into(), b"done");
-        ingest_token.cancel();
-        timeout(Duration::from_secs(5), server_task)
+        timeout(TEST_HANG_GUARD, client_a.wait_idle())
             .await
-            .expect("ingest server should drain")
+            .expect("client A endpoint did not become idle before the test hang guard");
+        timeout(TEST_HANG_GUARD, client_b.wait_idle())
+            .await
+            .expect("client B endpoint did not become idle before the test hang guard");
+        ingest_token.cancel();
+        timeout(TEST_HANG_GUARD, server_task)
+            .await
+            .expect("server task did not return before the test hang guard")
             .expect("ingest server task should not panic");
     }
 
@@ -1110,8 +1123,18 @@ mod listener_reload_contract_tests {
 
         pre_reload_conn.close(0u32.into(), b"done");
         post_reload_conn.close(0u32.into(), b"done");
+        timeout(TEST_HANG_GUARD, client_a.wait_idle())
+            .await
+            .expect("client A endpoint did not become idle before the test hang guard");
+        timeout(TEST_HANG_GUARD, client_b.wait_idle())
+            .await
+            .expect("client B endpoint did not become idle before the test hang guard");
         publish_token.cancel();
-        let _ = timeout(Duration::from_secs(3), server_task).await;
+        timeout(TEST_HANG_GUARD, server_task)
+            .await
+            .expect("server task did not return before the test hang guard")
+            .expect("publish server task should not panic")
+            .expect("publish server should shut down cleanly");
     }
 
     /// Full-chain verification of the #1596 contract: a trigger at the
@@ -1274,10 +1297,13 @@ mod listener_reload_contract_tests {
         );
 
         pre_reload_conn.close(0u32.into(), b"done");
-        ingest_token.cancel();
-        timeout(Duration::from_secs(5), server_task)
+        timeout(TEST_HANG_GUARD, client_a.wait_idle())
             .await
-            .expect("ingest server should drain")
+            .expect("client A endpoint did not become idle before the test hang guard");
+        ingest_token.cancel();
+        timeout(TEST_HANG_GUARD, server_task)
+            .await
+            .expect("server task did not return before the test hang guard")
             .expect("ingest server task should not panic");
     }
 
@@ -1421,7 +1447,14 @@ mod listener_reload_contract_tests {
         );
 
         pre_reload_conn.close(0u32.into(), b"done");
+        timeout(TEST_HANG_GUARD, client_a.wait_idle())
+            .await
+            .expect("client A endpoint did not become idle before the test hang guard");
         publish_token.cancel();
-        let _ = timeout(Duration::from_secs(3), server_task).await;
+        timeout(TEST_HANG_GUARD, server_task)
+            .await
+            .expect("server task did not return before the test hang guard")
+            .expect("publish server task should not panic")
+            .expect("publish server should shut down cleanly");
     }
 }
