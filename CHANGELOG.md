@@ -8,55 +8,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- Added the `bootroot`-only `customerDataDeletionResult` GraphQL query to
-  retrieve a customer's persisted deletion status and failure details on the
-  local node. When the `cluster` feature is enabled, results from the local
-  node and connected peers are aggregated.
-- Added the `bootroot`-only `deleteCustomerData` GraphQL mutation for
-  asynchronous customer data deletion on the local node and, when the `cluster`
-  feature is enabled, connected peers. The mutation validates and
-  deduplicates Piglet and Reproduce service FQDNs, deletes their event ranges
-  and sensor metadata, and reports accepted, in-progress, already-completed,
-  and no-local-target results. Jobs are persisted in a RocksDB column family
-  with `InProgress`, `Succeeded`, and `Failed` states; failed jobs can be
-  retried using their originally stored targets. After RocksDB deletion
-  succeeds, Giganto removes the target services from its in-memory ingest,
-  runtime-ingest, packet-capture, and direct-stream routing state and, when
-  configured, propagates the updated sensor list to connected peers. Only one
-  deletion runs at a time per node, and a deletion never overlaps a retention
-  cleanup cycle: a request that arrives while another customer is being deleted,
-  while retention is running, or after the node has begun shutting down is refused
-  without starting a job, and a retention cycle that comes due while a deletion
-  is running is skipped until the next one. A node that holds neither a job for
-  the customer nor any of the requested services reports no-local-target
-  instead of one of those refusals, since retrying there can never help. An
-  accepted deletion always finishes before the node shuts its database down.
-  On startup, `bootroot` nodes resume interrupted `InProgress` jobs from their
-  persisted targets before retention begins. Once recovery starts, new deletion
-  requests cannot interrupt the remaining recovery jobs.
-- Customer deletion now runs on Tokio's blocking pool with batched RocksDB
-  range deletes. Worker failures, including task panics, are recorded as
-  failed jobs, and terminal status writes are retried without repeating data
-  deletion.
-- A subsystem entry task that ends on its own now takes the node down with it
-  instead of leaving it serving without that subsystem. Ingest, publish, peer
-  and retention are all observed; whichever ends first names the shutdown, the
-  usual shutdown sequence runs, and the process exits with a failure status so
-  a service manager configured to restart on failure does. A request to stop,
-  reboot or power off still decides the shutdown ahead of an entry task that
-  ended, as does a queued configuration reload, since the next generation is
-  what restarts the subsystem that died.
-- Shutdown now reports every abnormal entry-task outcome as one structured
-  record at `ERROR`, `entry task ended abnormally`, carrying the task's name
-  and id, whether it was observed while the node was serving or read back
-  after the drain, whether it exited early, returned an error, panicked or was
-  cancelled, and how long it had been running. A task that stopped because
-  shutdown cancelled it is reported at `INFO` instead. An abnormal outcome
-  seen while the node was already shutting down no longer disappears into a
-  clean exit: the node finishes its teardown and still reboots or powers off
-  if that was asked for, logs `generation ended degraded`, and then exits with
-  a failure status. A configuration reload is the one ending that still
-  succeeds, since the next generation starts regardless.
+- Added the `bootroot`-only `deleteCustomerData` GraphQL mutation and
+  `customerDataDeletionResult` query for asynchronous customer data deletion
+  on the local node and, when the `cluster` feature is enabled, connected peers.
+  The mutation validates and deduplicates Piglet and Reproduce service FQDNs,
+  deletes their event ranges and sensor metadata, removes them from runtime
+  routing state, propagates the updated sensor list to connected peers when
+  configured, and reports accepted, in-progress, already-completed, and
+  no-local-target results. The query returns persisted
+  `InProgress`, `Succeeded`, and `Failed` status and failure details; cluster
+  builds aggregate local and peer results. Failed jobs can be retried with their
+  stored targets. Worker failures are recorded as failed jobs, and terminal
+  status writes are retried without repeating data deletion. Only one deletion
+  runs at a time per node, and deletion never overlaps retention: conflicting
+  requests are refused without starting a job, and a retention cycle due during
+  deletion is skipped until the next one. A node with neither a job nor any
+  requested service reports no-local-target instead of a temporary refusal. An
+  accepted deletion finishes before database shutdown, and `bootroot` nodes
+  resume interrupted jobs from their persisted targets before retention begins.
+  New requests cannot interrupt recovery once it starts.
 - Shutdown now reports the phase it has reached at `INFO`: the web server
   stopping, the packet-capture reaper finishing, the subsystems draining, the
   entry-task results being read, the database being shut down, and the action
@@ -93,12 +63,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Fixed peer self-check in release builds to compare full socket addresses
   (IP and port) instead of IP only, so peers on the same host with different
   ports are no longer silently dropped.
-- Fixed peer update fan-out so peer-state locks are released before network
-  I/O, reducing peer update contention and shutdown delays.
+- Fixed peer updates blocking other peer-state work and delaying shutdown
+  while network I/O was in progress.
 - Fixed peer-list configuration updates to serialize concurrent writes and
   atomically replace the configuration file. Configuration refresh, update,
   and persistence failures are now returned to the peer handler instead of
   being logged and ignored.
+- Fixed a subsystem entry task ending without stopping the node. Ingest,
+  publish, peer, and retention are all observed; an unexpected end runs the
+  normal shutdown sequence and exits with a failure status. Stop, reboot, and
+  power-off requests, as well as a queued configuration reload, retain
+  precedence.
+  Abnormal task outcomes are reported in one structured `ERROR` record with
+  the task, phase, outcome, and runtime; tasks stopped by shutdown are reported
+  at `INFO`. An abnormal result found during an existing shutdown makes the
+  generation degraded without suppressing a requested reboot or power-off; a
+  configuration reload still starts the next generation.
 - Fixed retention shutdown to stop through the same cooperative cancellation
   as the rest of the node. A cleanup pass that was in flight when shutdown
   began could previously miss the shutdown signal and leave the node waiting
@@ -106,8 +86,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   three-second steps before flushing the database. Shutdown now cancels
   retention before it starts another cleanup pass, waits for any blocking
   cleanup already running, and closes the database once retention has stopped.
-  A retention failure is reported at `ERROR` when it
-  happens and restated as the node shuts down.
+  A retention failure is reported at `ERROR` when it happens.
 - Fixed peer shutdown so that it waits for peer work to finish instead of
   timing it. Shutting the node down previously paused for a fixed 300 ms
   before closing the peer listener and 200 ms before closing each peer
@@ -124,35 +103,31 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   dropping it. Shutting the node down previously closed the publish listener
   first and then waited only for the most recently accepted connection: every
   earlier connection, every request in flight, every stream subscription, and
-  every accepted packet-capture relay was cut off mid-write, and a subscription
-  killed that way left a stale entry in the realtime routing table. Publish now
-  stops accepting connections as soon as shutdown begins, stops admitting new
+  every accepted packet-capture relay was cut off mid-write. Publish now stops
+  accepting connections as soon as shutdown begins, stops admitting new
   requests, subscriptions, and relays, and returns only once every one of them
   has finished and cleaned up — closing the listener last, so the work still
   running has a connection to finish on. Waits that only a remote party can end
   no longer hold shutdown open either: a client that connects and never sends
   its version message, a peer that accepts a request and goes quiet, and a
   retry loop dialing an unreachable peer all give up when shutdown starts.
-  Failures that used to vanish with a detached task, including a publish
-  listener that cannot bind, are now reported.
 - Fixed the database not being flushed when the node was asked to terminate or
   to reload its configuration. Only a reboot or a power off flushed the store,
   wrote its write-ahead log and stopped its background work; the other endings
   simply let the handle go. Every ending now shuts the store down, and a store
   that cannot be shut down stops the node there instead of rebooting the host,
   powering it off, or handing the same data directory to the next generation.
-- Fixed a shutdown that could hang indefinitely when the signal arrived in the
-  first moments after startup. A subsystem that had not yet begun listening
-  missed the one-shot notification and then waited out its own interval before
-  noticing, so the node never exited. Every subsystem now takes its shutdown
-  signal from a cancellation that stays raised, so a subsystem that starts
-  listening late sees it the moment it looks instead of missing it.
+- Fixed shutdown being delayed for a subsystem's full wait interval when the
+  signal arrived in the first moments after startup. Every subsystem now takes
+  its shutdown signal from a cancellation that stays raised, so a subsystem
+  that starts listening late sees it the moment it looks instead of missing it.
 
 ### Changed
 
-- Unified storage introspection GraphQL APIs (`propertiesCf` and
-  `countByProtocol`) under the opt-in `storage_diagnostics` feature flag.
-  Enable diagnostics with `--features storage_diagnostics`.
+- Replaced the `count_events` feature with the opt-in `storage_diagnostics`
+  feature, which exposes both storage introspection GraphQL APIs,
+  `propertiesCf` and `countByProtocol`. `propertiesCf` is no longer enabled
+  implicitly in debug builds.
 - Ingest now shuts down cooperatively. On termination or configuration reload
   it stops accepting connections and streams, drains the connection and
   request handlers it already admitted, flushes everything those handlers
@@ -162,11 +137,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   handlers are still running. Acknowledgement behavior is unchanged: the same
   batching, interval, and channel-close rules apply, and shutdown sends no
   acknowledgement of its own.
-- A node no longer keeps running without ingest. The ingest listener is
-  watched while the node serves, so a listener that cannot start — an address
-  already in use, for instance — or one that ends unexpectedly now shuts the
-  node down through the normal sequence and exits with a failure status
-  instead of leaving it serving everything but ingest.
 - The HTTPS GraphQL (web) server now shuts down on a configurable budget. When
   shutdown begins it stops accepting new connections and requests and lets
   already-accepted requests finish, but a request still in flight is now cut
@@ -176,16 +146,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   before shutdown is waited for so it completes before the database closes, and
   a PCAP request cut off by the timeout has its `tcpdump` child killed and
   reaped and its temporary files removed rather than left behind.
-- Simplified the `cancellation` module down to `TaskTracker`. Its
-  `CancellationToken` wrapper, along with `check_cancelled` and
-  `CancelledError`, is gone in favor of `tokio_util::sync::CancellationToken`,
-  whose full API (`run_until_cancelled`, `drop_guard`, `cancelled_owned`) is
-  now available. `TaskTracker` is `Clone` and its `spawn` preserves the task's
-  own output type, so nested spawning and result observation no longer need
-  wrapping. `token()` is now `root_token()`, and `drain` reports an unfinished
-  drain as `Ok(DrainOutcome::Pending(..))` rather than an error, leaving the
-  logging cadence to the caller; `DrainError` is removed. A tracked task that
-  vanishes without returning normally is now reported with its name and age.
 
 ## [0.28.0] - 2026-06-19
 
