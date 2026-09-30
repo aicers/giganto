@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.29.0] - 2026-09-29
+## [0.29.0] - 2026-09-30
 
 ### Added
 
@@ -88,9 +88,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Updated `INGEST_VERSION_REQ` to ">=0.27.0,<0.30.0".
 - Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<0.30.0".
 - Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0,<0.30.0".
-- Updated `PEER_VERSION_REQ` to ">=0.29.0,<0.30.0". Giganto instances in a
-  cluster must use the same minor release; patch releases within that minor
-  are compatible, and mixed-minor clusters are unsupported.
+- Updated `PEER_VERSION_REQ` to ">=0.29.0,<0.30.0".
 - Replaced the `count_events` feature with the opt-in `storage_diagnostics`
   feature, which exposes both storage introspection GraphQL APIs,
   `propertiesCf` and `countByProtocol`. `propertiesCf` is no longer enabled

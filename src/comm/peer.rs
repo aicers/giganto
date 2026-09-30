@@ -95,10 +95,13 @@ fn current_applied_generation(slot: &SharedClientConfig) -> u64 {
     read_state(slot).applied_generation
 }
 
-// Every Giganto instance in a cluster must run the same minor release. Patch releases
-// within that minor are compatible; mixed-minor clusters are unsupported.
-// The 0.29.0 lower bound also prevents a bootroot cluster from sending the new
-// customer-deletion GraphQL operations to 0.28.0 peers that do not support them.
+// The `PEER_VERSION_REQ` defines the compatibility range for Giganto instances in a cluster.
+// Reasons for updating this version include, but not be limited to:
+// - Updates of GraphQL API version: Since Giganto acts as both a client and server for other
+//   Gigantos in the cluster, maintaining the same API version is necessary for the communication
+//   within the cluster.
+// - Updates of event protocol structures: Any changes to giganto-client's event protocols require
+//   all Gigantos in the cluster to use the same protocol version for compatibility.
 const PEER_VERSION_REQ: &str = ">=0.29.0,<0.30.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 /// Names the peer subsystem tracker in the drain progress log.
