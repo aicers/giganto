@@ -1821,8 +1821,6 @@ mod tests {
     async fn split_nodes_store_only_local_targets_and_generate_local_timestamps() {
         let piglet = "piglet.node-a.example.test";
         let reproduce = "reproduce.node-b.example.test";
-        let first = TestSchema::new_with_ingest_sensors(&[piglet]);
-        let second = TestSchema::new_with_ingest_sensors(&[reproduce]);
         let request = format!(
             r#"mutation {{
                 deleteCustomerData(
@@ -1833,17 +1831,31 @@ mod tests {
             }}"#
         );
 
+        let first = TestSchema::new_with_ingest_sensors(&[piglet]);
         let first_response = first.execute(&request).await;
-        let second_response = second.execute(&request).await;
         assert_eq!(
             first_response.data.to_string(),
             "{deleteCustomerData: ACCEPTED}"
         );
         assert_eq!(
+            first
+                .top_level_tracker
+                .drain(Duration::from_secs(5))
+                .await
+                .unwrap(),
+            crate::cancellation::DrainOutcome::Drained,
+        );
+        let first_job = wait_for_terminal_job(&first.db, 93).await;
+        // Release the first node's database before opening the independent
+        // second node, keeping file usage bounded during parallel tests.
+        drop(first);
+
+        let second = TestSchema::new_with_ingest_sensors(&[reproduce]);
+        let second_response = second.execute(&request).await;
+        assert_eq!(
             second_response.data.to_string(),
             "{deleteCustomerData: ACCEPTED}"
         );
-        let first_job = wait_for_terminal_job(&first.db, 93).await;
         let second_job = wait_for_terminal_job(&second.db, 93).await;
         assert_eq!(first_job.service_fqdn_list, [piglet]);
         assert_eq!(second_job.service_fqdn_list, [reproduce]);
@@ -2209,7 +2221,7 @@ mod tests {
                 }}"#
             ))
             .await;
-        assert!(!inconsistent.errors.is_empty());
+        assert_ne!(inconsistent.errors.as_slice(), []);
         assert_eq!(
             schema
                 .db
@@ -2911,7 +2923,7 @@ mod tests {
 
         let query = delete_customer_data_mutation(&[target], REQUESTING);
         let before_first_job = schema.execute(&query).await;
-        assert!(before_first_job.errors.is_empty());
+        assert_eq!(before_first_job.errors.as_slice(), []);
         assert_eq!(
             before_first_job.data.to_string(),
             "{deleteCustomerData: BLOCKED_BY_ANOTHER_DELETION}"
@@ -2921,7 +2933,7 @@ mod tests {
         let repeat = schema
             .execute(&delete_customer_data_mutation(&[target], RECOVERING))
             .await;
-        assert!(repeat.errors.is_empty());
+        assert_eq!(repeat.errors.as_slice(), []);
         assert_eq!(
             repeat.data.to_string(),
             "{deleteCustomerData: DELETION_IN_PROGRESS}"
@@ -2929,7 +2941,7 @@ mod tests {
         drop(worker);
 
         let between_jobs = schema.execute(&query).await;
-        assert!(between_jobs.errors.is_empty());
+        assert_eq!(between_jobs.errors.as_slice(), []);
         assert_eq!(
             between_jobs.data.to_string(),
             "{deleteCustomerData: BLOCKED_BY_ANOTHER_DELETION}"
@@ -2950,7 +2962,7 @@ mod tests {
 
         drop(recovery);
         let accepted = schema.execute(&query).await;
-        assert!(accepted.errors.is_empty());
+        assert_eq!(accepted.errors.as_slice(), []);
         assert_eq!(accepted.data.to_string(), "{deleteCustomerData: ACCEPTED}");
         assert_eq!(
             wait_for_terminal_job(&schema.db, REQUESTING).await.status,

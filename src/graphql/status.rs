@@ -432,7 +432,7 @@ mod tests {
         ";
 
         let res = schema.execute(query).await;
-        assert!(res.errors.is_empty());
+        assert_eq!(res.errors.as_slice(), []);
     }
 
     #[tokio::test]

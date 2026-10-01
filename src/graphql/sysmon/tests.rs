@@ -2923,7 +2923,7 @@ async fn process_create_events_filtered_by_agent_id() {
     assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
     let data = res.data.into_json().unwrap();
     let edges = data["processCreateEvents"]["edges"].as_array().unwrap();
-    assert!(edges.is_empty());
+    assert_eq!(edges.as_slice(), [] as [serde_json::Value; 0]);
 
     let query_no_filter = r#"
     {

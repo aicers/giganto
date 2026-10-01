@@ -6,7 +6,7 @@ use jiff::{Timestamp, tz::TimeZone};
 /// Thread-safe daily sequence generator.
 ///
 /// State is packed in one `AtomicU64` as `[date_key:24 | counter:40]`, so reset and
-/// increment are updated atomically with CAS (`fetch_update`).
+/// increment are updated atomically with CAS (`try_update`).
 ///
 /// - Resets to `[date_key, counter=1]` when `date_key` increases.
 /// - Stale `date_key` values do not reset the state.
@@ -50,10 +50,10 @@ impl SequenceGenerator {
     ///   otherwise state keeps its date.
     ///   Out-of-range inputs are masked to 24 bits by the packed layout.
     pub(crate) fn generate_sequence_number(&self, date_key: u32) -> u64 {
-        // fetch_update returns the previous value on success.
+        // try_update returns the previous value on success.
         let prev = self
             .state
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(Self::next_state(current, date_key))
             })
             .expect("closure always returns Some");
