@@ -1707,14 +1707,14 @@ pub(crate) mod tests {
         ];
         let tracker = crate::cancellation::TaskTracker::new();
         let output = write_run_tcpdump(&packets, tracker.clone()).await.unwrap();
-        assert!(!output.is_empty());
+        assert_ne!(output, "");
         assert!(output.contains("2023-11-15"));
         assert!(output.contains("123456"));
         assert!(output.contains("987654"));
         assert!(output.contains("0x0000"));
 
         let out_empty = write_run_tcpdump(&vec![], tracker).await.unwrap();
-        assert!(out_empty.is_empty());
+        assert_eq!(out_empty, "");
     }
 
     /// A dropped `ChildReaper` must register its child's kill-and-reap on the

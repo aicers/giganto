@@ -2247,7 +2247,7 @@ mod tests {
         assert_eq!(item.0.as_ref(), b"key1");
         assert_eq!(item.1.core, stats.core);
         assert_eq!(item.1.period, stats.period);
-        assert!(item.1.stats.is_empty());
+        assert_eq!(item.1.stats.as_slice(), []);
     }
 
     /// Test `StorageKeyBuilder` with timestamp boundaries
@@ -2538,7 +2538,7 @@ mod tests {
             .properties_cf("conn")
             .expect("properties_cf should succeed");
         assert!(props.estimate_num_keys > 0);
-        assert!(!props.stats.is_empty());
+        assert_ne!(props.stats, "");
     }
 
     #[test]

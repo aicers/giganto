@@ -6199,7 +6199,7 @@ async fn process_range_data_sends_local_results_and_done() {
     let mut timestamps = HashSet::new();
     for (timestamp, sensor, payload) in responses.into_iter().flatten() {
         assert_eq!(sensor, SENSOR);
-        assert!(!payload.is_empty());
+        assert_ne!(payload, [] as [u8; 0]);
         timestamps.insert(timestamp);
     }
 

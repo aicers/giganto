@@ -462,7 +462,7 @@ mod tests {
         handle.reload();
 
         let current = get_current_tls_material(&subscriber);
-        assert!(!current.cert_pem.is_empty());
+        assert_ne!(current.cert_pem, [] as [u8; 0]);
     }
 
     /// Verifies the notify-driven reload path that mirrors the SIGHUP

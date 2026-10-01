@@ -488,7 +488,7 @@ mod tests {
 
         let attrs = GraphQlAutogenFieldAttrs::from_field(&field).expect("field should parse");
 
-        assert!(attrs.from_name.is_empty());
+        assert_eq!(attrs.from_name, "");
         assert!(!attrs.recursive_into);
         assert!(!attrs.skip);
     }
