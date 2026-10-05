@@ -2012,8 +2012,6 @@ type Mutation {
 	"""
 	updateConfig(old: String!, new: String!): Config!
 	stop: Boolean!
-	reboot: Boolean!
-	shutdown: Boolean!
 }
 
 type Netflow5RawEvent {
@@ -2804,10 +2802,6 @@ type Query {
 	packets(filter: PacketFilter!, after: String, before: String, first: Int, last: Int): PacketConnection!
 	pcap(filter: PacketFilter!): Pcap!
 	periodicTimeSeries(filter: TimeSeriesFilter!, after: String, before: String, first: Int, last: Int): TimeSeriesConnection!
-	"""
-	Returns the current node status, including CPU, memory, and disk usage.
-	"""
-	status: Status!
 	"""
 	Returns the current visible Giganto configuration.
 	"""
@@ -3654,15 +3648,6 @@ type StatisticsInfo {
 type StatisticsRawEvent {
 	sensor: String!
 	stats: [StatisticsInfo!]!
-}
-
-type Status {
-	name: String!
-	cpuUsage: Float!
-	totalMemory: Int!
-	usedMemory: Int!
-	diskUsedBytes: Int!
-	diskAvailableBytes: Int!
 }
 
 scalar StringNumberI64

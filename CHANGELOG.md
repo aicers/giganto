@@ -4,6 +4,18 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- Removed the `status` query and the `reboot` and `shutdown` mutations from
+  GraphQL. Host power belongs to the Host Agent.
+
+### Fixed
+
+- Retention's disk-pressure check now measures the filesystem holding the
+  database instead of `/opt/clumit/var` or `/`.
+
 ## [0.29.1] - 2026-10-02
 
 ### Changed
@@ -1216,6 +1228,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.29.1...main
 [0.29.1]: https://github.com/aicers/giganto/compare/0.29.0...0.29.1
 [0.29.0]: https://github.com/aicers/giganto/compare/0.28.0...0.29.0
 [0.28.0]: https://github.com/aicers/giganto/compare/0.27.0...0.28.0

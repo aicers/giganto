@@ -32,8 +32,7 @@ the `--ca-certs` option provided at startup.
   certificates, and verify the logs and mTLS connectivity.
 - **GraphQL**: Provides filtering and pagination for search, export,
   and statistical analysis, and supports operational control
-  through mutations such as `updateConfig`, `stop`, `reboot`, and
-  `shutdown`.
+  through mutations such as `updateConfig` and `stop`.
 - **Troubleshooting**: Common issues and recovery steps.
 
 ## Quick Start

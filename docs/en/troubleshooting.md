@@ -38,8 +38,7 @@ does.
   as `Ingest subsystem terminated unexpectedly`. That line is what says
   why; the record above is what says which.
 - `generation ended degraded` means something ended abnormally while the
-  node was already shutting down. The shutdown still completed and a
-  requested reboot or power off was still carried out, but the exit
+  node was already shutting down. The shutdown still completed, but the exit
   status reports the failure. A configuration reload is the exception:
   the node starts the next generation and only logs the failure.
 - `shutdown drain could not read the top-level tracker`, or the same

@@ -199,6 +199,11 @@ pub struct Database {
 }
 
 impl Database {
+    /// Returns the directory holding the database.
+    pub fn path(&self) -> &Path {
+        self.db.path()
+    }
+
     /// Opens the database at the given path.
     pub fn open(path: &Path, db_options: &DbOptions) -> Result<Database> {
         let (db_opts, cf_opts) = rocksdb_options(db_options);
@@ -1248,7 +1253,7 @@ enum PassOutcome {
 ///
 /// Returns the timestamp the pass starts from, and whether it runs under disk
 /// pressure — the flag [`retain_cleanup_pass`] reads to decide whether asking
-/// `roxy` about usage again is worth it.
+/// the filesystem about usage again is worth it.
 ///
 /// `over_threshold` is passed in rather than read here so that the decision
 /// this makes is exercised by tests, which have no disk to fill.
@@ -1321,6 +1326,7 @@ fn relax_retention_timestamp(
 /// outside shutdown is retried after [`BLOCKING_JOIN_BACKOFF`] instead.
 async fn retain_cleanup_pass<F>(
     cancel: &CancellationToken,
+    db_path: &Path,
     mut retention_timestamp: i64,
     now_timestamp: i64,
     usage_flag: bool,
@@ -1375,11 +1381,11 @@ where
         // Only a pass that started because the disk was over `USAGE_THRESHOLD`
         // has a reason to look at usage again, so the check is behind
         // `usage_flag` rather than beside it: a pass on a healthy disk asks
-        // `roxy` nothing.
+        // the filesystem nothing.
         if !usage_flag {
             return Ok(PassOutcome::Completed);
         }
-        let still_over_low = !cfg!(test) && check_db_usage().await.1;
+        let still_over_low = !cfg!(test) && check_db_usage(db_path).1;
         let Some(relaxed) =
             relax_retention_timestamp(retention_timestamp, now_timestamp, still_over_low)
         else {
@@ -1459,12 +1465,15 @@ pub async fn retain_periodically(
         let now = DateTime::now();
         let retention_timestamp =
             now.timestamp_nanos_opt().unwrap_or(retention_duration) - retention_duration;
-        let (retention_timestamp, usage_flag) =
-            open_under_disk_pressure(retention_timestamp, !cfg!(test) && check_db_usage().await.0);
+        let (retention_timestamp, usage_flag) = open_under_disk_pressure(
+            retention_timestamp,
+            !cfg!(test) && check_db_usage(db.path()).0,
+        );
 
         let now_timestamp = now.timestamp_nanos_opt().unwrap_or(0);
         let outcome = retain_cleanup_pass(
             &cancel,
+            db.path(),
             retention_timestamp,
             now_timestamp,
             usage_flag,
@@ -1484,19 +1493,42 @@ pub async fn retain_periodically(
     }
 }
 
-/// Returns the boolean of the disk usages over `USAGE_THRESHOLD` and `USAGE_LOW`.
-async fn check_db_usage() -> (bool, bool) {
-    let resource_usage = roxy::resource_usage().await;
-    let total_disk_space = resource_usage
-        .disk_used_bytes
-        .saturating_add(resource_usage.disk_available_bytes);
-    let usage = resource_usage
-        .disk_used_bytes
+/// Measures the filesystem holding `path`, returning used and available bytes.
+fn disk_usage(path: &Path) -> Result<(u64, u64)> {
+    fn widen<T: Into<u64>>(value: T) -> u64 {
+        value.into()
+    }
+
+    let stats = nix::sys::statvfs::statvfs(path)?;
+    let fragment_size = widen(stats.fragment_size());
+    let used = widen(stats.blocks())
+        .saturating_sub(widen(stats.blocks_free()))
+        .saturating_mul(fragment_size);
+    let available = widen(stats.blocks_available()).saturating_mul(fragment_size);
+    Ok((used, available))
+}
+
+/// Returns whether disk usage exceeds `USAGE_THRESHOLD` and `USAGE_LOW`.
+fn disk_pressure(used: u64, available: u64) -> (bool, bool) {
+    let usage = used
         .saturating_mul(100)
-        .checked_div(total_disk_space)
+        .checked_div(used.saturating_add(available))
         .unwrap_or(0);
-    debug!("Disk usage: {usage}%");
     (usage > USAGE_THRESHOLD, usage > USAGE_LOW)
+}
+
+fn check_db_usage(path: &Path) -> (bool, bool) {
+    match disk_usage(path) {
+        Ok((used, available)) => {
+            let pressure = disk_pressure(used, available);
+            debug!(used, available, "Database filesystem usage");
+            pressure
+        }
+        Err(error) => {
+            warn!(path = %path.display(), %error, "Cannot measure database filesystem usage");
+            (false, false)
+        }
+    }
 }
 
 pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
@@ -2523,7 +2555,8 @@ mod tests {
 
     #[test]
     fn test_database_shutdown() {
-        let (_dir, db) = setup_db();
+        let (dir, db) = setup_db();
+        assert_eq!(db.path(), dir.path());
         let result = db.shutdown();
         assert!(result.is_ok());
     }
@@ -2612,11 +2645,12 @@ mod tests {
     /// A pass that is cancelled does not schedule another iteration.
     #[tokio::test]
     async fn a_cancelled_pass_schedules_no_iteration() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let cancel = CancellationToken::new();
         cancel.cancel();
 
         let iterations = Arc::new(AtomicUsize::new(0));
-        let outcome = super::retain_cleanup_pass(&cancel, 0, 0, true, {
+        let outcome = super::retain_cleanup_pass(&cancel, dir.path(), 0, 0, true, {
             let iterations = Arc::clone(&iterations);
             move |_retention_timestamp| {
                 iterations.fetch_add(1, Ordering::SeqCst);
@@ -2709,16 +2743,17 @@ mod tests {
 
     /// A pass opened by disk pressure still runs one iteration and completes.
     ///
-    /// Under `cfg!(test)` the pass asks `roxy` nothing, so the repeat that
+    /// Under `cfg!(test)` the pass skips filesystem checks, so the repeat that
     /// disk pressure would drive never triggers here; what this pins down is
     /// that raising `usage_flag` neither skips the iteration nor turns a
     /// finished pass into a repeating one.
     #[tokio::test]
     async fn a_disk_pressure_pass_completes_after_one_iteration() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let cancel = CancellationToken::new();
         let iterations = Arc::new(AtomicUsize::new(0));
 
-        let outcome = super::retain_cleanup_pass(&cancel, 0, i64::MAX, true, {
+        let outcome = super::retain_cleanup_pass(&cancel, dir.path(), 0, i64::MAX, true, {
             let iterations = Arc::clone(&iterations);
             move |_retention_timestamp| {
                 iterations.fetch_add(1, Ordering::SeqCst);
@@ -2751,17 +2786,25 @@ mod tests {
             let finished = Arc::clone(&finished);
             let mut release_rx = Some(release_rx);
             async move {
-                super::retain_cleanup_pass(&cancel, 0, 0, false, move |_retention_timestamp| {
-                    let release_rx = release_rx.take().expect("one iteration only");
-                    let started = Arc::clone(&started);
-                    let finished = Arc::clone(&finished);
-                    tokio::task::spawn_blocking(move || {
-                        started.store(true, Ordering::SeqCst);
-                        release_rx.recv().expect("the test releases the iteration");
-                        finished.store(true, Ordering::SeqCst);
-                        Ok(())
-                    })
-                })
+                let dir = tempfile::tempdir().expect("tempdir");
+                super::retain_cleanup_pass(
+                    &cancel,
+                    dir.path(),
+                    0,
+                    0,
+                    false,
+                    move |_retention_timestamp| {
+                        let release_rx = release_rx.take().expect("one iteration only");
+                        let started = Arc::clone(&started);
+                        let finished = Arc::clone(&finished);
+                        tokio::task::spawn_blocking(move || {
+                            started.store(true, Ordering::SeqCst);
+                            release_rx.recv().expect("the test releases the iteration");
+                            finished.store(true, Ordering::SeqCst);
+                            Ok(())
+                        })
+                    },
+                )
                 .await
             }
         });
@@ -2794,13 +2837,15 @@ mod tests {
     /// A cleanup error leaves through the return value, cancelled or not.
     #[tokio::test]
     async fn a_failed_iteration_is_reported_to_the_caller() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let cancel = CancellationToken::new();
 
-        let error = super::retain_cleanup_pass(&cancel, 0, 0, false, |_retention_timestamp| {
-            tokio::task::spawn_blocking(|| Err(anyhow!("cleanup failed")))
-        })
-        .await
-        .expect_err("a failed iteration should fail the pass");
+        let error =
+            super::retain_cleanup_pass(&cancel, dir.path(), 0, 0, false, |_retention_timestamp| {
+                tokio::task::spawn_blocking(|| Err(anyhow!("cleanup failed")))
+            })
+            .await
+            .expect_err("a failed iteration should fail the pass");
 
         assert!(error.to_string().contains("cleanup failed"));
     }
@@ -2812,9 +2857,10 @@ mod tests {
     /// owner reads the return value.
     #[tokio::test]
     async fn a_panic_during_cancellation_is_reported_to_the_caller() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let cancel = CancellationToken::new();
 
-        let error = super::retain_cleanup_pass(&cancel, 0, 0, false, {
+        let error = super::retain_cleanup_pass(&cancel, dir.path(), 0, 0, false, {
             let cancel = cancel.clone();
             move |_retention_timestamp| {
                 let cancel = cancel.clone();
@@ -2836,10 +2882,11 @@ mod tests {
     /// wall-clock time.
     #[tokio::test(start_paused = true)]
     async fn a_panicking_iteration_is_retried_outside_shutdown() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let cancel = CancellationToken::new();
         let iterations = Arc::new(AtomicUsize::new(0));
 
-        let outcome = super::retain_cleanup_pass(&cancel, 0, 0, false, {
+        let outcome = super::retain_cleanup_pass(&cancel, dir.path(), 0, 0, false, {
             let iterations = Arc::clone(&iterations);
             move |_retention_timestamp| {
                 let attempt = iterations.fetch_add(1, Ordering::SeqCst);
@@ -2883,14 +2930,23 @@ mod tests {
             let iterations = Arc::clone(&iterations);
             let mut about_to_panic_tx = Some(about_to_panic_tx);
             async move {
-                super::retain_cleanup_pass(&cancel, 0, 0, false, move |_retention_timestamp| {
-                    iterations.fetch_add(1, Ordering::SeqCst);
-                    let about_to_panic_tx = about_to_panic_tx.take().expect("one iteration only");
-                    tokio::task::spawn_blocking(move || {
-                        let _ = about_to_panic_tx.send(());
-                        panic!("cleanup panicked");
-                    })
-                })
+                let dir = tempfile::tempdir().expect("tempdir");
+                super::retain_cleanup_pass(
+                    &cancel,
+                    dir.path(),
+                    0,
+                    0,
+                    false,
+                    move |_retention_timestamp| {
+                        iterations.fetch_add(1, Ordering::SeqCst);
+                        let about_to_panic_tx =
+                            about_to_panic_tx.take().expect("one iteration only");
+                        tokio::task::spawn_blocking(move || {
+                            let _ = about_to_panic_tx.send(());
+                            panic!("cleanup panicked");
+                        })
+                    },
+                )
                 .await
             }
         });
@@ -3160,12 +3216,39 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_check_db_usage() {
-        let (over_threshold, over_low) = super::check_db_usage().await;
-        if over_threshold {
-            assert!(over_low);
+    #[test]
+    fn test_disk_pressure() {
+        for (used, available, expected) in [
+            (0, 100, (false, false)),
+            (84, 16, (false, false)),
+            (85, 15, (false, false)),
+            (86, 14, (false, true)),
+            (95, 5, (false, true)),
+            (96, 4, (true, true)),
+            (100, 0, (true, true)),
+            (0, 0, (false, false)),
+            (859, 141, (false, false)),
+            (959, 41, (false, true)),
+            (u64::MAX, u64::MAX, (false, false)),
+        ] {
+            assert_eq!(super::disk_pressure(used, available), expected);
         }
+    }
+
+    #[test]
+    fn test_disk_usage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (used, available) = super::disk_usage(dir.path()).expect("disk usage");
+        assert!(used.saturating_add(available) > 0);
+    }
+
+    #[test]
+    fn test_check_db_usage_failure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            super::check_db_usage(&dir.path().join("missing")),
+            (false, false)
+        );
     }
 
     #[test]

@@ -34,10 +34,9 @@ Giganto는 ingest, publish, peer, retention 서브시스템을 관찰합니다.
   `Ingest subsystem terminated unexpectedly`). 그 줄이 이유를 말해 주고,
   위의 기록이 무엇이 끝났는지를 말해 줍니다.
 - `generation ended degraded`는 노드가 이미 종료 절차에 들어간 뒤에
-  무언가가 비정상적으로 끝났다는 뜻입니다. 종료 절차는 끝까지 진행되고
-  요청된 재부팅이나 전원 차단도 그대로 수행되지만, 종료 상태는 실패를
-  보고합니다. 설정 재적재만은 예외로, 노드는 다음 세대를 시작하고 실패
-  사실은 로그로만 남깁니다.
+  무언가가 비정상적으로 끝났다는 뜻입니다. 종료 절차는 끝까지 진행되지만,
+  종료 상태는 실패를 보고합니다. 설정 재적재만은 예외로, 노드는 다음
+  세대를 시작하고 실패 사실은 로그로만 남깁니다.
 - `shutdown drain could not read the top-level tracker` 또는 `the web
   PCAP reaper tracker`에 대한 같은 줄은 세대가 degraded로 끝나는 또
   하나의 원인입니다. 앞선 패닉으로 종료 절차의 작업 관리용 잠금 하나가
