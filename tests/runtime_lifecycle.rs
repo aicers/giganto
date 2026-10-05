@@ -409,6 +409,7 @@ impl Node {
         let console_err = console.try_clone().expect("clone the console capture");
 
         let child = Command::new(env!("CARGO_BIN_EXE_giganto"))
+            .current_dir(dir)
             .arg("-c")
             .arg(cfg_path)
             .arg("--cert")
@@ -430,6 +431,7 @@ impl Node {
             .stderr(Stdio::from(console_err))
             .spawn()
             .expect("spawn the giganto binary");
+        eprintln!("{label}: spawned PID {}", child.id());
 
         Self {
             label: label.to_string(),
@@ -1334,6 +1336,613 @@ async fn process_sigterm_sigint_shutdown_and_restart() {
     );
     assert_shutdown_sequence(&second, "SIGINT");
     assert_clean_shutdown(&second);
+}
+
+#[tokio::test]
+#[serial_test::serial(runtime_lifecycle_process)]
+async fn process_defaults_directories_and_round_trips_config() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = tempfile::tempdir().expect("create the working directory");
+    let root = dir.path();
+    let pki = write_test_pki(root);
+    // Keep the config elsewhere to prove defaults resolve against the working
+    // directory rather than the configuration file's parent.
+    let config_dir = root.join("config");
+    fs::create_dir(&config_dir).expect("create the config directory");
+    let cfg_path = config_dir.join("giganto.toml");
+    let graphql_addr = free_loopback_addr();
+    fs::write(
+        &cfg_path,
+        format!(
+            "ingest_srv_addr = \"{EPHEMERAL}\"\npublish_srv_addr = \"{EPHEMERAL}\"\n\
+             graphql_srv_addr = \"{graphql_addr}\"\n"
+        ),
+    )
+    .expect("write the minimal configuration");
+    let targets = BindTargets {
+        ingest: EPHEMERAL.to_string(),
+        publish: EPHEMERAL.to_string(),
+        graphql: graphql_addr.to_string(),
+    };
+    assert!(!root.join("data").exists());
+    let mut node = Node::spawn("default-directories", root, &cfg_path, &pki);
+    node.wait_until_ready(&targets).await;
+
+    assert!(root.join("data/db/CURRENT").is_file());
+    assert_eq!(
+        fs::read_to_string(root.join("data/COMPRESSION")).expect("read compression metadata"),
+        "disabled"
+    );
+    assert!(!root.join("export").exists());
+    assert!(!config_dir.join("data").exists());
+
+    let client = graphql_client(&pki);
+    let url = format!("https://{graphql_addr}/graphql");
+    let query = "{ config { ingest_srv_addr: ingestSrvAddr publish_srv_addr: publishSrvAddr \
+                 graphql_srv_addr: graphqlSrvAddr data_dir: dataDir export_dir: exportDir \
+                 retention ack_transmission: ackTransmission max_open_files: maxOpenFiles \
+                 max_mb_of_level_base: maxMbOfLevelBase num_of_thread: numOfThread \
+                 max_subcompactions: maxSubcompactions } }";
+    let deadline = Instant::now() + QUERY_TIMEOUT;
+    let body = loop {
+        match post_query(&client, &url, query, REQUEST_TIMEOUT).await {
+            Ok(body) => break body,
+            Err(error) => assert!(
+                Instant::now() < deadline,
+                "query the defaulted configuration: {error}\n{}",
+                node.diagnostics()
+            ),
+        }
+        sleep(POLL).await;
+    };
+    let response: serde_json::Value = serde_json::from_str(&body).expect("parse the response");
+    assert!(response.get("errors").is_none(), "{body}");
+    let mut reported = response["data"]["config"].clone();
+    assert_eq!(reported["data_dir"], "data");
+    assert_eq!(reported["export_dir"], "export");
+    // GraphQL's StringNumber fields serialize as strings; TOML expects integers.
+    for key in ["max_mb_of_level_base", "max_subcompactions"] {
+        reported[key] = reported[key]
+            .as_str()
+            .expect("string number")
+            .parse::<u64>()
+            .expect("unsigned integer")
+            .into();
+    }
+    let old = toml::to_string(&reported).expect("serialize the reported configuration");
+    // The strings must differ to reach validation. The parsed configurations
+    // are unchanged, which updateConfig already rejects after validation.
+    let new = format!("{old}\n");
+    let mutation =
+        format!("mutation {{ updateConfig(old: {old:?}, new: {new:?}) {{ dataDir exportDir }} }}");
+    let body = post_query(&client, &url, &mutation, REQUEST_TIMEOUT)
+        .await
+        .expect("round trip the defaulted configuration");
+    let response: serde_json::Value = serde_json::from_str(&body).expect("parse the response");
+    assert_eq!(response["errors"][0]["message"], "No changes", "{body}");
+
+    node.signal(libc::SIGTERM);
+    assert!(
+        node.wait_for_exit().await.success(),
+        "{}",
+        node.diagnostics()
+    );
+    assert_clean_shutdown(&node);
+
+    // A restored minimal config must retain omission information and create
+    // the default directory even when the primary config could not be read.
+    let backup_path = cfg_path.with_extension("toml.bak");
+    fs::rename(&cfg_path, &backup_path).expect("back up the minimal configuration");
+    fs::write(&cfg_path, "invalid TOML").expect("corrupt the configuration");
+    fs::rename(root.join("data"), root.join("previous-data"))
+        .expect("move the previous database aside");
+    assert!(!root.join("data").exists());
+    let mut restored = Node::spawn("restored-default-directories", root, &cfg_path, &pki);
+    restored.wait_until_ready(&targets).await;
+    assert_eq!(
+        fs::read_to_string(&cfg_path).expect("read the restored configuration"),
+        fs::read_to_string(&backup_path).expect("read the backup")
+    );
+    assert!(root.join("data/db/CURRENT").is_file());
+    assert!(!root.join("export").exists());
+
+    // A real update must keep the reported relative paths valid through
+    // persistence and the next generation, not only a no-op validation.
+    let deadline = Instant::now() + QUERY_TIMEOUT;
+    loop {
+        let budget = REQUEST_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
+        if post_query(&client, &url, query, budget).await.is_ok() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the restored GraphQL server did not become ready\n{}",
+            restored.diagnostics()
+        );
+        sleep(POLL).await;
+    }
+    reported["retention"] = "101d".into();
+    let new = toml::to_string(&reported).expect("serialize the updated configuration");
+    let mutation = format!(
+        "mutation {{ updateConfig(old: {old:?}, new: {new:?}) {{ dataDir exportDir retention }} }}"
+    );
+    let body = post_query(&client, &url, &mutation, REQUEST_TIMEOUT)
+        .await
+        .expect("update the defaulted configuration");
+    let response: serde_json::Value = serde_json::from_str(&body).expect("parse the response");
+    assert!(response.get("errors").is_none(), "{body}");
+    assert_eq!(response["data"]["updateConfig"]["dataDir"], "data");
+    assert_eq!(response["data"]["updateConfig"]["exportDir"], "export");
+
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        let budget = REQUEST_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
+        if let Ok(body) = post_query(&client, &url, query, budget).await {
+            let response: serde_json::Value =
+                serde_json::from_str(&body).expect("parse the response after restart");
+            if response["data"]["config"]["retention"] == "101d" {
+                assert!(response.get("errors").is_none(), "{body}");
+                assert_eq!(response["data"]["config"]["data_dir"], "data");
+                assert_eq!(response["data"]["config"]["export_dir"], "export");
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the updated configuration was not served after restart\n{}",
+            restored.diagnostics()
+        );
+        sleep(POLL).await;
+    }
+    let persisted: toml::Value =
+        toml::from_str(&fs::read_to_string(&cfg_path).unwrap()).expect("read persisted settings");
+    assert_eq!(persisted["data_dir"].as_str(), Some("data"));
+    assert_eq!(persisted["export_dir"].as_str(), Some("export"));
+    assert!(!root.join("export").exists());
+    restored.signal(libc::SIGTERM);
+    assert!(
+        restored.wait_for_exit().await.success(),
+        "{}",
+        restored.diagnostics()
+    );
+    assert_clean_shutdown(&restored);
+
+    // A new process must reload the persisted defaults, now explicit paths,
+    // rather than relying on settings retained by the previous generation.
+    let mut restarted = Node::spawn("updated-default-directories", root, &cfg_path, &pki);
+    restarted.wait_until_ready(&targets).await;
+    let deadline = Instant::now() + QUERY_TIMEOUT;
+    let body = loop {
+        let budget = REQUEST_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
+        match post_query(&client, &url, query, budget).await {
+            Ok(body) => break body,
+            Err(error) => assert!(
+                Instant::now() < deadline,
+                "query the persisted configuration in a new process: {error}\n{}",
+                restarted.diagnostics()
+            ),
+        }
+        sleep(POLL).await;
+    };
+    let response: serde_json::Value = serde_json::from_str(&body).expect("parse persisted config");
+    assert!(response.get("errors").is_none(), "{body}");
+    assert_eq!(response["data"]["config"]["retention"], "101d");
+    assert_eq!(response["data"]["config"]["data_dir"], "data");
+    assert_eq!(response["data"]["config"]["export_dir"], "export");
+    assert!(root.join("data/db/CURRENT").is_file());
+    assert!(!root.join("export").exists());
+    restarted.signal(libc::SIGTERM);
+    assert!(
+        restarted.wait_for_exit().await.success(),
+        "{}",
+        restarted.diagnostics()
+    );
+    assert_clean_shutdown(&restarted);
+}
+
+#[tokio::test]
+#[serial_test::serial(runtime_lifecycle_process)]
+async fn process_reopens_existing_default_directory_with_compression() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = tempfile::tempdir().expect("create the working directory");
+    let root = dir.path();
+    let pki = write_test_pki(root);
+    let cfg_path = root.join("config.toml");
+    let graphql_addr = free_loopback_addr();
+    fs::write(
+        &cfg_path,
+        format!(
+            "ingest_srv_addr = \"{EPHEMERAL}\"\npublish_srv_addr = \"{EPHEMERAL}\"\n\
+             graphql_srv_addr = \"{graphql_addr}\"\nack_transmission = 1\ncompression = true\n"
+        ),
+    )
+    .expect("write the configuration without directory settings");
+    let targets = BindTargets {
+        ingest: EPHEMERAL.to_string(),
+        publish: EPHEMERAL.to_string(),
+        graphql: graphql_addr.to_string(),
+    };
+    let timestamp = timestamp_nanos();
+    let marker = format!("default-directory-restart-marker-{timestamp}");
+    let metadata_path = root.join("data/COMPRESSION");
+
+    let metadata_modified = {
+        let mut first = Node::spawn("compressed-default-directories", root, &cfg_path, &pki);
+        first.wait_until_ready(&targets).await;
+        let ingest_addr = addr_after(&first, "Ingest listening on");
+        let sensor = ingest_marker(&first, ingest_addr, &pki, marker.as_bytes(), timestamp).await;
+        assert_eq!(fs::read_to_string(&metadata_path).unwrap(), "enabled");
+        let metadata_modified = fs::metadata(&metadata_path).unwrap().modified().unwrap();
+
+        // Persist the reported defaults through a real update after storing a
+        // record, then verify both the next generation and a fresh process.
+        let client = graphql_client(&pki);
+        let url = format!("https://{graphql_addr}/graphql");
+        let query = "{ config { ingest_srv_addr: ingestSrvAddr publish_srv_addr: publishSrvAddr \
+                     graphql_srv_addr: graphqlSrvAddr data_dir: dataDir export_dir: exportDir \
+                     retention ack_transmission: ackTransmission max_open_files: maxOpenFiles \
+                     max_mb_of_level_base: maxMbOfLevelBase num_of_thread: numOfThread \
+                     max_subcompactions: maxSubcompactions } }";
+        let body = post_query(&client, &url, query, REQUEST_TIMEOUT)
+            .await
+            .expect("query configuration before updating retention");
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(response.get("errors").is_none(), "{body}");
+        let mut reported = response["data"]["config"].clone();
+        for key in ["max_mb_of_level_base", "max_subcompactions"] {
+            reported[key] = reported[key]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                .into();
+        }
+        let old = toml::to_string(&reported).unwrap();
+        reported["retention"] = "101d".into();
+        let new = toml::to_string(&reported).unwrap();
+        let mutation = format!(
+            "mutation {{ updateConfig(old: {old:?}, new: {new:?}) {{ retention dataDir exportDir }} }}"
+        );
+        let log_start = first.log().len();
+        let body = post_query(&client, &url, &mutation, REQUEST_TIMEOUT)
+            .await
+            .expect("update retention with an existing record");
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(response.get("errors").is_none(), "{body}");
+        first
+            .wait_for_log_markers(
+                &targets,
+                log_start,
+                &READY_MARKERS,
+                "the generation after the configuration update",
+            )
+            .await;
+        assert_marker_is_queryable(&client, graphql_addr, &first, marker.as_bytes()).await;
+        assert_eq!(fs::read_to_string(&metadata_path).unwrap(), "enabled");
+        assert_eq!(
+            fs::metadata(&metadata_path).unwrap().modified().unwrap(),
+            metadata_modified,
+            "updating retention must preserve existing compression metadata"
+        );
+        first.signal(libc::SIGTERM);
+        assert!(
+            first.wait_for_exit().await.success(),
+            "{}",
+            first.diagnostics()
+        );
+        assert_clean_shutdown(&first);
+        drop(sensor);
+        metadata_modified
+    };
+
+    assert_eq!(fs::read_to_string(&metadata_path).unwrap(), "enabled");
+    let mut second = Node::spawn("reopened-default-directories", root, &cfg_path, &pki);
+    second.wait_until_ready(&targets).await;
+    assert_marker_is_queryable(
+        &graphql_client(&pki),
+        graphql_addr,
+        &second,
+        marker.as_bytes(),
+    )
+    .await;
+    assert_eq!(fs::read_to_string(&metadata_path).unwrap(), "enabled");
+    assert_eq!(
+        fs::metadata(&metadata_path).unwrap().modified().unwrap(),
+        metadata_modified,
+        "restarting must preserve existing compression metadata"
+    );
+    assert!(!root.join("export").exists());
+    assert!(!second.log().contains(REPAIR_MARKER));
+    let export_query = format!(
+        "{{ export(exportType: \"json\", filter: {{ protocol: \"log\", \
+         sensorId: {:?}, kind: \"{LOG_KIND}\" }}) }}",
+        expected_sensor()
+    );
+    let body = post_query(
+        &graphql_client(&pki),
+        &format!("https://{graphql_addr}/graphql"),
+        &export_query,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .expect("export to the default directory");
+    let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(response.get("errors").is_none(), "{body}");
+    let (export_path, _) = response["data"]["export"]
+        .as_str()
+        .expect("export download path")
+        .rsplit_once('@')
+        .expect("export node name");
+    assert!(Path::new(export_path).starts_with("export"));
+    assert!(root.join("export").is_dir());
+    second.signal(libc::SIGTERM);
+    assert!(
+        second.wait_for_exit().await.success(),
+        "{}",
+        second.diagnostics()
+    );
+    assert_clean_shutdown(&second);
+    // Shutdown drains the accepted export before closing the database.
+    let exported: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join(export_path)).unwrap()).unwrap();
+    assert_eq!(exported["log"], marker);
+}
+
+#[tokio::test]
+#[serial_test::serial(runtime_lifecycle_process)]
+async fn process_preserves_explicit_relative_directories() {
+    assert_explicit_directories_preserved(false).await;
+}
+
+#[tokio::test]
+#[serial_test::serial(runtime_lifecycle_process)]
+async fn process_preserves_explicit_absolute_directories() {
+    assert_explicit_directories_preserved(true).await;
+}
+
+async fn assert_explicit_directories_preserved(absolute_paths: bool) {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = tempfile::tempdir().expect("create the working directory");
+    let root = dir.path();
+    let pki = write_test_pki(root);
+    let [configured_data_dir, configured_export_dir] =
+        ["custom/store", "custom/exports"].map(|path| {
+            if absolute_paths {
+                root.join(path)
+            } else {
+                PathBuf::from(path)
+            }
+        });
+    let data_dir = root.join(&configured_data_dir);
+    let export_dir = root.join(&configured_export_dir);
+    fs::create_dir_all(&data_dir).expect("create the explicit data directory");
+    let config_dir = root.join("config");
+    fs::create_dir(&config_dir).expect("create the config directory");
+    let cfg_path = config_dir.join("giganto.toml");
+    let graphql_addr = free_loopback_addr();
+    write_config(
+        &cfg_path,
+        &configured_data_dir,
+        &configured_export_dir,
+        graphql_addr,
+    );
+    let targets = BindTargets {
+        ingest: EPHEMERAL.to_string(),
+        publish: EPHEMERAL.to_string(),
+        graphql: graphql_addr.to_string(),
+    };
+    let mut node = Node::spawn("explicit-directories", root, &cfg_path, &pki);
+    node.wait_until_ready(&targets).await;
+
+    assert!(data_dir.join("db/CURRENT").is_file());
+    assert!(!root.join("custom/exports").exists());
+    assert!(!config_dir.join("custom").exists());
+
+    let client = graphql_client(&pki);
+    let url = format!("https://{graphql_addr}/graphql");
+    assert_reported_explicit_directories(
+        &node,
+        &client,
+        &url,
+        &configured_data_dir,
+        &configured_export_dir,
+    )
+    .await;
+
+    let timestamp = timestamp_nanos();
+    let marker = format!("explicit-directory-restart-marker-{timestamp}");
+    let sensor = ingest_marker(
+        &node,
+        addr_after(&node, "Ingest listening on"),
+        &pki,
+        marker.as_bytes(),
+        timestamp,
+    )
+    .await;
+
+    node.signal(libc::SIGTERM);
+    assert!(
+        node.wait_for_exit().await.success(),
+        "{}",
+        node.diagnostics()
+    );
+    assert_clean_shutdown(&node);
+    drop(sensor);
+
+    let metadata_path = data_dir.join("COMPRESSION");
+    let metadata = fs::read(&metadata_path).expect("read compression metadata");
+    let metadata_modified = fs::metadata(&metadata_path)
+        .expect("stat compression metadata")
+        .modified()
+        .expect("compression metadata modification time");
+    let mut restarted = Node::spawn("reopened-explicit-directories", root, &cfg_path, &pki);
+    restarted.wait_until_ready(&targets).await;
+    assert_marker_is_queryable(&client, graphql_addr, &restarted, marker.as_bytes()).await;
+    assert_eq!(
+        fs::read(&metadata_path).expect("read compression metadata after restart"),
+        metadata
+    );
+    assert_eq!(
+        fs::metadata(&metadata_path)
+            .expect("stat compression metadata")
+            .modified()
+            .expect("compression metadata modification time"),
+        metadata_modified,
+        "restarting must preserve explicit-directory compression metadata"
+    );
+    assert!(!restarted.log().contains(REPAIR_MARKER));
+    assert!(!export_dir.exists());
+
+    assert_explicit_export_after_restart(
+        &mut restarted,
+        &client,
+        &url,
+        root,
+        &configured_export_dir,
+        &marker,
+    )
+    .await;
+    assert!(!root.join("data").exists());
+    assert!(!root.join("export").exists());
+}
+
+async fn assert_reported_explicit_directories(
+    node: &Node,
+    client: &reqwest::Client,
+    url: &str,
+    configured_data_dir: &Path,
+    configured_export_dir: &Path,
+) {
+    let query = "{ config { dataDir exportDir } }";
+    let deadline = Instant::now() + QUERY_TIMEOUT;
+    let body = loop {
+        let budget = REQUEST_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
+        match post_query(client, url, query, budget).await {
+            Ok(body) => break body,
+            Err(error) => assert!(
+                Instant::now() < deadline,
+                "query the explicit configuration: {error}\n{}",
+                node.diagnostics()
+            ),
+        }
+        sleep(POLL).await;
+    };
+    let response: serde_json::Value = serde_json::from_str(&body).expect("parse the response");
+    assert!(response.get("errors").is_none(), "{body}");
+    assert_eq!(
+        response["data"]["config"]["dataDir"],
+        configured_data_dir.to_str().expect("UTF-8 data path")
+    );
+    assert_eq!(
+        response["data"]["config"]["exportDir"],
+        configured_export_dir.to_str().expect("UTF-8 export path")
+    );
+}
+
+async fn assert_explicit_export_after_restart(
+    node: &mut Node,
+    client: &reqwest::Client,
+    url: &str,
+    root: &Path,
+    configured_export_dir: &Path,
+    marker: &str,
+) {
+    let export_query = format!(
+        "{{ export(exportType: \"json\", filter: {{ protocol: \"log\", \
+         sensorId: {:?}, kind: \"{LOG_KIND}\" }}) }}",
+        expected_sensor()
+    );
+    let body = post_query(client, url, &export_query, REQUEST_TIMEOUT)
+        .await
+        .expect("export to the explicit directory after restart");
+    let response: serde_json::Value =
+        serde_json::from_str(&body).expect("parse the export response");
+    assert!(response.get("errors").is_none(), "{body}");
+    let (export_path, _) = response["data"]["export"]
+        .as_str()
+        .expect("export download path")
+        .rsplit_once('@')
+        .expect("export node name");
+    assert!(Path::new(export_path).starts_with(configured_export_dir));
+    assert!(root.join(configured_export_dir).is_dir());
+
+    node.signal(libc::SIGTERM);
+    assert!(
+        node.wait_for_exit().await.success(),
+        "{}",
+        node.diagnostics()
+    );
+    assert_clean_shutdown(node);
+    let exported = fs::read_to_string(root.join(export_path)).expect("read the completed export");
+    let exported: serde_json::Value =
+        serde_json::from_str(&exported).expect("parse the exported log");
+    assert_eq!(exported["log"], marker);
+}
+
+#[tokio::test]
+#[serial_test::serial(runtime_lifecycle_process)]
+async fn process_rejects_explicit_missing_directories() {
+    for restore_backup in [false, true] {
+        for path in ["data", "nested/data", "absolute"] {
+            let dir = tempfile::tempdir().expect("create the working directory");
+            let root = dir.path();
+            let pki = write_test_pki(root);
+            let cfg_path = root.join("config.toml");
+            let data_dir = if path == "absolute" {
+                root.join("missing-absolute")
+            } else {
+                PathBuf::from(path)
+            };
+            let config = format!("data_dir = {data_dir:?}\n");
+            if restore_backup {
+                fs::write(&cfg_path, "invalid TOML").expect("write the invalid configuration");
+                fs::write(cfg_path.with_extension("toml.bak"), &config)
+                    .expect("write the backup configuration");
+            } else {
+                fs::write(&cfg_path, &config).expect("write the configuration");
+            }
+            let mut node = Node::spawn("explicit-missing-data", root, &cfg_path, &pki);
+            assert!(!node.wait_for_exit().await.success());
+            assert!(
+                node.console().contains("data directory is invalid"),
+                "{}",
+                node.diagnostics()
+            );
+            assert_eq!(fs::read_to_string(&cfg_path).unwrap(), config);
+            assert!(!root.join(&data_dir).exists());
+            assert!(!root.join("data").exists());
+            assert!(!root.join("nested").exists());
+        }
+    }
+}
+
+#[tokio::test]
+#[serial_test::serial(runtime_lifecycle_process)]
+async fn process_reports_default_directory_creation_failure_without_restoring_backup() {
+    let dir = tempfile::tempdir().expect("create the working directory");
+    let root = dir.path();
+    let pki = write_test_pki(root);
+    let cfg_path = root.join("config.toml");
+    let config = "ingest_srv_addr = \"127.0.0.1:0\"\n";
+    fs::write(&cfg_path, config).expect("write the configuration");
+    fs::write(cfg_path.with_extension("toml.bak"), "data_dir = \".\"\n")
+        .expect("write a valid backup");
+    fs::write(root.join("data"), "existing file").expect("block directory creation");
+
+    let mut node = Node::spawn("default-data-creation-failure", root, &cfg_path, &pki);
+    assert!(!node.wait_for_exit().await.success());
+    assert!(
+        node.console()
+            .contains("failed to create default data directory: data"),
+        "{}",
+        node.diagnostics()
+    );
+    assert_eq!(fs::read_to_string(&cfg_path).unwrap(), config);
+    assert_eq!(
+        fs::read_to_string(root.join("data")).unwrap(),
+        "existing file"
+    );
+    assert!(!root.join("export").exists());
 }
 
 fn timestamp_nanos() -> i64 {

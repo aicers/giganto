@@ -1,0 +1,9 @@
+# CI uploads default and bootroot coverage separately. Wait for both reports
+# before comparing project coverage or publishing a pull request comment.
+# Keep these counts aligned with the coverage matrix in .github/workflows/ci.yml.
+codecov:
+  notify:
+    after_n_builds: 2
+
+comment:
+  after_n_builds: 2

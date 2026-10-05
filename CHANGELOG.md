@@ -6,6 +6,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- Made `data_dir` and `export_dir` optional, defaulting to `data` and `export`
+  relative to the process's working directory. Giganto creates a defaulted
+  `data_dir` at startup; an explicitly configured directory must already exist.
+
 ### Removed
 
 - Removed the `status` query and the `reboot` and `shutdown` mutations from

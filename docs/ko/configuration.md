@@ -5,8 +5,9 @@
 - `ingest_srv_addr`: ingest QUIC 수신 주소, 기본값 `[::]:38370`
 - `publish_srv_addr`: publish QUIC 수신 주소, 기본값 `[::]:38371`
 - `graphql_srv_addr`: GraphQL 서버 주소, 기본값 `[::]:8443`
-- `data_dir`: 이벤트 저장 디렉터리(필수), 사전에 생성
-- `export_dir`: Export 파일 저장 디렉터리(필수), 기본값 없음
+- `data_dir`: 이벤트 저장 디렉터리(선택, 기본값: `data`). 생략하면 시작 시 생성되며,
+  명시적으로 설정한 디렉터리는 이미 존재해야 합니다.
+- `export_dir`: Export 파일 저장 디렉터리(선택, 기본값: `export`), 첫 Export 시 생성
 - `retention`: 데이터 보관 기간, 기본값 `100d`
 - `ack_transmission`: ACK를 전송하는 기준값, 기본값 `1024`
 - `max_open_files`: RocksDB 최대 오픈 파일 수, 기본값 `8000`
@@ -23,6 +24,12 @@
   얼마나 자주 알릴지만 결정합니다. 0보다 커야 하며, 기본값 `5s`
 - `peer_srv_addr`: 노드 간 통신 수신 주소, 기본값 없음
 - `peers`: (클러스터) 연동 노드 목록, 기본값 없음
+
+상대 경로인 `data_dir`와 `export_dir`는 프로세스의 작업 디렉터리를 기준으로 합니다.
+
+`updateConfig`로 변경된 설정을 저장하면 원래 생략했던 `data_dir`도 설정 파일에
+기록됩니다. 이후에는 명시적으로 설정한 경로로 취급되므로 다음 시작 시 디렉터리가
+이미 존재해야 합니다.
 
 ## 단일 노드 설정 예시
 

@@ -2,7 +2,8 @@
 
 ## When the process does not start
 
-- Verify that the `data_dir` directory actually exists.
+- Verify that an explicitly configured `data_dir` exists. When omitted, verify
+  that the process can create `data` in its working directory.
 - Verify that the paths for the certificate, private key, and CA
   certificate are correct.
 - If a log path is specified, verify that the file has write permission.
