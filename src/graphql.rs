@@ -193,8 +193,6 @@ type Schema = async_graphql::Schema<Query, Mutation, EmptySubscription>;
 type ConnArgs<T> = (Vec<(Box<[u8]>, T)>, bool, bool);
 
 pub struct NodeName(pub String);
-pub struct RebootNotify(Arc<Notify>); // reboot
-pub struct PowerOffNotify(Arc<Notify>); // shutdown
 pub struct TerminateNotify(Arc<Notify>); // stop
 
 /// A web-owned [`TaskTracker`] the PCAP resolver registers `tcpdump`-reaping
@@ -224,8 +222,6 @@ pub fn schema(
     request_client_pool: reqwest::Client,
     export_path: PathBuf,
     config_update_tx: Sender<ConfigVisible>,
-    notify_reboot: Arc<Notify>,
-    notify_power_off: Arc<Notify>,
     notify_terminate: Arc<Notify>,
     settings: Settings,
     // The generation's top-level tracker, plumbed into the GraphQL context so a
@@ -257,8 +253,6 @@ pub fn schema(
         .data(export_path)
         .data(config_update_tx)
         .data(TerminateNotify(notify_terminate))
-        .data(RebootNotify(notify_reboot))
-        .data(PowerOffNotify(notify_power_off))
         .data(settings)
         .data(top_level_tracker)
         .data(PcapReaperTracker(pcap_reaper_tracker))
@@ -1247,8 +1241,6 @@ pub(crate) mod tests {
             let request_client_pool = reqwest::Client::new();
             let export_dir = tempfile::tempdir().unwrap();
             let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
-            let notify_reboot = Arc::new(Notify::new());
-            let notify_power_off = Arc::new(Notify::new());
             let notify_terminate = Arc::new(Notify::new());
             let settings = Settings::load("tests/config.toml").unwrap();
             // Kept on the fixture, not built inline: the customer-deletion
@@ -1278,8 +1270,6 @@ pub(crate) mod tests {
                 request_client_pool,
                 export_dir.path().to_path_buf(),
                 config_update_tx.clone(),
-                notify_reboot,
-                notify_power_off,
                 notify_terminate,
                 settings,
                 top_level_tracker.clone(),

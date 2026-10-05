@@ -66,7 +66,6 @@ use crate::{
 };
 
 const ONE_DAY: Duration = Duration::from_hours(24);
-const WAIT_SHUTDOWN: u64 = 15;
 /// Names the per-generation top-level tracker in the drain progress log.
 ///
 /// Every tracker in the process is drained by the same policy, so the label is
@@ -199,12 +198,8 @@ async fn main() -> Result<()> {
 /// The effects the lifecycle performs on something outside its own control
 /// flow.
 ///
-/// Shutting the store down, rebooting the host and powering it off are grouped
-/// into one seam because they are the three things a test has to be able to
-/// watch happen, watch not happen, and make fail. All three are synchronous;
-/// the lifecycle awaits nothing through this trait. It is `Send + Sync`
-/// because the teardown holds a reference to it across awaits and the futures
-/// that do so have to be spawnable.
+/// The store shutdown is synchronous. The trait is `Send + Sync` because
+/// teardown holds a reference across awaits in spawnable futures.
 trait LifecycleEffects: Send + Sync {
     /// Flushes the store, writes its WAL and cancels its background work.
     ///
@@ -215,43 +210,16 @@ trait LifecycleEffects: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the store could not be flushed. That is the one
-    /// outcome the lifecycle refuses to follow with a host action or a new
-    /// generation.
+    /// outcome the lifecycle refuses to follow with a new generation.
     fn shutdown_database(&self, database: &storage::Database) -> Result<()>;
-
-    /// Reboots the host.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the host refused the request.
-    fn reboot(&self) -> Result<()>;
-
-    /// Powers the host off.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the host refused the request.
-    fn power_off(&self) -> Result<()>;
 }
 
-/// The production seam: the real store and the real host.
+/// The production seam for shutting down the real store.
 struct HostEffects;
 
 impl LifecycleEffects for HostEffects {
     fn shutdown_database(&self, database: &storage::Database) -> Result<()> {
         database.shutdown()
-    }
-
-    fn reboot(&self) -> Result<()> {
-        roxy::reboot()
-            .map(|_| ())
-            .map_err(|e| anyhow!("cannot restart the system: {e}"))
-    }
-
-    fn power_off(&self) -> Result<()> {
-        roxy::power_off()
-            .map(|_| ())
-            .map_err(|e| anyhow!("cannot power off the system: {e}"))
     }
 }
 
@@ -268,15 +236,13 @@ impl LifecycleEffects for HostEffects {
 ///
 /// A restart for a configuration update opens the same database path in a new
 /// generation. `Database::open` fails if any database clone from the old
-/// generation remains alive. Reboot and power-off do not require this database
-/// handoff, but use the same lifecycle order for consistency.
+/// generation remains alive.
 ///
 /// # Errors
 ///
 /// Returns an error if a generation failed, if the store could not be shut
-/// down, if the host refused a reboot or a power-off, if an entry task ended
-/// on its own, or if a generation ended degraded on an ending other than a
-/// configuration update.
+/// down, if an entry task ended on its own, or if a generation ended degraded
+/// on an ending other than a configuration update.
 async fn run_lifecycle(
     settings: &mut Settings,
     process: &ProcessContext,
@@ -284,7 +250,7 @@ async fn run_lifecycle(
 ) -> Result<()> {
     loop {
         let outcome = run_generation(settings, process, effects).await?;
-        match act_on_generation_end(outcome, effects)? {
+        match act_on_generation_end(outcome)? {
             ControlFlow::Continue(()) => {}
             ControlFlow::Break(()) => return Ok(()),
         }
@@ -294,49 +260,23 @@ async fn run_lifecycle(
 /// Takes the one action a generation's ending asks for, and says whether the
 /// lifecycle carries on.
 ///
-/// This runs immediately after the teardown has returned, so it is the last
-/// step of the observable shutdown sequence and the only one that reaches
-/// outside the process. Everything before it is identical for every ending.
-///
-/// The four steps run in the order written below, and that order is the
-/// contract. The action goes first because the drain proved the tracker empty
-/// and the store was flushed with its background work stopped, so an operator
-/// who asked for a reboot still gets one even though something died on the way
-/// out — the opposite of a failed database shutdown, which suppresses the host
-/// action entirely because there the store's on-disk state is unknown. The two
-/// records that follow are separate lines rather than one, because a returned
-/// error is not itself a log record and a degraded generation whose host
-/// action also failed has two things to say. The error returned is the host
-/// action's: the host did not go down, which is the more actionable of the two.
+/// This runs after teardown and records the final action before reporting
+/// degraded health. Configuration updates continue into a new generation;
+/// other endings return from the lifecycle.
 ///
 /// # Errors
 ///
-/// Returns an error if the host refused the reboot or the power-off, if the
-/// generation ended because an entry task did — nobody asked for that one, so
-/// the process manager is told the exit was not wanted — or if the generation
-/// ended degraded on any ending but a configuration update.
-fn act_on_generation_end(
-    outcome: GenerationOutcome,
-    effects: &dyn LifecycleEffects,
-) -> Result<ControlFlow<()>> {
+/// Returns an error if an entry task ended on its own or if the generation
+/// ended degraded on an ending other than a configuration update.
+fn act_on_generation_end(outcome: GenerationOutcome) -> Result<ControlFlow<()>> {
     let GenerationOutcome { ending, health } = outcome;
 
-    let action = match ending {
+    match ending {
         GenerationEnd::RestartForConfigUpdate => {
             info!("{SHUTDOWN_PHASE}: final action, starting the next generation ({ending:?})");
-            Ok(())
         }
         GenerationEnd::Terminate => {
             info!("{SHUTDOWN_PHASE}: final action, returning from the lifecycle ({ending:?})");
-            Ok(())
-        }
-        GenerationEnd::Reboot => {
-            info!("{SHUTDOWN_PHASE}: final action, rebooting the host ({ending:?})");
-            effects.reboot()
-        }
-        GenerationEnd::PowerOff => {
-            info!("{SHUTDOWN_PHASE}: final action, powering the host off ({ending:?})");
-            effects.power_off()
         }
         // The generation has already drained and closed itself down; what is
         // left is to tell the process manager that this exit was not asked
@@ -344,19 +284,13 @@ fn act_on_generation_end(
         // was reported at the shutdown coordination boundary.
         GenerationEnd::EntryTaskExited(_) => {
             info!("{SHUTDOWN_PHASE}: final action, failing the lifecycle ({ending:?})");
-            Ok(())
         }
-    };
+    }
 
     let degraded = health == GenerationHealth::Degraded;
     if degraded {
         error!(ending = ?ending, "generation ended degraded");
     }
-    if let Err(e) = &action {
-        let cause = format!("{e:#}");
-        error!(ending = ?ending, error = %cause, "generation end action failed");
-    }
-    action?;
 
     match ending {
         GenerationEnd::EntryTaskExited(subsystem) => Err(anyhow!(
@@ -369,8 +303,10 @@ fn act_on_generation_end(
         // clone goes as the generation returns. So the handoff holds, and the
         // failure is logged rather than propagated.
         GenerationEnd::RestartForConfigUpdate => Ok(ControlFlow::Continue(())),
-        _ if degraded => Err(anyhow!("the generation ended degraded ({ending:?})")),
-        _ => Ok(ControlFlow::Break(())),
+        GenerationEnd::Terminate if degraded => {
+            Err(anyhow!("the generation ended degraded ({ending:?})"))
+        }
+        GenerationEnd::Terminate => Ok(ControlFlow::Break(())),
     }
 }
 
@@ -389,7 +325,7 @@ struct ProcessContext {
     reload_handle: ReloadHandle,
     /// The current TLS material, republished on every successful reload.
     tls_watch: tls_reload::TlsWatch,
-    /// Raised by the SIGTERM/SIGINT handler and by the GraphQL shutdown API.
+    /// Raised by the SIGTERM/SIGINT handler and by the GraphQL `stop` mutation.
     notify_terminate: Arc<Notify>,
     /// Raised by the SIGHUP handler.
     notify_tls_reload: Arc<Notify>,
@@ -465,7 +401,7 @@ impl std::fmt::Display for Subsystem {
 
 /// Why a generation ended.
 ///
-/// Four of these are intents that arrive from outside; the fifth is a
+/// Two of these are intents that arrive from outside; the third is a
 /// subsystem entry task ending on its own, which is not an intent but is just
 /// as final. Each one names a different final action for
 /// [`act_on_generation_end`] to take.
@@ -476,10 +412,6 @@ enum GenerationEnd {
     RestartForConfigUpdate,
     /// The daemon was asked to exit.
     Terminate,
-    /// The host was asked to reboot.
-    Reboot,
-    /// The host was asked to power off.
-    PowerOff,
     /// This subsystem's entry task ended while the generation was still
     /// serving.
     ///
@@ -730,8 +662,6 @@ async fn run_generation(
     let database = storage::Database::open(&db_path, &db_options)?;
 
     let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
-    let notify_reboot = Arc::new(Notify::new());
-    let notify_power_off = Arc::new(Notify::new());
 
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&database);
@@ -815,8 +745,6 @@ async fn run_generation(
         process.request_client_pool.clone(),
         settings.config.visible.export_dir.clone(),
         config_update_tx,
-        notify_reboot.clone(),
-        notify_power_off.clone(),
         process.notify_terminate.clone(),
         settings.clone(),
         top_level_tracker.clone(),
@@ -1006,11 +934,7 @@ async fn run_generation(
         })
         .context("failed to register the ingest entry task")?;
 
-    let mut intents = GenerationIntents {
-        config_update_rx,
-        notify_reboot,
-        notify_power_off,
-    };
+    let mut intents = GenerationIntents { config_update_rx };
     let mut entry_tasks = EntryTasks {
         ingest: Some(ingest_task_handle),
         publish: Some(publish_task_handle),
@@ -1070,20 +994,16 @@ async fn run_generation(
     })
 }
 
-/// The three control inputs a generation owns.
+/// The configuration-update input a generation owns.
 ///
 /// Terminate and TLS reload arrive from outside a generation and live in
-/// [`ProcessContext`]; these three are created per generation, handed to the
-/// GraphQL schema, and listened on only here. Grouping them keeps
+/// [`ProcessContext`]; configuration updates use a channel created per
+/// generation, handed to the GraphQL schema, and listened on only here. This keeps
 /// [`wait_for_generation_end`]'s parameter list readable and gives a test one
 /// place to build the intents from.
 struct GenerationIntents {
     /// Receives configuration update requests accepted from `updateConfig`.
     config_update_rx: mpsc::Receiver<ConfigVisible>,
-    /// Raised by the GraphQL reboot mutation.
-    notify_reboot: Arc<Notify>,
-    /// Raised by the GraphQL power-off mutation.
-    notify_power_off: Arc<Notify>,
 }
 
 /// Closes a generation's configuration-update admission without discarding
@@ -1370,19 +1290,17 @@ where
     // configuration update out of the next round, and the last arm — ready on
     // its first poll, and enabled only for that round — is what makes that
     // round a single pass over readiness rather than a second place the wait
-    // can park. Only the three terminal intents and a pending TLS reload
+    // can park. Only termination and a pending TLS reload
     // outrank the handles in it, and when none of those is ready it falls
     // straight back to the full selection.
     let mut poll_config_updates = true;
     loop {
         // `biased`, so the order the arms are written in is the policy.
         //
-        // The three terminal intents come first because an explicit request to
-        // stop is the strongest thing that can arrive; their order among
-        // themselves only has to be fixed, since all three run the same
-        // teardown and differ only in the tail.
+        // Termination comes first because an explicit request to stop is the
+        // strongest thing that can arrive.
         //
-        // The TLS reload sits directly below them because it is the one arm
+        // The TLS reload sits directly below it because it is the one arm
         // with a deadline. giganto does not rotate certificates itself: an
         // operator replaces the files and sends SIGHUP, at a cadence that may
         // be as short as an hour, so this arm is a recurring operation rather
@@ -1414,14 +1332,6 @@ where
             () = process.notify_terminate.notified() => {
                 info!("Termination signal: daemon exit");
                 return GenerationEnd::Terminate;
-            }
-            () = intents.notify_reboot.notified() => {
-                info!("Restarting the system...");
-                return GenerationEnd::Reboot;
-            }
-            () = intents.notify_power_off.notified() => {
-                info!("Power off the system...");
-                return GenerationEnd::PowerOff;
             }
             () = process.notify_tls_reload.notified() => {
                 reload_https_server(
@@ -1504,12 +1414,11 @@ struct GenerationTeardown {
 /// Runs the whole teardown of a generation, in the one order every ending
 /// shares.
 ///
-/// Five phases, and only the tail after the last of them differs by ending:
-/// web shutdown, the web reaper drain, the top-level tracker's
-/// close-cancel-drain, the retained-handle observation, and the database
-/// shutdown. Each phase leaves a marker behind, so a shutdown that stalls says
-/// which phase it stalled in and a test can read the sequence back out of one
-/// log.
+/// Five phases followed by a common tail delay: web shutdown, the web reaper
+/// drain, the top-level tracker's close-cancel-drain, the retained-handle
+/// observation, and the database shutdown. Each phase leaves a marker behind,
+/// so a shutdown that stalls says which phase it stalled in and a test can
+/// read the sequence back out of one log.
 ///
 /// The order is the whole of it. The drain closes the tracker, cancels it, and
 /// does not return until every tracked task has returned, so the retention and
@@ -1643,7 +1552,7 @@ async fn run_retention(
     result
 }
 
-/// Shuts the store down, then runs the tail the ending asks for.
+/// Shuts the store down, then waits for the common tail delay.
 ///
 /// By the time this runs the subsystems have been cancelled and joined and the
 /// top-level tracker has drained, so nothing tracked is left holding the
@@ -1663,8 +1572,7 @@ async fn run_retention(
 /// # Errors
 ///
 /// Returns an error if the store could not be shut down. Its on-disk state is
-/// then unknown, so the caller must take no host action and start no further
-/// generation on that path.
+/// then unknown, so the caller must start no further generation on that path.
 async fn finish_generation(
     generation_end: GenerationEnd,
     database: &storage::Database,
@@ -1676,19 +1584,7 @@ async fn finish_generation(
         return Err(e);
     }
 
-    match generation_end {
-        GenerationEnd::RestartForConfigUpdate
-        | GenerationEnd::Terminate
-        | GenerationEnd::EntryTaskExited(_) => {
-            sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
-        }
-        // The host is about to go down, so the pause that precedes handing it
-        // over is the whole of this tail.
-        GenerationEnd::Reboot | GenerationEnd::PowerOff => {
-            info!("Before shut down the system, wait {WAIT_SHUTDOWN} seconds...");
-            sleep(tokio::time::Duration::from_secs(WAIT_SHUTDOWN)).await;
-        }
-    }
+    sleep(Duration::from_millis(SERVER_REBOOT_DELAY)).await;
 
     Ok(())
 }
@@ -3724,11 +3620,9 @@ mod tests {
 
         /// Every ending a generation can have, in the order the parameterized
         /// sequence tests walk them.
-        const ALL_ENDINGS: [GenerationEnd; 5] = [
+        const ALL_ENDINGS: [GenerationEnd; 3] = [
             GenerationEnd::Terminate,
             GenerationEnd::RestartForConfigUpdate,
-            GenerationEnd::Reboot,
-            GenerationEnd::PowerOff,
             GenerationEnd::EntryTaskExited(Subsystem::Ingest),
         ];
 
@@ -3748,8 +3642,6 @@ mod tests {
                     "final action, starting the next generation"
                 }
                 GenerationEnd::Terminate => "final action, returning from the lifecycle",
-                GenerationEnd::Reboot => "final action, rebooting the host",
-                GenerationEnd::PowerOff => "final action, powering the host off",
                 GenerationEnd::EntryTaskExited(_) => "final action, failing the lifecycle",
             }
         }
@@ -3821,8 +3713,6 @@ mod tests {
         const CLEAN_RECORD: &str = "entry task stopped";
         /// The lifecycle-level record for a generation that ended degraded.
         const DEGRADED_RECORD: &str = "generation ended degraded";
-        /// The lifecycle-level record for an ending whose action failed.
-        const FAILED_ACTION_RECORD: &str = "generation end action failed";
 
         /// Every captured line carrying `needle`.
         fn records(logs: &Arc<Mutex<Vec<u8>>>, needle: &str) -> Vec<String> {
@@ -3926,8 +3816,6 @@ mod tests {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         enum EffectCall {
             ShutdownDatabase,
-            Reboot,
-            PowerOff,
         }
 
         /// A seam that records what the lifecycle asked of it, and can be told
@@ -3942,7 +3830,6 @@ mod tests {
         struct RecordingEffects {
             calls: Arc<Mutex<Vec<EffectCall>>>,
             shutdown_database_fails: bool,
-            host_action_fails: bool,
         }
 
         impl RecordingEffects {
@@ -3950,7 +3837,6 @@ mod tests {
                 Self {
                     calls: Arc::new(Mutex::new(Vec::new())),
                     shutdown_database_fails: false,
-                    host_action_fails: false,
                 }
             }
 
@@ -3958,14 +3844,6 @@ mod tests {
             fn failing() -> Self {
                 Self {
                     shutdown_database_fails: true,
-                    ..Self::new()
-                }
-            }
-
-            /// A seam whose host refuses the command it is given.
-            fn refusing_host_actions() -> Self {
-                Self {
-                    host_action_fails: true,
                     ..Self::new()
                 }
             }
@@ -3982,30 +3860,11 @@ mod tests {
         /// The message a failing seam's database shutdown carries.
         const SHUTDOWN_FAILURE: &str = "the store could not be flushed";
 
-        /// The message a seam whose host refuses the command carries.
-        const HOST_REFUSAL: &str = "the host refused the command";
-
         impl LifecycleEffects for RecordingEffects {
             fn shutdown_database(&self, _database: &storage::Database) -> Result<()> {
                 self.record(EffectCall::ShutdownDatabase);
                 if self.shutdown_database_fails {
                     bail!(SHUTDOWN_FAILURE)
-                }
-                Ok(())
-            }
-
-            fn reboot(&self) -> Result<()> {
-                self.record(EffectCall::Reboot);
-                if self.host_action_fails {
-                    bail!(HOST_REFUSAL)
-                }
-                Ok(())
-            }
-
-            fn power_off(&self) -> Result<()> {
-                self.record(EffectCall::PowerOff);
-                if self.host_action_fails {
-                    bail!(HOST_REFUSAL)
                 }
                 Ok(())
             }
@@ -4124,8 +3983,6 @@ mod tests {
             entry_tasks: EntryTasks,
             config_update_tx: mpsc::Sender<ConfigVisible>,
             notify_terminate: Arc<Notify>,
-            notify_reboot: Arc<Notify>,
-            notify_power_off: Arc<Notify>,
             notify_tls_reload: Arc<Notify>,
         }
 
@@ -4233,8 +4090,6 @@ mod tests {
             let process = test_process_context(dir, Arc::clone(&notify_terminate));
             let notify_tls_reload = Arc::clone(&process.notify_tls_reload);
             let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
-            let notify_reboot = Arc::new(Notify::new());
-            let notify_power_off = Arc::new(Notify::new());
             // Peer is present by default so its arm is exercised alongside the
             // other three; the shape production takes when peer is not
             // configured has a test of its own.
@@ -4249,17 +4104,11 @@ mod tests {
             WaitFixture {
                 settings: test_settings(dir),
                 process,
-                intents: GenerationIntents {
-                    config_update_rx,
-                    notify_reboot: Arc::clone(&notify_reboot),
-                    notify_power_off: Arc::clone(&notify_power_off),
-                },
+                intents: GenerationIntents { config_update_rx },
                 tracker,
                 entry_tasks,
                 config_update_tx,
                 notify_terminate,
-                notify_reboot,
-                notify_power_off,
                 notify_tls_reload,
             }
         }
@@ -4386,31 +4235,6 @@ mod tests {
                     .try_send(fixture.settings.config.visible.clone()),
                 Err(mpsc::error::TrySendError::Closed(_))
             ));
-            fixture.settle().await;
-        }
-
-        #[tokio::test]
-        async fn a_reboot_intent_ends_the_wait() {
-            let dir = tempdir().expect("tempdir");
-            let mut fixture = wait_fixture(dir.path());
-
-            fixture.notify_reboot.notify_one();
-
-            assert_eq!(wait_without_web(&mut fixture).await, GenerationEnd::Reboot);
-            fixture.settle().await;
-        }
-
-        #[tokio::test]
-        async fn a_power_off_intent_ends_the_wait() {
-            let dir = tempdir().expect("tempdir");
-            let mut fixture = wait_fixture(dir.path());
-
-            fixture.notify_power_off.notify_one();
-
-            assert_eq!(
-                wait_without_web(&mut fixture).await,
-                GenerationEnd::PowerOff
-            );
             fixture.settle().await;
         }
 
@@ -4639,10 +4463,10 @@ mod tests {
                 .await;
 
             for round in 0..PRECEDENCE_ROUNDS {
-                fixture.notify_reboot.notify_one();
+                fixture.process.notify_terminate.notify_one();
                 assert_eq!(
                     wait_without_web(&mut fixture).await,
-                    GenerationEnd::Reboot,
+                    GenerationEnd::Terminate,
                     "round {round}"
                 );
             }
@@ -4656,7 +4480,7 @@ mod tests {
             let (logs, _guard) = capture_logs();
             let health = shutdown_generation(
                 fixture_teardown(&mut fixture),
-                GenerationEnd::Reboot,
+                GenerationEnd::Terminate,
                 &database,
                 &effects,
                 TEST_DRAIN_REPORT_INTERVAL,
@@ -4680,23 +4504,18 @@ mod tests {
                 "got: {}",
                 captured(&logs)
             );
-            // The degradation does not cancel the intent's action: the host is
-            // still asked to reboot, and the failure is what the lifecycle
-            // returns afterwards.
+            // Teardown completes before the lifecycle reports degraded health.
             assert!(
-                act_on_generation_end(degraded(GenerationEnd::Reboot), &effects).is_err(),
-                "a degraded reboot should fail the lifecycle"
+                act_on_generation_end(degraded(GenerationEnd::Terminate)).is_err(),
+                "a degraded terminate should fail the lifecycle"
             );
-            assert_eq!(
-                effects.calls(),
-                vec![EffectCall::ShutdownDatabase, EffectCall::Reboot]
-            );
+            assert_eq!(effects.calls(), vec![EffectCall::ShutdownDatabase]);
             // Four retained handles, and the six markers still in the one
             // order every ending shares.
             assert_marker_sequence(
                 &logs,
-                &full_marker_sequence(GenerationEnd::Reboot),
-                "Reboot with four retained handles",
+                &full_marker_sequence(GenerationEnd::Terminate),
+                "Terminate with four retained handles",
             );
         }
 
@@ -4754,7 +4573,7 @@ mod tests {
             // The one row a degradation does not fail: the next generation
             // still starts, and the failure is logged rather than propagated.
             assert_eq!(
-                act_on_generation_end(degraded(GenerationEnd::RestartForConfigUpdate), &effects)
+                act_on_generation_end(degraded(GenerationEnd::RestartForConfigUpdate))
                     .expect("a degraded configuration update should not fail the lifecycle"),
                 ControlFlow::Continue(())
             );
@@ -4854,10 +4673,10 @@ mod tests {
             let (logs, _guard) = capture_logs();
             for round in 0..PRECEDENCE_ROUNDS {
                 fixture.notify_tls_reload.notify_one();
-                fixture.notify_power_off.notify_one();
+                fixture.process.notify_terminate.notify_one();
                 assert_eq!(
                     wait_without_web(&mut fixture).await,
-                    GenerationEnd::PowerOff,
+                    GenerationEnd::Terminate,
                     "round {round}"
                 );
             }
@@ -5124,10 +4943,7 @@ mod tests {
         /// What the test raises while the TLS reload is held mid-flight.
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         enum MidFlight {
-            /// A terminal intent, over a configuration update queued before
-            /// the wait and an entry handle that has already finished.
-            Reboot,
-            /// A configuration update whose write succeeds, over that same
+            /// A configuration update whose write succeeds, over a
             /// finished handle.
             PersistedConfigUpdate,
             /// A configuration update whose write fails, so the check that
@@ -5155,14 +4971,13 @@ mod tests {
         ///
         /// This is the order that applies immediately after the branch
         /// returns, not preemption of the reload that was running.
-        // Four rounds of one drive, each with its own live server, parked
-        // request and assertions; splitting them would mean four copies of the
+        // Three rounds of one drive, each with its own live server, parked
+        // request and assertions; splitting them would mean three copies of the
         // setup rather than one.
         #[allow(clippy::too_many_lines)]
         #[tokio::test]
         async fn what_outranks_what_when_a_tls_reload_returns() {
             for injection in [
-                MidFlight::Reboot,
                 MidFlight::PersistedConfigUpdate,
                 MidFlight::FailingConfigUpdate,
                 MidFlight::AnotherTlsReload,
@@ -5170,13 +4985,9 @@ mod tests {
                 let case = format!("{injection:?}");
                 let dir = tempdir().expect("tempdir");
                 let mut fixture = wait_fixture(dir.path());
-                // The two cases whose configuration update has to persist need the file the
-                // rewrite backs up; the other two reach the failure arm by not
-                // having it.
-                if matches!(
-                    injection,
-                    MidFlight::Reboot | MidFlight::PersistedConfigUpdate
-                ) {
+                // A persisted update needs the file the rewrite backs up;
+                // the other cases reach the failure arm without it.
+                if injection == MidFlight::PersistedConfigUpdate {
                     write_config_file(&fixture.settings);
                 }
                 let id = fixture
@@ -5225,17 +5036,7 @@ mod tests {
                 // reload has something to rebind for.
                 write_node_pki(dir.path());
                 fixture.notify_tls_reload.notify_one();
-                if injection == MidFlight::Reboot {
-                    // Queued before the wait, so what the reboot outranks is a
-                    // configuration update that was already there.
-                    fixture
-                        .config_update_tx
-                        .send(fixture.settings.config.visible.clone())
-                        .await
-                        .expect("the wait should still hold the receiver");
-                }
 
-                let notify_reboot = Arc::clone(&fixture.notify_reboot);
                 let notify_tls_reload = Arc::clone(&fixture.notify_tls_reload);
                 let config_update_tx = fixture.config_update_tx.clone();
                 let release = Arc::clone(&signal.release);
@@ -5261,7 +5062,6 @@ mod tests {
                             wait_for_logs(&logs, &["HTTPS reload: initiating graceful shutdown"])
                                 .await;
                             match injection {
-                                MidFlight::Reboot => notify_reboot.notify_one(),
                                 MidFlight::AnotherTlsReload => {
                                     notify_tls_reload.notify_one();
                                     config_update_tx
@@ -5283,24 +5083,6 @@ mod tests {
 
                 let output = captured(&logs);
                 match injection {
-                    MidFlight::Reboot => {
-                        assert_eq!(end, GenerationEnd::Reboot, "{case}");
-                        assert_eq!(
-                            fixture.settings.config.visible.ack_transmission, before,
-                            "{case}: the pending configuration update should still be pending"
-                        );
-                        // The handle the reboot outranked is handed to the
-                        // teardown marked as having already finished, which is
-                        // what makes it an early exit rather than a clean stop
-                        // when it is read back after the drain.
-                        let handed_over = fixture.take_retained();
-                        assert!(
-                            handed_over
-                                .iter()
-                                .any(|task| task.handle.id() == id && task.already_finished),
-                            "{case}: the finished handle should have been handed over"
-                        );
-                    }
                     MidFlight::PersistedConfigUpdate => {
                         assert_eq!(end, GenerationEnd::RestartForConfigUpdate, "{case}");
                         assert!(
@@ -5369,12 +5151,11 @@ mod tests {
             }
         }
 
-        /// Every ending shuts the store down, and only the tail after it
-        /// differs.
+        /// Every ending shuts the store down before the tail delay.
         ///
         /// This is the rule that replaced the one where a configuration update, a terminate
         /// and an early exit fell through to their delay with the store never
-        /// flushed. Time is paused, so neither tail costs wall-clock time.
+        /// flushed. Time is paused, so the tail costs no wall-clock time.
         #[tokio::test(start_paused = true)]
         async fn every_ending_shuts_the_database_down_before_its_tail() {
             let dir = tempdir().expect("tempdir");
@@ -5384,7 +5165,7 @@ mod tests {
             for generation_end in ALL_ENDINGS {
                 let ending = format!("{generation_end:?}");
                 let effects = RecordingEffects::new();
-                let (logs, guard) = capture_logs();
+                let (_logs, guard) = capture_logs();
                 finish_generation(generation_end, &database, &effects)
                     .await
                     .unwrap_or_else(|e| panic!("{ending}: the tail should not fail: {e:#}"));
@@ -5394,43 +5175,24 @@ mod tests {
                     vec![EffectCall::ShutdownDatabase],
                     "{ending}: the store should have been shut down exactly once"
                 );
-                let output = captured(&logs);
-                let waits_for_the_host = matches!(
-                    generation_end,
-                    GenerationEnd::Reboot | GenerationEnd::PowerOff
-                );
-                assert_eq!(
-                    output.contains("Before shut down the system"),
-                    waits_for_the_host,
-                    "{ending}: only a reboot or a power-off waits for the host, got: {output}"
-                );
                 drop(guard);
             }
         }
 
-        /// The tail of a generation that is handing the host to `roxy`, taken
-        /// through the production seam.
-        ///
-        /// The parameterized test above covers every ending against a
-        /// recording seam; this one is the single case that runs the real
-        /// `Database::shutdown` on the way out. Time is paused, so the
-        /// `WAIT_SHUTDOWN` pause it takes before the host goes down costs no
-        /// wall-clock time.
+        /// Runs the real `Database::shutdown` through the production seam.
+        /// Time is paused so the tail delay costs no wall-clock time.
         #[tokio::test(start_paused = true)]
-        async fn a_reboot_tail_flushes_the_database() {
+        async fn a_terminate_tail_flushes_the_database() {
             let dir = tempdir().expect("tempdir");
             let settings = test_settings(dir.path());
             let database = test_database(&settings.config.visible.data_dir);
 
             let (logs, _guard) = capture_logs();
-            finish_generation(GenerationEnd::Reboot, &database, &HostEffects)
+            finish_generation(GenerationEnd::Terminate, &database, &HostEffects)
                 .await
-                .expect("the reboot tail should flush the database");
+                .expect("the terminate tail should flush the database");
 
-            assert!(
-                captured(&logs).contains("Before shut down the system"),
-                "the reboot tail should announce the wait it takes before handing over the host"
-            );
+            assert!(captured(&logs).contains("shutting the database down (Terminate)"));
         }
 
         /// The whole sequence, for every ending, at the boundary the lifecycle
@@ -5465,7 +5227,7 @@ mod tests {
                     GenerationHealth::Clean,
                     "{ending}: a teardown with nothing to read back is not degraded"
                 );
-                let flow = act_on_generation_end(clean(generation_end), &effects);
+                let flow = act_on_generation_end(clean(generation_end));
 
                 assert_marker_sequence(&logs, &full_marker_sequence(generation_end), &ending);
                 let output = captured(&logs);
@@ -5477,15 +5239,7 @@ mod tests {
 
                 // A second recorder, read only for what it alone can say:
                 // which operations were invoked. Its order is never used.
-                let expected_calls = match generation_end {
-                    GenerationEnd::Reboot => {
-                        vec![EffectCall::ShutdownDatabase, EffectCall::Reboot]
-                    }
-                    GenerationEnd::PowerOff => {
-                        vec![EffectCall::ShutdownDatabase, EffectCall::PowerOff]
-                    }
-                    _ => vec![EffectCall::ShutdownDatabase],
-                };
+                let expected_calls = vec![EffectCall::ShutdownDatabase];
                 assert_eq!(effects.calls(), expected_calls, "{ending}");
 
                 match generation_end {
@@ -5507,7 +5261,7 @@ mod tests {
                             "{ending}: got: {error:#}"
                         );
                     }
-                    _ => assert_eq!(
+                    GenerationEnd::Terminate => assert_eq!(
                         flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
                         ControlFlow::Break(()),
                         "{ending}: this ending should end the lifecycle"
@@ -5520,8 +5274,9 @@ mod tests {
         /// A store that cannot be shut down stops the sequence where it is.
         ///
         /// The teardown returns the failure, so `act_on_generation_end` is
-        /// never reached: no reboot, no power-off, and — on the configuration-update case —
-        /// no next generation. Five markers and no sixth, on every ending.
+        /// never reached: termination stops at teardown, and a configuration
+        /// update starts no next generation. Five markers and no sixth, on
+        /// every ending.
         #[tokio::test(start_paused = true)]
         async fn a_failed_database_shutdown_takes_no_action_on_any_ending() {
             let dir = tempdir().expect("tempdir");
@@ -5554,7 +5309,7 @@ mod tests {
                 assert_eq!(
                     effects.calls(),
                     vec![EffectCall::ShutdownDatabase],
-                    "{ending}: no host action may follow a store whose state is unknown"
+                    "{ending}: no new generation may follow a store whose state is unknown"
                 );
                 assert!(
                     captured(&logs).contains("Database shutdown failed"),
@@ -5564,44 +5319,11 @@ mod tests {
             }
         }
 
-        /// A host that refuses the command it is given fails the lifecycle.
-        ///
-        /// The marker is emitted before the seam is called, so it is there
-        /// either way: what says the action succeeded is the lifecycle result,
-        /// not the marker.
-        #[tokio::test]
-        async fn a_refused_host_action_fails_the_lifecycle() {
-            for (generation_end, expected_call) in [
-                (GenerationEnd::Reboot, EffectCall::Reboot),
-                (GenerationEnd::PowerOff, EffectCall::PowerOff),
-            ] {
-                let ending = format!("{generation_end:?}");
-                let effects = RecordingEffects::refusing_host_actions();
-                let (logs, guard) = capture_logs();
-
-                let error = act_on_generation_end(clean(generation_end), &effects)
-                    .err()
-                    .unwrap_or_else(|| panic!("{ending}: a refused command should fail"));
-
-                assert!(
-                    error.to_string().contains(HOST_REFUSAL),
-                    "{ending}: the host's refusal should be what propagates, got: {error:#}"
-                );
-                assert_eq!(
-                    effects.calls(),
-                    vec![expected_call],
-                    "{ending}: the command should have been asked for once"
-                );
-                assert_marker_sequence(&logs, &[final_action_marker(generation_end)], &ending);
-                drop(guard);
-            }
-        }
-
         /// A retained handle that came back badly is reported, degrades the
         /// generation, and suppresses nothing.
         ///
         /// The three abnormal completions a handle can carry, against the two
-        /// shapes of final action: a host command, and the next generation.
+        /// shapes of final action: termination and the next generation.
         /// The rest of the teardown and the database shutdown still run, the
         /// action is still taken, and the record names the task at
         /// `phase="after_drain"`.
@@ -5613,8 +5335,10 @@ mod tests {
             let tracker = TaskTracker::new();
 
             for outcome in ["error", "panic", "cancelled"] {
-                for generation_end in [GenerationEnd::Reboot, GenerationEnd::RestartForConfigUpdate]
-                {
+                for generation_end in [
+                    GenerationEnd::Terminate,
+                    GenerationEnd::RestartForConfigUpdate,
+                ] {
                     let case = format!("{outcome}/{generation_end:?}");
                     // Installed before the stand-in is built: a panic and an
                     // abort are reported by the registration guard the moment
@@ -5653,13 +5377,10 @@ mod tests {
                         GenerationHealth::Degraded,
                         "{case}: an abnormal handle degrades the generation"
                     );
-                    let flow = act_on_generation_end(
-                        GenerationOutcome {
-                            ending: generation_end,
-                            health,
-                        },
-                        &effects,
-                    );
+                    let flow = act_on_generation_end(GenerationOutcome {
+                        ending: generation_end,
+                        health,
+                    });
 
                     assert_report_fields(
                         &abnormal_report(&logs),
@@ -5671,14 +5392,14 @@ mod tests {
                     assert_marker_sequence(&logs, &full_marker_sequence(generation_end), &case);
                     assert_lifecycle_record(&sole_record(&logs, DEGRADED_RECORD), generation_end);
 
-                    if generation_end == GenerationEnd::Reboot {
+                    if generation_end == GenerationEnd::Terminate {
                         assert_eq!(
                             effects.calls(),
-                            vec![EffectCall::ShutdownDatabase, EffectCall::Reboot],
-                            "{case}: the reboot should still have been asked for"
+                            vec![EffectCall::ShutdownDatabase],
+                            "{case}: the database should still have been shut down"
                         );
                         let error = flow.err().unwrap_or_else(|| {
-                            panic!("{case}: a degraded reboot should fail the lifecycle")
+                            panic!("{case}: a degraded terminate should fail the lifecycle")
                         });
                         assert!(
                             error.to_string().contains("degraded"),
@@ -5749,7 +5470,7 @@ mod tests {
                 captured(&logs)
             );
             assert_eq!(
-                act_on_generation_end(clean(GenerationEnd::Terminate), &effects)
+                act_on_generation_end(clean(GenerationEnd::Terminate))
                     .expect("a clean terminate should not fail"),
                 ControlFlow::Break(())
             );
@@ -5824,16 +5545,8 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{ending}: the teardown should not fail: {e:#}"));
                 assert_eq!(health, GenerationHealth::Degraded, "{ending}");
 
-                let flow = act_on_generation_end(degraded(generation_end), &effects);
-                let expected_calls = match generation_end {
-                    GenerationEnd::Reboot => {
-                        vec![EffectCall::ShutdownDatabase, EffectCall::Reboot]
-                    }
-                    GenerationEnd::PowerOff => {
-                        vec![EffectCall::ShutdownDatabase, EffectCall::PowerOff]
-                    }
-                    _ => vec![EffectCall::ShutdownDatabase],
-                };
+                let flow = act_on_generation_end(degraded(generation_end));
+                let expected_calls = vec![EffectCall::ShutdownDatabase];
                 assert_eq!(
                     effects.calls(),
                     expected_calls,
@@ -5874,7 +5587,7 @@ mod tests {
             let (logs, _guard) = capture_logs();
             let error = shutdown_generation(
                 teardown_with_entry_tasks(vec![retained(handle, false)]),
-                GenerationEnd::Reboot,
+                GenerationEnd::Terminate,
                 &database,
                 &effects,
                 TEST_DRAIN_REPORT_INTERVAL,
@@ -5889,7 +5602,7 @@ mod tests {
             assert_eq!(
                 effects.calls(),
                 vec![EffectCall::ShutdownDatabase],
-                "no host action may follow a store whose state is unknown"
+                "no new generation may follow a store whose state is unknown"
             );
             // The handle was still read, before the store was touched.
             assert_report_fields(
@@ -5898,51 +5611,6 @@ mod tests {
                 id,
                 "after_drain",
                 "error",
-            );
-        }
-
-        /// A degraded generation whose host action also fails returns the
-        /// action's error, and both records reach the log in order.
-        #[tokio::test]
-        async fn a_degraded_generation_whose_host_action_fails_reports_both() {
-            let effects = RecordingEffects::refusing_host_actions();
-            let (logs, guard) = capture_logs();
-
-            let error = act_on_generation_end(degraded(GenerationEnd::Reboot), &effects)
-                .expect_err("a refused command should fail the lifecycle");
-
-            assert!(
-                error.to_string().contains(HOST_REFUSAL),
-                "the host's refusal is the more actionable of the two, got: {error:#}"
-            );
-            let degraded_record = sole_record(&logs, DEGRADED_RECORD);
-            let failed_action = sole_record(&logs, FAILED_ACTION_RECORD);
-            assert_lifecycle_record(&degraded_record, GenerationEnd::Reboot);
-            assert_lifecycle_record(&failed_action, GenerationEnd::Reboot);
-            assert!(
-                failed_action.contains(HOST_REFUSAL),
-                "the failed-action record should carry the cause, got: {failed_action}"
-            );
-            assert_precedes(
-                &logs,
-                DEGRADED_RECORD,
-                FAILED_ACTION_RECORD,
-                "the degraded record comes first",
-            );
-            drop(guard);
-
-            // The companion: a reboot that succeeds leaves the degraded record
-            // alone, with no failed-action record beside it.
-            let effects = RecordingEffects::new();
-            let (logs, _guard) = capture_logs();
-            let error = act_on_generation_end(degraded(GenerationEnd::Reboot), &effects)
-                .expect_err("a degraded reboot should fail the lifecycle");
-            assert!(error.to_string().contains("degraded"), "got: {error:#}");
-            assert_lifecycle_record(&sole_record(&logs, DEGRADED_RECORD), GenerationEnd::Reboot);
-            assert!(
-                records(&logs, FAILED_ACTION_RECORD).is_empty(),
-                "an action that succeeded leaves no failure record, got: {}",
-                captured(&logs)
             );
         }
 
@@ -5986,7 +5654,7 @@ mod tests {
         }
 
         /// The store is shut down only after the drain reports the tracker
-        /// empty — on every ending, not just on a reboot.
+        /// empty on every ending.
         ///
         /// The stand-in retention task is written the way the real one is: it
         /// waits for cancellation, and then waits out a cleanup already
@@ -5995,8 +5663,7 @@ mod tests {
         /// finished, so the test releases the blocking work only after
         /// checking that the sequence is still waiting. The phase marker is
         /// the observable, which is why this holds for a terminate and a
-        /// configuration update as well as for the reboot that used to be the only ending
-        /// leaving a line behind.
+        /// configuration update.
         #[allow(clippy::too_many_lines)]
         #[tokio::test]
         async fn the_database_is_shut_down_only_after_the_drain_reports_the_tracker_empty() {
@@ -6006,7 +5673,6 @@ mod tests {
             let shutdown_marker = format!("{SHUTDOWN_PHASE}: shutting the database down");
 
             for generation_end in [
-                GenerationEnd::Reboot,
                 GenerationEnd::Terminate,
                 GenerationEnd::RestartForConfigUpdate,
             ] {
@@ -6488,7 +6154,7 @@ mod tests {
             assert_eq!(
                 effects.calls(),
                 vec![EffectCall::ShutdownDatabase],
-                "no host action may follow a store whose state is unknown"
+                "no new generation may follow a store whose state is unknown"
             );
             assert_marker_sequence(&logs, &TEARDOWN_MARKERS, "Terminate/failing seam");
         }
@@ -7584,8 +7250,7 @@ mod tests {
             )
             .expect("the supporting lifecycle should not fail");
 
-            // Each node shut its own store down exactly once, and neither was
-            // asked for a host action.
+            // Each node shut its own store down exactly once.
             assert_eq!(target_effects.calls(), vec![EffectCall::ShutdownDatabase]);
             assert_eq!(support_effects.calls(), vec![EffectCall::ShutdownDatabase]);
 
@@ -7677,8 +7342,6 @@ mod tests {
             for generation_end in [
                 GenerationEnd::Terminate,
                 GenerationEnd::RestartForConfigUpdate,
-                GenerationEnd::Reboot,
-                GenerationEnd::PowerOff,
             ] {
                 let ending = format!("{generation_end:?}");
                 let schema = crate::graphql::tests::TestSchema::new();
@@ -7781,8 +7444,6 @@ mod tests {
             for generation_end in [
                 GenerationEnd::Terminate,
                 GenerationEnd::RestartForConfigUpdate,
-                GenerationEnd::Reboot,
-                GenerationEnd::PowerOff,
             ] {
                 let ending = format!("{generation_end:?}");
                 let schema = crate::graphql::tests::TestSchema::new_with_ingest_sensors(&[target]);
@@ -7913,7 +7574,6 @@ mod tests {
 
             for generation_end in [
                 GenerationEnd::Terminate,
-                GenerationEnd::Reboot,
                 GenerationEnd::RestartForConfigUpdate,
             ] {
                 let ending = format!("{generation_end:?}");
@@ -8017,43 +7677,27 @@ mod tests {
                     "{ending}: the store is still shut down after a recovered drain"
                 );
 
-                let flow = act_on_generation_end(
-                    GenerationOutcome {
-                        ending: generation_end,
-                        health,
-                    },
-                    &effects,
-                );
+                let flow = act_on_generation_end(GenerationOutcome {
+                    ending: generation_end,
+                    health,
+                });
                 assert_marker_sequence(&logs, &full_marker_sequence(generation_end), &ending);
                 assert_lifecycle_record(&sole_record(&logs, DEGRADED_RECORD), generation_end);
 
-                match generation_end {
-                    GenerationEnd::RestartForConfigUpdate => {
-                        assert_eq!(
-                            flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
-                            ControlFlow::Continue(()),
-                            "{ending}: a degraded configuration update still hands over to the next generation"
-                        );
-                    }
-                    GenerationEnd::Reboot => {
-                        assert_eq!(
-                            effects.calls(),
-                            vec![EffectCall::ShutdownDatabase, EffectCall::Reboot],
-                            "{ending}: the reboot is taken before the error is returned"
-                        );
-                        let error = flow.expect_err("a degraded reboot should fail the lifecycle");
-                        assert!(error.to_string().contains("degraded"), "got: {error:#}");
-                    }
-                    _ => {
-                        assert_eq!(
-                            effects.calls(),
-                            vec![EffectCall::ShutdownDatabase],
-                            "{ending}: a terminate takes no host action"
-                        );
-                        let error =
-                            flow.expect_err("a degraded terminate should fail the lifecycle");
-                        assert!(error.to_string().contains("degraded"), "got: {error:#}");
-                    }
+                if generation_end == GenerationEnd::RestartForConfigUpdate {
+                    assert_eq!(
+                        flow.unwrap_or_else(|e| panic!("{ending}: {e:#}")),
+                        ControlFlow::Continue(()),
+                        "{ending}: a degraded configuration update still hands over to the next generation"
+                    );
+                } else {
+                    assert_eq!(
+                        effects.calls(),
+                        vec![EffectCall::ShutdownDatabase],
+                        "{ending}: termination shuts the database down"
+                    );
+                    let error = flow.expect_err("a degraded terminate should fail the lifecycle");
+                    assert!(error.to_string().contains("degraded"), "got: {error:#}");
                 }
                 drop(guard);
             }
@@ -8223,13 +7867,10 @@ mod tests {
                 "error",
             );
 
-            let error = act_on_generation_end(
-                GenerationOutcome {
-                    ending: GenerationEnd::Terminate,
-                    health,
-                },
-                &effects,
-            )
+            let error = act_on_generation_end(GenerationOutcome {
+                ending: GenerationEnd::Terminate,
+                health,
+            })
             .expect_err("a degraded terminate should fail the lifecycle");
             assert!(error.to_string().contains("degraded"), "got: {error:#}");
             assert_lifecycle_record(
@@ -8423,14 +8064,6 @@ mod tests {
                 *self.observed.lock().expect("lock") = Some(observation);
                 Ok(())
             }
-
-            fn reboot(&self) -> Result<()> {
-                unreachable!("the teardown itself takes no host action")
-            }
-
-            fn power_off(&self) -> Result<()> {
-                unreachable!("the teardown itself takes no host action")
-            }
         }
 
         /// A lifecycle seam that records whether an export had returned at
@@ -8458,14 +8091,6 @@ mod tests {
             fn shutdown_database(&self, _database: &storage::Database) -> Result<()> {
                 *self.observed.lock().expect("lock") = Some(self.finished.load(Ordering::SeqCst));
                 Ok(())
-            }
-
-            fn reboot(&self) -> Result<()> {
-                unreachable!("the teardown itself takes no host action")
-            }
-
-            fn power_off(&self) -> Result<()> {
-                unreachable!("the teardown itself takes no host action")
             }
         }
     }

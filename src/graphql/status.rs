@@ -1,14 +1,14 @@
 use std::{io::Write, path::Path};
 
 use anyhow::{Context as AnyhowContext, anyhow};
+use async_graphql::{Context, Object, Result};
 #[cfg(feature = "storage_diagnostics")]
-use async_graphql::InputObject;
-use async_graphql::{Context, Object, Result, SimpleObject};
+use async_graphql::{InputObject, SimpleObject};
 use tokio::sync::mpsc::{Sender, error::TrySendError};
 use toml_edit::{DocumentMut, InlineTable};
 use tracing::{info, warn};
 
-use super::{PowerOffNotify, RebootNotify, TerminateNotify};
+use super::TerminateNotify;
 use crate::graphql::{StringNumberU32, StringNumberU64};
 use crate::settings::ConfigVisible;
 #[cfg(feature = "storage_diagnostics")]
@@ -21,16 +21,6 @@ pub const CONFIG_GRAPHQL_SRV_ADDR: &str = "graphql_srv_addr";
 pub trait TomlPeers {
     fn get_hostname(&self) -> String;
     fn get_addr(&self) -> String;
-}
-
-#[derive(SimpleObject, Debug)]
-struct Status {
-    name: String,
-    cpu_usage: f32,
-    total_memory: u64,
-    used_memory: u64,
-    disk_used_bytes: u64,
-    disk_available_bytes: u64,
 }
 
 #[cfg(feature = "storage_diagnostics")]
@@ -120,21 +110,6 @@ pub(super) struct ConfigMutation;
 
 #[Object]
 impl StatusQuery {
-    /// Returns the current node status, including CPU, memory, and disk usage.
-    async fn status(&self) -> Result<Status> {
-        let usg = roxy::resource_usage().await;
-        let hostname = roxy::hostname();
-        let usg = Status {
-            name: hostname,
-            cpu_usage: usg.cpu_usage,
-            total_memory: usg.total_memory,
-            used_memory: usg.used_memory,
-            disk_used_bytes: usg.disk_used_bytes,
-            disk_available_bytes: usg.disk_available_bytes,
-        };
-        Ok(usg)
-    }
-
     #[cfg(feature = "storage_diagnostics")]
     async fn properties_cf(&self, ctx: &Context<'_>, filter: PropertyFilter) -> Result<Properties> {
         let cfname = filter.record_type;
@@ -238,22 +213,6 @@ impl ConfigMutation {
         info!("Received request to stop service");
         let terminate_notify = ctx.data::<TerminateNotify>()?;
         terminate_notify.0.notify_one();
-
-        crate::graphql::ready(Ok(true)).await
-    }
-
-    async fn reboot(&self, ctx: &Context<'_>) -> Result<bool> {
-        info!("Received request to reboot system");
-        let reboot_notify = ctx.data::<RebootNotify>()?;
-        reboot_notify.0.notify_one();
-
-        crate::graphql::ready(Ok(true)).await
-    }
-
-    async fn shutdown(&self, ctx: &Context<'_>) -> Result<bool> {
-        info!("Received request to shutdown system");
-        let power_off_notify = ctx.data::<PowerOffNotify>()?;
-        power_off_notify.0.notify_one();
 
         crate::graphql::ready(Ok(true)).await
     }
@@ -412,27 +371,6 @@ mod tests {
         let res = schema.execute(query).await;
 
         assert_eq!(res.data.to_string(), "{ping: true}");
-    }
-
-    #[tokio::test]
-    async fn test_status() {
-        let schema = TestSchema::new();
-
-        let query = r"
-        {
-            status {
-                name
-                cpuUsage
-                totalMemory
-                usedMemory
-                diskUsedBytes
-                diskAvailableBytes
-            }
-        }
-        ";
-
-        let res = schema.execute(query).await;
-        assert_eq!(res.errors.as_slice(), []);
     }
 
     #[tokio::test]
@@ -716,22 +654,6 @@ mod tests {
         let query = "mutation { stop }";
         let res = schema.execute(query).await;
         assert_eq!(res.data.to_string(), "{stop: true}");
-    }
-
-    #[tokio::test]
-    async fn test_reboot() {
-        let schema = TestSchema::new();
-        let query = "mutation { reboot }";
-        let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{reboot: true}");
-    }
-
-    #[tokio::test]
-    async fn test_shutdown() {
-        let schema = TestSchema::new();
-        let query = "mutation { shutdown }";
-        let res = schema.execute(query).await;
-        assert_eq!(res.data.to_string(), "{shutdown: true}");
     }
 
     #[test]
