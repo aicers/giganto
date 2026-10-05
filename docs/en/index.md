@@ -24,7 +24,7 @@ the `--ca-certs` option provided at startup.
 ## Manual Map
 
 - **Preparation before installation**: Prepare the required certificates,
-  keys, CA files, and the `data_dir` directory.
+  keys, CA files, and any explicitly configured `data_dir` directory.
 - **Configuration**: Configure the service addresses, storage path, and
   data retention period. If using multiple nodes, configure the cluster
   settings according to your environment.
@@ -37,7 +37,8 @@ the `--ca-certs` option provided at startup.
 
 ## Quick Start
 
-1. Create the `data_dir` directory
+1. Create `data_dir` if configuring it explicitly; otherwise, Giganto creates
+   `data` in its working directory at startup
 2. Write the `config.toml` configuration file
 3. Start Giganto
 4. Authenticate using an mTLS client certificate and connect to

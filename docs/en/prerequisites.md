@@ -3,7 +3,8 @@
 ## Requirements
 
 - Server certificate, private key, and trusted CA certificate (PEM format)
-- The `data_dir` must be created beforehand.
+- An explicitly configured `data_dir` must be created beforehand. When omitted,
+  the default `data` directory is created at startup.
 - The `export_dir` is automatically created if the directory does not
   exist at the specified path.
 

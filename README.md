@@ -102,9 +102,9 @@ In the config file, you can specify the following options:
 | `ingest_srv_addr`      | Address to listen for ingest QUIC    | No       | [::]:38370            |
 | `publish_srv_addr`     | Address to listen for publish QUIC   | No       | [::]:38371            |
 | `graphql_srv_addr`     | Giganto's GraphQL address            | No       | [::]:8443             |
-| `data_dir`             | Path to directory to store data      | Yes      | -                     |
+| `data_dir`             | Path to directory to store data      | No       | data                  |
 | `retention`            | Retention period for data            | No       | 100d                  |
-| `export_dir`           | Path to Giganto's export file        | Yes      | -                     |
+| `export_dir`           | Path to Giganto's export file        | No       | export                |
 | `max_open_files`       | Max open files for database          | No       | 8000                  |
 | `max_mb_of_level_base` | Max MB for RocksDB Level 1           | No       | 512                   |
 | `num_of_thread`        | Number of background threads for DB  | No       | 8                     |
@@ -115,6 +115,15 @@ In the config file, you can specify the following options:
 | `peers`                | List of peer addresses and hostnames | No       | -                     |
 
 <!-- markdownlint-enable MD013 -->
+
+Relative `data_dir` and `export_dir` paths resolve against the process's working
+directory. When `data_dir` is omitted, Giganto creates the default `data`
+directory at startup. An explicitly configured `data_dir` must already exist.
+The export directory is created on the first export.
+
+Saving a changed configuration through `updateConfig` writes `data_dir` to the
+configuration file, even when it was originally omitted. It then counts as an
+explicit path and must already exist on subsequent starts.
 
 The following is an example of how to configure the config file:
 

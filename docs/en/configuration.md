@@ -5,8 +5,10 @@
 - `ingest_srv_addr`: QUIC ingest server address, default `[::]:38370`
 - `publish_srv_addr`: QUIC publish server address, default `[::]:38371`
 - `graphql_srv_addr`: GraphQL server address, default `[::]:8443`
-- `data_dir`: Event storage directory (required), must be created beforehand
-- `export_dir`: Export file storage directory (required), no default
+- `data_dir`: Event storage directory (optional, default: `data`). Giganto creates
+  it at startup when omitted; an explicit directory must already exist.
+- `export_dir`: Export file storage directory (optional, default: `export`),
+  created on the first export.
 - `retention`: Data retention period, default `100d`
 - `ack_transmission`: ACK transmission threshold, default `1024`
 - `max_open_files`: RocksDB max open files, default `8000`
@@ -24,6 +26,13 @@
   that is still waiting says so. Must be greater than zero, default `5s`
 - `peer_srv_addr`: Node-to-node communication address, no default
 - `peers`: Connected cluster nodes, no default
+
+Relative `data_dir` and `export_dir` paths resolve against the process's working
+directory.
+
+Saving a changed configuration through `updateConfig` writes `data_dir` to the
+configuration file, even when it was originally omitted. It then counts as an
+explicit path and must already exist on subsequent starts.
 
 ## Single Node Configuration Example
 

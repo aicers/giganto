@@ -9,7 +9,9 @@ use std::{
 
 use anyhow::{Context, bail};
 use clap::Parser;
-use config::{Config as ConfConfig, ConfigBuilder, ConfigError, File, builder::DefaultState};
+use config::{
+    Config as ConfConfig, ConfigBuilder, ConfigError, File, Source, builder::DefaultState,
+};
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use toml_edit::DocumentMut;
 use tracing::info;
@@ -19,6 +21,8 @@ use crate::{comm::peer::PeerIdentity, graphql::status::write_toml_file};
 const DEFAULT_INGEST_SRV_ADDR: &str = "[::]:38370";
 const DEFAULT_PUBLISH_SRV_ADDR: &str = "[::]:38371";
 pub const DEFAULT_GRAPHQL_SRV_ADDR: &str = "[::]:8443";
+const DEFAULT_DATA_DIR: &str = "data";
+const DEFAULT_EXPORT_DIR: &str = "export";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 const DEFAULT_RETENTION: &str = "100d";
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
@@ -141,54 +145,80 @@ pub struct ConfigVisible {
 }
 
 impl Settings {
-    /// Creates a new `Settings` instance, populated from the given
-    /// configuration file.
+    /// Loads settings for tests without startup filesystem preparation.
+    #[cfg(test)]
     pub fn load(cfg_path: &str) -> Result<Self, ConfigError> {
-        let s = default_config_builder()
-            .add_source(File::with_name(cfg_path))
-            .build()?;
-        let config: Config = s.try_deserialize()?;
-
-        Ok(Self {
-            config,
-            cfg_path: cfg_path.to_string(),
-        })
+        Self::load_with_data_dir_default(cfg_path).map(|(settings, _)| settings)
     }
 
-    /// Loads the configuration, restoring from a backup if needed.
+    /// Keeps track of omission before merging defaults; an explicitly configured
+    /// `data_dir = "data"` must still name an existing directory.
+    fn load_with_data_dir_default(cfg_path: &str) -> Result<(Self, bool), ConfigError> {
+        let file_config = ConfConfig::builder()
+            .add_source(File::with_name(cfg_path))
+            .build()?;
+        let data_dir_defaulted = !file_config.collect()?.contains_key("data_dir");
+        let config = default_config_builder()
+            .add_source(file_config)
+            .build()?
+            .try_deserialize()?;
+
+        Ok((
+            Self {
+                config,
+                cfg_path: cfg_path.to_string(),
+            },
+            data_dir_defaulted,
+        ))
+    }
+
+    /// Loads the startup configuration, restoring from a backup if needed, and
+    /// creates the data directory only when the configuration omits `data_dir`.
     pub fn load_or_restore(cfg_path: &str) -> anyhow::Result<Self> {
-        Self::load(cfg_path).or_else(|e| {
-            eprintln!("failed to read configuration file: {cfg_path}. Error: {e}");
+        let (settings, data_dir_defaulted) =
+            Self::load_with_data_dir_default(cfg_path).or_else(|e| {
+                eprintln!("failed to read configuration file: {cfg_path}. Error: {e}");
 
-            let backup_path = Path::new(cfg_path).with_extension("toml.bak");
+                let backup_path = Path::new(cfg_path).with_extension("toml.bak");
 
-            if !backup_path.exists() {
-                return Err(e)
-                    .context("no valid configuration file available, and no backup found.");
-            }
+                if !backup_path.exists() {
+                    return Err(e)
+                        .context("no valid configuration file available, and no backup found.");
+                }
 
-            println!(
-                "attempting to restore backup configuration from: {}",
-                backup_path.display()
-            );
+                println!(
+                    "attempting to restore backup configuration from: {}",
+                    backup_path.display()
+                );
 
-            fs::copy(&backup_path, cfg_path).with_context(|| {
-                format!(
-                    "failed to restore configuration from backup: {} to {}",
-                    backup_path.display(),
-                    cfg_path
-                )
+                fs::copy(&backup_path, cfg_path).with_context(|| {
+                    format!(
+                        "failed to restore configuration from backup: {} to {}",
+                        backup_path.display(),
+                        cfg_path
+                    )
+                })?;
+
+                println!("configuration restored from backup.");
+
+                Self::load_with_data_dir_default(cfg_path).with_context(|| {
+                    format!(
+                        "failed to read restored configuration file: {}",
+                        backup_path.display()
+                    )
+                })
             })?;
 
-            println!("configuration restored from backup.");
-
-            Self::load(cfg_path).with_context(|| {
+        if data_dir_defaulted {
+            fs::create_dir_all(&settings.config.visible.data_dir).with_context(|| {
                 format!(
-                    "failed to read restored configuration file: {}",
-                    backup_path.display()
+                    "failed to create default data directory: {}",
+                    settings.config.visible.data_dir.display()
                 )
-            })
-        })
+            })?;
+        }
+
+        Ok(settings)
     }
 
     pub fn update_config_file(&mut self, new_config: &ConfigVisible) -> anyhow::Result<()> {
@@ -275,6 +305,10 @@ fn default_config_builder() -> ConfigBuilder<DefaultState> {
         .expect("valid address")
         .set_default("graphql_srv_addr", DEFAULT_GRAPHQL_SRV_ADDR)
         .expect("local address")
+        .set_default("data_dir", DEFAULT_DATA_DIR)
+        .expect("default data directory")
+        .set_default("export_dir", DEFAULT_EXPORT_DIR)
+        .expect("default export directory")
         .set_default("retention", DEFAULT_RETENTION)
         .expect("retention")
         .set_default("max_open_files", DEFAULT_MAX_OPEN_FILES)
@@ -460,6 +494,95 @@ compression = {}
     }
 
     use fixtures::*;
+
+    #[test]
+    fn test_load_settings_defaults_directories_with_only_listening_addresses() {
+        let (_dir, config_path) = create_config_file(
+            r#"
+ingest_srv_addr = "127.0.0.1:38370"
+publish_srv_addr = "127.0.0.1:38371"
+graphql_srv_addr = "127.0.0.1:8443"
+"#,
+        );
+        let settings = Settings::load(config_path.to_str().unwrap()).expect("load settings");
+
+        assert_eq!(settings.config.visible.data_dir, PathBuf::from("data"));
+        assert_eq!(settings.config.visible.export_dir, PathBuf::from("export"));
+        assert_eq!(
+            settings.config.visible.ingest_srv_addr,
+            "127.0.0.1:38370".parse().unwrap()
+        );
+        assert_eq!(
+            settings.config.visible.publish_srv_addr,
+            "127.0.0.1:38371".parse().unwrap()
+        );
+        assert_eq!(
+            settings.config.visible.graphql_srv_addr,
+            "127.0.0.1:8443".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_directory_defaults_apply_independently() {
+        for (config, data_dir, export_dir, defaulted) in [
+            ("", "data", "export", true),
+            (
+                "export_dir = 'custom-export'",
+                "data",
+                "custom-export",
+                true,
+            ),
+            ("data_dir = 'custom-data'", "custom-data", "export", false),
+            ("data_dir = 'data'", "data", "export", false),
+        ] {
+            let (_dir, config_path) = create_config_file(config);
+            let (settings, data_dir_defaulted) =
+                Settings::load_with_data_dir_default(config_path.to_str().unwrap())
+                    .expect("load settings");
+            assert_eq!(settings.config.visible.data_dir, PathBuf::from(data_dir));
+            assert_eq!(
+                settings.config.visible.export_dir,
+                PathBuf::from(export_dir)
+            );
+            assert_eq!(data_dir_defaulted, defaulted);
+        }
+    }
+
+    #[test]
+    fn test_startup_does_not_create_explicit_nonexistent_data_dir() {
+        let dir = tempdir().expect("tempdir");
+        let data_dir = dir.path().join("missing");
+        let config_path = dir.path().join("config.toml");
+        write_file(&config_path, &format!("data_dir = {data_dir:?}"));
+
+        let settings =
+            Settings::load_or_restore(config_path.to_str().unwrap()).expect("load settings");
+        let err = settings
+            .config
+            .visible
+            .validate()
+            .expect_err("invalid directory");
+        assert_eq!(err.to_string(), "data directory is invalid");
+        assert!(!data_dir.exists());
+    }
+
+    #[test]
+    fn test_restored_explicit_nonexistent_data_dir_is_not_created() {
+        let dir = tempdir().expect("tempdir");
+        let data_dir = dir.path().join("missing");
+        let config_path = dir.path().join("config.toml");
+        let config = format!("data_dir = {data_dir:?}");
+        write_file(&config_path, "invalid TOML");
+        write_file(&config_path.with_extension("toml.bak"), &config);
+
+        let settings = Settings::load_or_restore(config_path.to_str().unwrap())
+            .expect("restore settings with an explicit directory");
+        assert_eq!(fs::read_to_string(config_path).unwrap(), config);
+        assert_eq!(settings.config.visible.data_dir, data_dir);
+        let err = settings.config.validate().expect_err("invalid directory");
+        assert_eq!(err.to_string(), "data directory is invalid");
+        assert!(!data_dir.exists());
+    }
 
     #[test]
     fn test_load_settings_uses_defaults_for_missing_fields() {
