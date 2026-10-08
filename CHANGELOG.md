@@ -4,6 +4,15 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.1] - 2026-10-09
+
+### Changed
+
+- No functional changes. This release only advances the version number: the
+  data directory format, the bundled RocksDB engine, the network protocols and
+  the configuration are those of 0.30.0, so a data directory moves between
+  0.30.0 and 0.30.1 in either direction without migration.
+
 ## [0.30.0] - 2026-10-06
 
 ### Changed
@@ -1238,6 +1247,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[0.30.1]: https://github.com/aicers/giganto/compare/0.30.0...0.30.1
 [0.30.0]: https://github.com/aicers/giganto/compare/0.29.1...0.30.0
 [0.29.1]: https://github.com/aicers/giganto/compare/0.29.0...0.29.1
 [0.29.0]: https://github.com/aicers/giganto/compare/0.28.0...0.29.0
