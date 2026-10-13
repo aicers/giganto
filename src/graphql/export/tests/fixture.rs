@@ -207,6 +207,10 @@ pub(super) async fn run_export_case(case: ExportTimeFormatParityCase) {
         "json export for protocol {} should expose expected timestamp",
         case.protocol
     );
+    if case.protocol == "netflow5" {
+        assert_eq!(json_value["first"].as_str().unwrap(), "1.001");
+        assert_eq!(json_value["last"].as_str().unwrap(), "1.010");
+    }
 }
 
 pub(super) async fn execute_export(
@@ -877,7 +881,7 @@ pub(super) fn insert_netflow5_parity(
     timestamp: i64,
 ) {
     let store = schema.db.netflow5_store().unwrap();
-    insert_netflow5_raw_event(&store, SENSOR_ID, timestamp, 1_000, 2_000);
+    insert_netflow5_raw_event(&store, SENSOR_ID, timestamp, 1001, 1010);
 }
 
 pub(super) fn insert_netflow9_parity(
