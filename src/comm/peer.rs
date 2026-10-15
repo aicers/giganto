@@ -4770,9 +4770,9 @@ pub mod tests {
         use super::fixtures::{
             ConnectedPeers, PROTOCOL_VERSION, TEST_DRAIN_REPORT_INTERVAL, TEST_TIMEOUT, TempConfig,
             TestClient, accept_incoming, build_peer_conn_info, build_peer_conn_info_with_sensors,
-            connect_client_server, create_certs, create_node2_certs, init_client, init_crypto,
-            init_shared_client_config, peer_identity, peer_info, run_peer_with_ready,
-            setup_server_endpoint, setup_server_endpoint_with_certs,
+            connect_client_handshake, connect_client_server, create_certs, create_node2_certs,
+            init_client, init_crypto, init_shared_client_config, peer_identity, peer_info,
+            run_peer_with_ready, setup_server_endpoint, setup_server_endpoint_with_certs,
             small_stream_window_client_endpoint, test_connect_name, test_connect_name_node2,
             wait_for_peer_info, with_timeout,
         };
@@ -5416,15 +5416,7 @@ pub mod tests {
             // it. Everything the handler needs from the network it has before
             // the cancellation below, so closing the connection cannot stand
             // in for the release the test is after.
-            let client_endpoint = init_client();
-            let conn = client_endpoint
-                .connect(harness.addr, test_connect_name())
-                .expect("dial setup")
-                .await
-                .expect("QUIC handshake");
-            let (mut send, mut recv) = client_handshake(&conn, PROTOCOL_VERSION)
-                .await
-                .expect("protocol handshake");
+            let (_conn, mut send, mut recv) = connect_client_handshake(harness.addr).await;
 
             // Taken before the init exchange, so the handler cannot get past
             // the sensor-list update ahead of it.
