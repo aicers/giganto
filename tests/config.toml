@@ -11,4 +11,4 @@ max_mb_of_level_base = 512
 num_of_thread = 8
 max_subcompactions = 2
 peer_srv_addr = "127.0.0.1:48383"
-peers = [{ addr = "127.0.0.1:60192", hostname = "node2" }]
+peers = [{ addr = "127.0.0.1:60192", hostname = "001.giganto.node2.example.test" }]

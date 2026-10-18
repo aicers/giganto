@@ -32,16 +32,13 @@ use giganto_client::ingest::{
 };
 pub use migration::migrate_data_dir;
 pub use rocksdb::Direction;
-#[cfg(feature = "bootroot")]
-use rocksdb::WriteBatch;
 #[cfg(feature = "storage_diagnostics")]
 use rocksdb::properties;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DB, DBIteratorWithThreadMode, Options, ReadOptions,
+    WriteBatch,
 };
-use serde::de::DeserializeOwned;
-#[cfg(feature = "bootroot")]
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{select, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -98,10 +95,8 @@ pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
     "seculog",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
-#[cfg(feature = "bootroot")]
 const CUSTOMER_DELETION_JOBS_CF: &str = "customer deletion jobs";
 
-#[cfg(feature = "bootroot")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CustomerDataDeletionStatus {
     InProgress,
@@ -109,7 +104,6 @@ pub enum CustomerDataDeletionStatus {
     Failed,
 }
 
-#[cfg(feature = "bootroot")]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomerDataDeletion {
     pub service_fqdn_list: Vec<String>,
@@ -212,7 +206,6 @@ impl Database {
         );
         cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
         cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
-        #[cfg(feature = "bootroot")]
         cfs_name.push(CUSTOMER_DELETION_JOBS_CF);
 
         let cfs = cfs_name
@@ -406,13 +399,11 @@ impl Database {
         Ok(SensorStore { db: &self.db, cf })
     }
 
-    #[cfg(feature = "bootroot")]
     pub fn customer_deletion_job_store(&self) -> Result<CustomerDeletionJobStore<'_>> {
         let cf = self.get_cf_handle(CUSTOMER_DELETION_JOBS_CF)?;
         Ok(CustomerDeletionJobStore { db: &self.db, cf })
     }
 
-    #[cfg(feature = "bootroot")]
     pub(crate) fn delete_customer_event_ranges(
         &self,
         service_fqdn: &str,
@@ -434,14 +425,14 @@ impl Database {
         Ok(())
     }
 
-    #[cfg(all(test, feature = "bootroot"))]
+    #[cfg(test)]
     pub(crate) fn put_cf_for_test(&self, cf_name: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let cf = self.get_cf_handle(cf_name)?;
         self.db.put_cf(cf, key, value)?;
         Ok(())
     }
 
-    #[cfg(all(test, feature = "bootroot"))]
+    #[cfg(test)]
     pub(crate) fn get_cf_for_test(&self, cf_name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let cf = self.get_cf_handle(cf_name)?;
         Ok(self.db.get_cf(cf, key)?)
@@ -776,7 +767,6 @@ impl SensorStore<'_> {
             .collect()
     }
 
-    #[cfg(feature = "bootroot")]
     pub fn delete(&self, name: &str) -> Result<()> {
         self.db.delete_cf(self.cf, name)?;
         Ok(())
@@ -787,13 +777,11 @@ impl SensorStore<'_> {
 // See rust-rocksdb/rust-rocksdb#407.
 unsafe impl Send for SensorStore<'_> {}
 
-#[cfg(feature = "bootroot")]
 pub struct CustomerDeletionJobStore<'db> {
     db: &'db DB,
     cf: &'db ColumnFamily,
 }
 
-#[cfg(feature = "bootroot")]
 impl CustomerDeletionJobStore<'_> {
     pub fn create(&self, customer_id: u32, job: &CustomerDataDeletion) -> Result<()> {
         if self
@@ -859,7 +847,6 @@ impl CustomerDeletionJobStore<'_> {
     }
 }
 
-#[cfg(feature = "bootroot")]
 // RocksDB must manage thread safety for `ColumnFamily`.
 // See rust-rocksdb/rust-rocksdb#407.
 unsafe impl Send for CustomerDeletionJobStore<'_> {}
@@ -1706,7 +1693,6 @@ mod tests {
         StatisticsIter, StorageKey, deletion_coordination::CustomerDeletionCoordinator,
         read_compression_metadata, store_compression_metadata,
     };
-    #[cfg(feature = "bootroot")]
     use super::{CUSTOMER_DELETION_JOBS_CF, CustomerDataDeletion, CustomerDataDeletionStatus};
     use crate::datetime::DateTime;
 
@@ -1735,7 +1721,6 @@ mod tests {
         Arc::new(CustomerDeletionCoordinator::new())
     }
 
-    #[cfg(feature = "bootroot")]
     #[test]
     fn customer_deletion_job_uses_customer_id_key_and_roundtrips_value() {
         let (_dir, db) = setup_db();

@@ -95,15 +95,10 @@ const SENSOR_CN: &str = "giganto@sensor1";
 ///
 /// It is the client's identity, not the node's: the two certificates carry
 /// different names precisely so a query that read the wrong one finds nothing.
-/// A default build reads the legacy common name and keeps the bare hostname; a
-/// `bootroot` build reads the SAN and keeps the service FQDN, which is the SAN
-/// without its instance label.
+/// Giganto reads the SAN and keeps the service FQDN, which is the SAN without
+/// its instance label.
 fn expected_sensor() -> &'static str {
-    if cfg!(feature = "bootroot") {
-        "giganto.sensor1.example.test"
-    } else {
-        "sensor1"
-    }
+    "giganto.sensor1.example.test"
 }
 
 /// The identity the node certificate carries, read the same way.
@@ -113,11 +108,7 @@ fn expected_sensor() -> &'static str {
 /// sensor asked for, and the positive query would prove nothing about which
 /// certificate the record was attributed to.
 fn node_identity() -> &'static str {
-    if cfg!(feature = "bootroot") {
-        "giganto.node1.example.test"
-    } else {
-        "node1"
-    }
+    "giganto.node1.example.test"
 }
 
 /// The `kind` the marker record carries, and the mid-key ingest builds from
@@ -218,9 +209,8 @@ fn ca_params(common_name: &str) -> CertificateParams {
     params
 }
 
-/// A leaf carrying both identities giganto knows how to read: the legacy
-/// `{service}@{hostname}` common name of the default build and the four-label
-/// SAN DNS name of the `bootroot` build.
+/// A leaf carrying the four-label SAN DNS name giganto reads its identity from.
+/// The `{service}@{hostname}` common name it also carries is ignored.
 fn leaf_params(common_name: &str, dns_name: &str) -> CertificateParams {
     let mut params = CertificateParams::new(vec![dns_name.to_string()]).expect("cert params");
     params.distinguished_name = rcgen::DistinguishedName::new();

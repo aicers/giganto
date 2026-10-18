@@ -78,7 +78,6 @@ url = "2"
 [features]
 default = ["benchmark", "cluster"]
 benchmark = []
-bootroot = []
 cluster = []
 storage_diagnostics = []
 

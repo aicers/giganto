@@ -4,6 +4,31 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The customer data deletion operations (`deleteCustomerData`,
+  `customerDataDeletionResult`) and their startup recovery are available in
+  every build.
+
+### Changed
+
+- **Breaking.** Giganto now accepts only certificates (its own, cluster peers',
+  and ingest and publish clients') whose SAN carries the
+  `<instance>.<service>.<host>.<domain>` identity. Certificates that identify
+  themselves only by a `<service>@<host>` CN are rejected. `peers[].hostname`
+  must now be the peer certificate's SAN. Sensor keys, OpLog sensors and export
+  suffixes now always use the FQDN forms, so data written by a build without
+  the former `bootroot` feature needs a one-time reset; there is no automated
+  migration.
+
+### Removed
+
+- Removed the `bootroot` Cargo feature; its behavior is now the only behavior.
+  The `giganto-bootroot` release asset is no longer published; the `giganto`
+  asset is the former `giganto-bootroot` build.
+
 ## [0.30.1] - 2026-10-09
 
 ### Changed
@@ -1247,6 +1272,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.30.1...main
 [0.30.1]: https://github.com/aicers/giganto/compare/0.30.0...0.30.1
 [0.30.0]: https://github.com/aicers/giganto/compare/0.29.1...0.30.0
 [0.29.1]: https://github.com/aicers/giganto/compare/0.29.0...0.29.1

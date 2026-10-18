@@ -1406,9 +1406,7 @@ pub mod tests {
         certs.first().map(|c| c.as_ref().to_vec())
     }
     use crate::graphql::status::{CONFIG_GRAPHQL_SRV_ADDR, CONFIG_PUBLISH_SRV_ADDR};
-    #[cfg(feature = "bootroot")]
     use crate::server::peer_dedup_key_from_cert;
-    #[cfg(feature = "bootroot")]
     use crate::test_bootroot::{
         build_bootroot_chain_fixture_with_server_name, build_bootroot_duplicate_peer_fixture,
         config_client_for_tests, load_certs,
@@ -1433,7 +1431,6 @@ pub mod tests {
         use tokio::time::sleep;
         use toml_edit::DocumentMut;
 
-        #[cfg(feature = "bootroot")]
         use super::super::request_init_info;
         use super::super::{
             CancellationToken, IngestSensors, PEER_VERSION_REQ, Peer, PeerCode, PeerConns,
@@ -1441,10 +1438,7 @@ pub mod tests {
             server_connection,
         };
         use crate::comm::peer::{receive_peer_data, response_init_info};
-        #[cfg(not(feature = "bootroot"))]
-        use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
         use crate::server::{Certs, config_client, config_server};
-        #[cfg(feature = "bootroot")]
         use crate::test_bootroot::{
             TestNode, bootroot_cluster_certs, bootroot_cluster_server_name,
         };
@@ -1477,32 +1471,14 @@ pub mod tests {
             });
         }
 
-        #[cfg(not(feature = "bootroot"))]
-        pub(super) fn test_connect_name() -> &'static str {
-            "node1"
-        }
-
-        #[cfg(feature = "bootroot")]
         pub(super) fn test_connect_name() -> &'static str {
             bootroot_cluster_server_name(TestNode::Node1)
         }
 
-        #[cfg(not(feature = "bootroot"))]
-        pub(super) fn test_connect_name_node2() -> &'static str {
-            "node2"
-        }
-
-        #[cfg(feature = "bootroot")]
         pub(super) fn test_connect_name_node2() -> &'static str {
             bootroot_cluster_server_name(TestNode::Node2)
         }
 
-        #[cfg(not(feature = "bootroot"))]
-        pub(super) fn test_subject_peer_dedup_key() -> &'static str {
-            "node1"
-        }
-
-        #[cfg(feature = "bootroot")]
         pub(super) fn test_subject_peer_dedup_key() -> &'static str {
             bootroot_cluster_server_name(TestNode::Node1)
         }
@@ -1646,55 +1622,16 @@ pub mod tests {
             crate::tls_reload::test_tls_watch(material)
         }
 
-        #[cfg(not(feature = "bootroot"))]
-        fn create_certs_from_paths(cert_path: &str, key_path: &str) -> Certs {
-            Certs {
-                certs: to_cert_chain(&fs::read(cert_path).unwrap()).unwrap(),
-                key: to_private_key(&fs::read(key_path).unwrap()).unwrap(),
-                root: to_root_cert(&["tests/certs/ca_cert.pem".to_string()]).unwrap(),
-            }
-        }
-
         pub(super) fn create_certs() -> Certs {
-            #[cfg(not(feature = "bootroot"))]
-            {
-                CERTS_NODE1
-                    .get_or_init(|| {
-                        create_certs_from_paths(
-                            "tests/certs/node1/cert.pem",
-                            "tests/certs/node1/key.pem",
-                        )
-                    })
-                    .clone()
-            }
-
-            #[cfg(feature = "bootroot")]
-            {
-                CERTS_NODE1
-                    .get_or_init(|| bootroot_cluster_certs(TestNode::Node1))
-                    .clone()
-            }
+            CERTS_NODE1
+                .get_or_init(|| bootroot_cluster_certs(TestNode::Node1))
+                .clone()
         }
 
         pub(super) fn create_node2_certs() -> Certs {
-            #[cfg(not(feature = "bootroot"))]
-            {
-                CERTS_NODE2
-                    .get_or_init(|| {
-                        create_certs_from_paths(
-                            "tests/certs/node2/cert.pem",
-                            "tests/certs/node2/key.pem",
-                        )
-                    })
-                    .clone()
-            }
-
-            #[cfg(feature = "bootroot")]
-            {
-                CERTS_NODE2
-                    .get_or_init(|| bootroot_cluster_certs(TestNode::Node2))
-                    .clone()
-            }
+            CERTS_NODE2
+                .get_or_init(|| bootroot_cluster_certs(TestNode::Node2))
+                .clone()
         }
 
         pub(super) fn build_peer_conn_info(local_address: SocketAddr) -> (PeerConns, TempConfig) {
@@ -2107,7 +2044,6 @@ pub mod tests {
 
         /// Runs the real peer server and exposes the sensor-list exchange used
         /// by tests outside this module.
-        #[cfg(feature = "bootroot")]
         pub(crate) struct SensorListPeerHarness {
             client: TestClient,
             token: CancellationToken,
@@ -2115,7 +2051,6 @@ pub mod tests {
             _config: TempConfig,
         }
 
-        #[cfg(feature = "bootroot")]
         impl SensorListPeerHarness {
             pub(crate) async fn start(
                 ingest_sensors: IngestSensors,
@@ -3516,7 +3451,6 @@ pub mod tests {
         assert_eq!(peer_conn.read().await.len(), 1);
     }
 
-    #[cfg(feature = "bootroot")]
     #[test]
     fn peer_dedup_key_distinguishes_instance_ids() {
         let node1_fixture = build_bootroot_chain_fixture_with_server_name(
@@ -3549,7 +3483,6 @@ pub mod tests {
         assert_ne!(node1_key, node2_key);
     }
 
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn check_for_duplicate_connections_allows_distinct_bootroot_instance_ids() {
         init_crypto();

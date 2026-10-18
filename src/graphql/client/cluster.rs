@@ -1674,7 +1674,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "bootroot")]
     mod bootroot_cluster_routing {
         use super::*;
         use crate::server::service_fqdn_from_cert;
