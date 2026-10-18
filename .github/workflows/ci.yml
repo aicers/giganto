@@ -126,12 +126,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        feature_set: [ default, bootroot ]
+        feature_set: [ default ]
         include:
           - feature_set: default
             cargo_flags: ""
-          - feature_set: bootroot
-            cargo_flags: --features bootroot
     steps:
       - name: Increase ulimit size
         run: ulimit -n 8096

@@ -63,7 +63,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn sensors_returns_service_fqdn_under_bootroot() {
         use std::collections::{HashMap, HashSet};

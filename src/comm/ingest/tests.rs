@@ -1,7 +1,5 @@
 #![allow(clippy::items_after_statements)]
 
-#[cfg(not(feature = "bootroot"))]
-use std::fs;
 use std::{
     cell::RefCell,
     future::IntoFuture,
@@ -59,9 +57,6 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use super::{Server, shutdown_ingest};
-#[cfg(not(feature = "bootroot"))]
-use crate::comm::to_cert_chain;
-#[cfg(feature = "bootroot")]
 use crate::test_bootroot::{
     bootroot_chain_node1_client_certs, bootroot_chain_node1_fixture,
     bootroot_chain_node1_server_certs,
@@ -132,12 +127,6 @@ const STOREABLE_RAW_EVENT_KINDS: &[RawEventKind] = &[
     RawEventKind::SecuLog,
 ];
 
-#[cfg(not(feature = "bootroot"))]
-fn test_server_name() -> &'static str {
-    "node1"
-}
-
-#[cfg(feature = "bootroot")]
 fn test_server_name() -> &'static str {
     &bootroot_chain_node1_fixture().server_name
 }
@@ -163,37 +152,11 @@ impl TestClient {
 }
 
 fn load_test_client_certs() -> Arc<Certs> {
-    #[cfg(not(feature = "bootroot"))]
-    {
-        let cert_pem = fs::read("tests/certs/node1/cert.pem").unwrap();
-        let cert = to_cert_chain(&cert_pem).unwrap();
-        let key_pem = fs::read("tests/certs/node1/key.pem").unwrap();
-        let key = crate::comm::to_private_key(&key_pem).unwrap();
-        let root = crate::comm::to_root_cert(&["tests/certs/ca_cert.pem".to_string()]).unwrap();
-
-        Arc::new(Certs {
-            certs: cert,
-            key,
-            root,
-        })
-    }
-
-    #[cfg(feature = "bootroot")]
-    {
-        Arc::new(bootroot_chain_node1_client_certs())
-    }
+    Arc::new(bootroot_chain_node1_client_certs())
 }
 
 fn load_test_server_certs() -> Arc<Certs> {
-    #[cfg(not(feature = "bootroot"))]
-    {
-        load_test_client_certs()
-    }
-
-    #[cfg(feature = "bootroot")]
-    {
-        Arc::new(bootroot_chain_node1_server_certs())
-    }
+    Arc::new(bootroot_chain_node1_server_certs())
 }
 
 #[test]
@@ -1688,10 +1651,7 @@ async fn op_log_sensor_uses_host_fqdn() {
         bincode::deserialize(&stored).expect("failed to deserialize stored OpLog");
 
     assert_eq!(stored_op_log.sensor, test_host_fqdn());
-    #[cfg(feature = "bootroot")]
     assert_eq!(stored_op_log.sensor, "node1.example.test");
-    #[cfg(not(feature = "bootroot"))]
-    assert_eq!(stored_op_log.sensor, "node1");
 
     harness.shutdown(b"done").await;
 }

@@ -9,7 +9,6 @@ use rustls::{
     RootCertStore,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
-#[cfg(feature = "bootroot")]
 use x509_parser::extensions::GeneralName;
 use x509_parser::nom::Parser;
 
@@ -63,7 +62,6 @@ pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<Certificate
     Ok(cert_info)
 }
 
-#[cfg(feature = "bootroot")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BootrootIdentity {
     instance_id: String,
@@ -74,28 +72,12 @@ struct BootrootIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ClientIdentity {
-    #[cfg(not(feature = "bootroot"))]
-    Legacy { service: String, hostname: String },
-    #[cfg(feature = "bootroot")]
     Bootroot(BootrootIdentity),
 }
 
 impl ClientIdentity {
-    #[cfg(not(feature = "bootroot"))]
-    fn from_legacy_subject(subject: &str) -> Option<Self> {
-        let (service, hostname) = subject.split_once('@')?;
-
-        Some(Self::Legacy {
-            service: service.to_string(),
-            hostname: hostname.to_string(),
-        })
-    }
-
     fn service_name(&self) -> &str {
         match self {
-            #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { service, .. } => service,
-            #[cfg(feature = "bootroot")]
             Self::Bootroot(identity) => &identity.service_name,
         }
     }
@@ -103,51 +85,34 @@ impl ClientIdentity {
     #[cfg(test)]
     fn hostname(&self) -> String {
         match self {
-            #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { hostname, .. } => hostname.clone(),
-            #[cfg(feature = "bootroot")]
             Self::Bootroot(identity) => identity.hostname.clone(),
         }
     }
 
     fn host_fqdn(&self) -> String {
         match self {
-            #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { hostname, .. } => hostname.clone(),
-            #[cfg(feature = "bootroot")]
             Self::Bootroot(identity) => identity.host_fqdn(),
         }
     }
 
     /// Returns the service FQDN used as the cert-derived sensor.
     ///
-    /// Under `bootroot`, this is the join of SAN DNS labels 2, 3, 4
-    /// (`{service_name}.{hostname}.{domain}`). Non-bootroot builds
-    /// intentionally return the bare hostname to preserve legacy CN
-    /// behavior for existing deployments.
+    /// This is the join of SAN DNS labels 2, 3, 4
+    /// (`{service_name}.{hostname}.{domain}`).
     fn service_fqdn(&self) -> String {
         match self {
-            #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { hostname, .. } => hostname.clone(),
-            #[cfg(feature = "bootroot")]
             Self::Bootroot(identity) => identity.service_fqdn(),
         }
     }
 
     fn peer_connect_name(&self) -> String {
         match self {
-            #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { hostname, .. } => hostname.clone(),
-            #[cfg(feature = "bootroot")]
             Self::Bootroot(identity) => identity.san(),
         }
     }
 
     fn peer_dedup_key(&self) -> String {
         match self {
-            #[cfg(not(feature = "bootroot"))]
-            Self::Legacy { hostname, .. } => hostname.clone(),
-            #[cfg(feature = "bootroot")]
             Self::Bootroot(identity) => identity.san(),
         }
     }
@@ -160,19 +125,14 @@ impl ClientIdentity {
 
 /// Formats a parsed client identity for connected-client log messages.
 ///
-/// Under the `bootroot` feature, returns the full SAN-derived identity
-/// (`{instance_id}.{service_name}.{hostname}.{domain}`). Under legacy builds,
-/// returns `{service_name}@{hostname}`.
+/// Returns the full SAN-derived identity
+/// (`{instance_id}.{service_name}.{hostname}.{domain}`).
 fn format_connected_client_display(identity: &ClientIdentity) -> String {
     match identity {
-        #[cfg(not(feature = "bootroot"))]
-        ClientIdentity::Legacy { service, hostname } => format!("{service}@{hostname}"),
-        #[cfg(feature = "bootroot")]
         ClientIdentity::Bootroot(identity) => identity.san(),
     }
 }
 
-#[cfg(feature = "bootroot")]
 impl BootrootIdentity {
     fn san(&self) -> String {
         format!(
@@ -197,15 +157,13 @@ pub(crate) fn subject_from_cert(cert_info: &[CertificateDer]) -> Result<(String,
 
 /// Parses a peer certificate and returns `(service_name, service_fqdn)`.
 ///
-/// Under the `bootroot` feature, `service_fqdn` is the join of SAN DNS labels
-/// 2, 3, 4 (`{service_name}.{hostname}.{domain}`). Under legacy builds it
-/// equals the bare hostname, so callers see no behavioral change.
+/// `service_fqdn` is the join of SAN DNS labels 2, 3, 4
+/// (`{service_name}.{hostname}.{domain}`).
 ///
 /// # Errors
 ///
 /// Returns an error if no certificate is present in the chain, the leaf
-/// certificate cannot be parsed, or its identity does not match the configured
-/// certificate format.
+/// certificate cannot be parsed, or it does not carry a valid SAN identity.
 pub fn service_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<(String, String)> {
     let identity = parse_client_identity(cert_info)?;
     Ok((identity.service_name().to_string(), identity.service_fqdn()))
@@ -213,15 +171,13 @@ pub fn service_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<(String, S
 
 /// Parses a peer certificate and returns the connected-client display identity.
 ///
-/// Under the `bootroot` feature, returns the full SAN-derived identity
-/// (`{instance_id}.{service_name}.{hostname}.{domain}`). Under legacy builds,
-/// returns `{service_name}@{hostname}`.
+/// Returns the full SAN-derived identity
+/// (`{instance_id}.{service_name}.{hostname}.{domain}`).
 ///
 /// # Errors
 ///
 /// Returns an error if no certificate is present in the chain, the leaf
-/// certificate cannot be parsed, or its identity does not match the configured
-/// certificate format.
+/// certificate cannot be parsed, or it does not carry a valid SAN identity.
 pub fn connected_client_display_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
     let identity = parse_client_identity(cert_info)?;
     Ok(format_connected_client_display(&identity))
@@ -233,14 +189,12 @@ pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
 
 /// Returns the host FQDN identifier for the certificate.
 ///
-/// Under the `bootroot` feature, returns `{hostname}.{domain}` derived from
-/// the SAN DNS labels 3 and 4. Under the default (legacy CN) build, returns
-/// the bare hostname component of the legacy `{service}@{hostname}` CN.
+/// Returns `{hostname}.{domain}` derived from the SAN DNS labels 3 and 4.
 ///
 /// # Errors
 ///
 /// Returns an error if the certificate cannot be parsed or does not carry a
-/// valid identity for the active build.
+/// valid SAN identity.
 pub fn host_fqdn_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
     Ok(parse_client_identity(cert_info)?.host_fqdn())
 }
@@ -259,18 +213,9 @@ fn parse_client_identity(cert_info: &[CertificateDer]) -> Result<ClientIdentity>
         bail!("invalid X.509 certificate");
     };
 
-    #[cfg(feature = "bootroot")]
-    {
-        parse_bootroot_client_identity(&x509)
-    }
-
-    #[cfg(not(feature = "bootroot"))]
-    {
-        parse_legacy_client_identity(&x509)
-    }
+    parse_bootroot_client_identity(&x509)
 }
 
-#[cfg(feature = "bootroot")]
 fn parse_bootroot_client_identity(
     x509: &x509_parser::certificate::X509Certificate<'_>,
 ) -> Result<ClientIdentity> {
@@ -290,25 +235,6 @@ fn parse_bootroot_client_identity(
     bail!("the SAN DNS identity of the certificate is not valid");
 }
 
-#[cfg(not(feature = "bootroot"))]
-fn parse_legacy_client_identity(
-    x509: &x509_parser::certificate::X509Certificate<'_>,
-) -> Result<ClientIdentity> {
-    let subject = x509
-        .subject()
-        .iter_common_name()
-        .next()
-        .and_then(|cn| cn.as_str().ok())
-        .context("the CN identity of the certificate is not valid")?;
-    if subject.contains('@') {
-        ClientIdentity::from_legacy_subject(subject)
-            .context("the CN identity of the certificate is not valid")
-    } else {
-        bail!("the CN identity of the certificate is not valid");
-    }
-}
-
-#[cfg(feature = "bootroot")]
 fn parse_bootroot_dns_identity(dns_name: &str) -> Option<BootrootIdentity> {
     let mut labels = dns_name.splitn(4, '.');
     let instance = labels.next()?;
@@ -343,32 +269,22 @@ pub fn config_client(certs: &Certs) -> Result<ClientConfig> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair};
-
-    use super::*;
-    use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
-    #[cfg(feature = "bootroot")]
-    use crate::test_bootroot::{
-        BundleOrder, PeerPresentation, build_bootroot_chain_fixture, config_client_for_tests,
-        config_client_without_cert, init_crypto, load_server_client_certs,
-    };
-
-    const LEGACY_CERT_PATH: &str = "tests/certs/node1/cert.pem";
-    const LEGACY_KEY_PATH: &str = "tests/certs/node1/key.pem";
-    const LEGACY_CA_CERT_PATH: &str = "tests/certs/ca_cert.pem";
-
-    #[cfg(feature = "bootroot")]
     use std::{
+        fs,
         net::{IpAddr, Ipv6Addr, SocketAddr},
         time::Duration,
     };
 
-    #[cfg(feature = "bootroot")]
     use quinn::Endpoint;
-    #[cfg(feature = "bootroot")]
+    use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair};
     use tokio::time::timeout;
+
+    use super::*;
+    use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
+    use crate::test_bootroot::{
+        BundleOrder, PeerPresentation, build_bootroot_chain_fixture, config_client_for_tests,
+        config_client_without_cert, init_crypto, load_server_client_certs,
+    };
 
     fn build_self_signed_cert_chain(
         common_name: &str,
@@ -404,97 +320,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "bootroot"))]
-    mod default_build_tests {
-        use super::*;
-
-        #[test]
-        fn subject_from_cert_accepts_legacy_cn_identity() {
-            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
-
-            let identity = subject_from_cert(&certs.certs).expect("legacy subject identity");
-
-            assert_eq!(identity, ("giganto".to_string(), "node1".to_string()));
-        }
-
-        #[test]
-        fn service_fqdn_from_cert_matches_hostname_in_default_build() {
-            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
-
-            let identity =
-                service_fqdn_from_cert(&certs.certs).expect("legacy service fqdn identity");
-
-            assert_eq!(identity, ("giganto".to_string(), "node1".to_string()));
-        }
-
-        #[test]
-        fn connected_client_display_uses_legacy_service_at_hostname_in_default_build() {
-            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
-
-            let display =
-                connected_client_display_from_cert(&certs.certs).expect("legacy display identity");
-
-            assert_eq!(display, "giganto@node1");
-        }
-
-        #[test]
-        fn peer_name_from_cert_uses_legacy_hostname_in_default_build() {
-            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
-
-            let peer_name =
-                peer_name_from_cert(&certs.certs).expect("legacy peer connect name should parse");
-
-            assert_eq!(peer_name, "node1");
-        }
-
-        #[test]
-        fn host_fqdn_from_cert_returns_legacy_hostname_in_default_build() {
-            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
-
-            let host_fqdn =
-                host_fqdn_from_cert(&certs.certs).expect("legacy host_fqdn should parse");
-
-            assert_eq!(host_fqdn, "node1");
-        }
-
-        #[test]
-        fn subject_from_cert_rejects_bootroot_san_identity_in_default_build() {
-            let certs = build_self_signed_cert_chain(
-                "001.piglet.node1.example.test",
-                "001.piglet.node1.example.test",
-            );
-
-            let err =
-                subject_from_cert(&certs).expect_err("default build should reject SAN-only cert");
-
-            assert!(
-                err.to_string()
-                    .contains("the CN identity of the certificate is not valid")
-            );
-        }
-
-        #[test]
-        fn subject_from_cert_prefers_legacy_cn_even_when_bootroot_san_is_valid_in_default_build() {
-            let certs =
-                build_self_signed_cert_chain("giganto@node1", "001.piglet.node1.example.test");
-
-            let identity =
-                subject_from_cert(&certs).expect("default build should keep the legacy CN path");
-
-            assert_eq!(identity, ("giganto".to_string(), "node1".to_string()));
-        }
-
-        #[test]
-        fn subject_from_cert_accepts_legacy_cn_when_bootroot_san_is_invalid_in_default_build() {
-            let certs = build_self_signed_cert_chain("giganto@node1", "piglet.node1.example.test");
-
-            let identity = subject_from_cert(&certs).expect("legacy CN fallback");
-
-            assert_eq!(identity, ("giganto".to_string(), "node1".to_string()));
-        }
-    }
-
-    #[cfg(feature = "bootroot")]
     mod bootroot_tests {
         use super::*;
 
@@ -745,10 +570,9 @@ mod tests {
 
         #[test]
         fn subject_from_cert_rejects_legacy_cn_without_bootroot_san_in_bootroot_build() {
-            let certs = load_certs(LEGACY_CERT_PATH, LEGACY_KEY_PATH, LEGACY_CA_CERT_PATH);
+            let certs = build_self_signed_cert_chain("giganto@node1", "node1");
 
-            let err = subject_from_cert(&certs.certs)
-                .expect_err("bootroot build should reject legacy-only cert");
+            let err = subject_from_cert(&certs).expect_err("legacy-only cert should be rejected");
 
             assert!(
                 err.to_string()

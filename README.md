@@ -26,19 +26,6 @@ and real-time analytics.
 - libpcap
 - Clang & LLVM: To build [rocksdb](https://crates.io/crates/rocksdb)
 
-### Build Features
-
-- Default build: keeps the legacy `CN=<service_name>@<hostname>` peer identity
-  path.
-- `bootroot` feature build: accepts Bootroot SAN identity and rejects legacy
-  CN-only identities.
-
-To build the Bootroot feature explicitly:
-
-```sh
-cargo build --features bootroot
-```
-
 ## Usage
 
 You can run Giganto by invoking the following command:
@@ -59,6 +46,16 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 | `<CA_CERT_PATH>` | Path to the CA certificates file.               | Yes      |
 | `<LOG_PATH>`     | Path to the log file where logs will be stored. | No       |
 <!-- markdownlint-enable MD013 -->
+
+#### Certificates
+
+Every certificate — Giganto's own, cluster peers', and ingest and publish
+clients' — must carry a SAN DNS name of the form
+`<instance>.<service>.<host>.<domain>` (for example,
+`001.giganto.node1.example.com`). Giganto reads its identities from this SAN and
+rejects a certificate that does not carry one. Bootroot issues such certificates
+in production; for tests, static certificates from any CA work as long as they
+carry the SAN.
 
 #### Notes on Arguments
 
@@ -83,10 +80,10 @@ giganto -c path/to/config.toml --cert /path/to/cert.pem --key /path/to/key.pem \
 --ca-certs /path/to/ca_cert1.pem,/path/to/ca_cert2.pem
 ```
 
-- Run Giganto from source with the `bootroot` feature enabled.
+- Run Giganto from source.
 
 ```sh
-cargo run --features bootroot -- -c path/to/config.toml \
+cargo run -- -c path/to/config.toml \
 --cert /path/to/cert.pem \
 --key /path/to/key.pem --ca-certs /path/to/ca_cert1.pem,/path/to/ca_cert2.pem
 ```
@@ -216,16 +213,10 @@ Command notes:
 
 ## Test
 
-Run the default-build test suite:
+Run the test suite:
 
 ```sh
 cargo test
-```
-
-Run the test suite with the `bootroot` feature enabled:
-
-```sh
-cargo test --features bootroot
 ```
 
 Run Giganto with the prepared configuration file. (Settings to use the

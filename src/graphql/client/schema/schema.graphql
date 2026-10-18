@@ -266,6 +266,58 @@ type ConnRawEventEdge {
 	cursor: String!
 }
 
+enum CustomerDataDeletionRequestStatus {
+	"""
+	Terminal mutation response: this node accepted the request and started the deletion job.
+	"""
+	ACCEPTED
+	"""
+	Terminal mutation response: an earlier deletion job for this customer already succeeded.
+	"""
+	ALREADY_COMPLETED
+	"""
+	Wait for the existing job: this customer's previously accepted deletion is still running.
+	"""
+	DELETION_IN_PROGRESS
+	"""
+	Retry later: another customer's deletion or startup recovery blocks this request, which was not accepted.
+	"""
+	BLOCKED_BY_ANOTHER_DELETION
+	"""
+	Retry later: retention cleanup blocks this request, which was not accepted.
+	"""
+	BLOCKED_BY_RETENTION
+	"""
+	Retry after restart or on another node: shutdown blocks this request, which was not accepted.
+	"""
+	BLOCKED_BY_SHUTDOWN
+	"""
+	Node-local no-op: none of the requested targets are stored on this node.
+	"""
+	NO_LOCAL_TARGET_ON_THIS_NODE
+}
+
+type CustomerDataDeletionResult {
+	customerId: StringNumberU32!
+	requestedAt: DateTime!
+	serviceFqdnList: [String!]!
+	status: CustomerDataDeletionStatusOutput!
+	completedAt: DateTime
+	"""
+	Node failure details, which may be present while the aggregated status is in progress.
+	"""
+	error: String
+}
+
+"""
+The persisted state of a customer data deletion job.
+"""
+enum CustomerDataDeletionStatusOutput {
+	IN_PROGRESS
+	SUCCEEDED
+	FAILED
+}
+
 scalar DateTime
 
 """
@@ -2012,6 +2064,10 @@ type Mutation {
 	"""
 	updateConfig(old: String!, new: String!): Config!
 	stop: Boolean!
+	"""
+	Starts asynchronous deletion of customer-owned data across the Giganto cluster.
+	"""
+	deleteCustomerData(serviceFqdnList: [String!]!, customerId: StringNumberU32!, requestFromPeer: Boolean): CustomerDataDeletionRequestStatus!
 }
 
 type Netflow5RawEvent {
@@ -2856,6 +2912,10 @@ type Query {
 	secuLogRawEvents(filter: SecuLogFilter!, after: String, before: String, first: Int, last: Int): SecuLogRawEventConnection!
 	netflow5RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow5RawEventConnection!
 	netflow9RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow9RawEventConnection!
+	"""
+	Returns the aggregated customer data deletion job for the requested customer.
+	"""
+	customerDataDeletionResult(customerId: StringNumberU32!, requestFromPeer: Boolean): CustomerDataDeletionResult
 }
 
 """

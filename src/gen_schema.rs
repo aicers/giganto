@@ -7,7 +7,7 @@ mod graphql;
 mod server;
 mod settings;
 mod storage;
-#[cfg(all(test, feature = "bootroot"))]
+#[cfg(test)]
 mod test_bootroot;
 mod tls_reload;
 mod web;

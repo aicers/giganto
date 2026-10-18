@@ -5,7 +5,7 @@ mod graphql;
 mod server;
 mod settings;
 mod storage;
-#[cfg(all(test, feature = "bootroot"))]
+#[cfg(test)]
 mod test_bootroot;
 mod tls_reload;
 mod web;
@@ -43,26 +43,23 @@ use tracing_subscriber::{
 use crate::{
     cancellation::{ObservedHandle, TaskTracker, drain_with_report},
     comm::{
-        new_ingest_sensors, new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors,
-        new_stream_direct_channels,
+        IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels, new_ingest_sensors,
+        new_pcap_sensors, new_peers_data, new_runtime_ingest_sensors, new_stream_direct_channels,
     },
-    graphql::NodeName,
+    graphql::{
+        NodeName,
+        customer_deletion::{
+            DeletionOutcome, WorkerOutcome, start_customer_deletion_worker_from_stored_job,
+        },
+    },
     server::{SERVER_REBOOT_DELAY, host_fqdn_from_cert},
     settings::Args,
     storage::{
-        deletion_coordination::CustomerDeletionCoordinator, migrate_data_dir,
-        validate_compression_metadata,
+        CustomerDataDeletionStatus, Database, deletion_coordination::CustomerDeletionCoordinator,
+        migrate_data_dir, validate_compression_metadata,
     },
     tls_reload::{CertPaths, ReloadHandle, load_tls_material},
     web::WebController,
-};
-#[cfg(feature = "bootroot")]
-use crate::{
-    comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels},
-    graphql::customer_deletion::{
-        DeletionOutcome, WorkerOutcome, start_customer_deletion_worker_from_stored_job,
-    },
-    storage::{CustomerDataDeletionStatus, Database},
 };
 
 const ONE_DAY: Duration = Duration::from_hours(24);
@@ -494,7 +491,6 @@ struct GenerationOutcome {
 /// # Errors
 ///
 /// Returns an error if the persisted jobs cannot be read.
-#[cfg(feature = "bootroot")]
 #[allow(clippy::too_many_arguments)]
 async fn recover_inprogress_deletions(
     database: &Database,
@@ -700,7 +696,6 @@ async fn run_generation(
     // outlive the store it was claimed over.
     let deletion_coordination = Arc::new(CustomerDeletionCoordinator::new());
 
-    #[cfg(feature = "bootroot")]
     let recovery_handle = {
         let database = database.clone();
         let tracker = top_level_tracker.clone();
@@ -735,11 +730,8 @@ async fn run_generation(
         database.clone(),
         pcap_sensors.clone(),
         ingest_sensors.clone(),
-        #[cfg(feature = "bootroot")]
         runtime_ingest_sensors.clone(),
-        #[cfg(feature = "bootroot")]
         stream_direct_channels.clone(),
-        #[cfg(feature = "bootroot")]
         notify_sensor_change.clone(),
         peers.clone(),
         process.request_client_pool.clone(),
@@ -778,18 +770,17 @@ async fn run_generation(
 
     // Retention is tracked, not detached: the tracker's cancellation is what
     // stops it, the tracker's drain is what waits for it, and the handle kept
-    // here is what says how it ended. In `bootroot` builds, this entry task
-    // first awaits the tracked startup recovery handle, keeping recovery and
-    // retention ordered without blocking the rest of generation startup. Its
-    // child token reaches retention through the closure argument, which is the
-    // only thing its shutdown travels on.
+    // here is what says how it ended. This entry task first awaits the tracked
+    // startup recovery handle, keeping recovery and retention ordered without
+    // blocking the rest of generation startup. Its child token reaches
+    // retention through the closure argument, which is the only thing its
+    // shutdown travels on.
     let retention = settings.config.visible.retention;
     let retain_task_handle: ObservedHandle<Result<()>> = top_level_tracker
         .spawn_observed("retention", {
             let db = database.clone();
             let deletion_coordination = Arc::clone(&deletion_coordination);
             move |cancel| async move {
-                #[cfg(feature = "bootroot")]
                 match recovery_handle.await {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => error!(
@@ -2584,7 +2575,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "bootroot")]
     fn in_progress_job(target: &str, requested_at: i64) -> storage::CustomerDataDeletion {
         storage::CustomerDataDeletion {
             service_fqdn_list: vec![target.to_string()],
@@ -2595,7 +2585,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "bootroot")]
     fn recovery_state(
         database: &storage::Database,
     ) -> (
@@ -2612,7 +2601,6 @@ mod tests {
         )
     }
 
-    #[cfg(feature = "bootroot")]
     async fn recover_with_state(
         database: &storage::Database,
         tracker: &TaskTracker,
@@ -2638,7 +2626,6 @@ mod tests {
         .await
     }
 
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn recovery_preserves_requested_at_and_uses_stored_targets() {
         const CUSTOMER_ID: u32 = 42;
@@ -2704,7 +2691,6 @@ mod tests {
     ///
     /// No task is waiting on the notifier during recovery, so consuming the stored
     /// permit afterward confirms that recovery emitted the notification.
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn recovery_notifies_peer_sensor_change_after_runtime_cleanup() {
         const CUSTOMER_ID: u32 = 43;
@@ -2752,7 +2738,6 @@ mod tests {
 
     /// Awaiting the recovery handle is a strict completion dependency rather
     /// than a reliance on Tokio's task scheduling order.
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn retention_waits_for_startup_recovery() {
         let tracker = TaskTracker::new();
@@ -2790,7 +2775,6 @@ mod tests {
         assert_eq!(tracker.pending_count(), 0);
     }
 
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn recovered_jobs_run_sequentially_under_the_shared_coordinator() {
         use storage::deletion_coordination::DeletionBlocked;
@@ -2869,7 +2853,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn closed_generation_leaves_recovery_jobs_in_progress() {
         const CUSTOMER_ID: u32 = 7;
@@ -2909,7 +2892,6 @@ mod tests {
 
     /// A batch that never starts a worker must still release its reservation,
     /// including the early `?` return when a persisted record is corrupt.
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn empty_or_unreadable_jobs_release_the_recovery_claim() {
         for corrupt_record in [false, true] {
@@ -2949,7 +2931,6 @@ mod tests {
 
     /// Close the real tracker while the first recovered customer is parked in
     /// cleanup. Shutdown must wait for that customer without starting the next.
-    #[cfg(feature = "bootroot")]
     #[tokio::test]
     async fn shutdown_finishes_the_active_recovery_and_leaves_the_next_job() {
         use crate::cancellation::DrainOutcome;
@@ -3308,38 +3289,34 @@ mod tests {
 
         /// The SAN DNS name of the node called `hostname`.
         ///
-        /// Four labels, the way the `bootroot` build reads them:
+        /// Four labels, the way giganto reads them:
         /// `{instance}.{service}.{hostname}.{domain}`, with everything after
         /// the third dot taken as the domain.
         fn node_san(hostname: &str) -> String {
             format!("001.{NODE_SERVICE}.{hostname}.example.test")
         }
 
-        /// Writes a self-signed node certificate carrying both identities
-        /// giganto knows how to read — the legacy `{service}@{hostname}` CN of
-        /// the default build and the four-label SAN DNS name of the `bootroot`
-        /// build — so the generation resolves a node name in either build.
+        /// Writes a self-signed node certificate whose four-label SAN DNS name
+        /// is the identity the generation resolves a node name from. The
+        /// certificate also carries a `{service}@{hostname}` CN and the bare
+        /// hostname as a second SAN; giganto ignores both.
         fn write_node_pki(dir: &Path) -> CertPaths {
             write_node_pki_named(dir, DEFAULT_NODE_HOSTNAME)
         }
 
-        /// The same certificate, named after `hostname` in both identities.
+        /// The same certificate, named after `hostname`.
         ///
-        /// A cluster test needs the two nodes told apart under either build,
-        /// so the one label that feeds both the CN and the SAN is what a
-        /// caller chooses. The files go under `dir`, which is what keeps two
-        /// nodes' material from landing on the same paths.
+        /// A cluster test needs the two nodes told apart, so the hostname
+        /// label of the SAN is what a caller chooses. The files go under
+        /// `dir`, which is what keeps two nodes' material from landing on the
+        /// same paths.
         fn write_node_pki_named(dir: &Path, hostname: &str) -> CertPaths {
             let key_pair = KeyPair::generate().expect("generate key pair");
-            // Both names a node can be dialed by. The peer subsystem announces
-            // itself to the cluster under the identity of the build it was
-            // compiled for — the SAN under `bootroot`, the bare CN hostname
-            // otherwise — and the node that dials back verifies the
-            // certificate against exactly that name. A certificate carrying
-            // only one of them leaves half the cluster unable to reach this
-            // node under one of the two builds. `bootroot` reads the first SAN
-            // that parses into four labels, so the bare hostname alongside it
-            // changes nothing there.
+            // The peer subsystem announces itself to the cluster under its
+            // SAN, and the node that dials back verifies the certificate
+            // against exactly that name. Giganto reads the first SAN that
+            // parses into four labels, so the bare hostname alongside it
+            // changes nothing.
             let mut params = CertificateParams::new(vec![node_san(hostname), hostname.to_string()])
                 .expect("cert params");
             params.distinguished_name = rcgen::DistinguishedName::new();
@@ -5984,7 +5961,6 @@ mod tests {
         /// Exercise the actual recovery observer in `run_generation`: a bad
         /// job must be reported even though no per-customer worker ever starts,
         /// and retention and the rest of the generation must still run.
-        #[cfg(feature = "bootroot")]
         #[tokio::test]
         async fn a_recovery_read_failure_is_logged_and_retention_still_runs() {
             let dir = tempdir().expect("tempdir");
@@ -6945,8 +6921,7 @@ mod tests {
             write_config_file_with_peers(&target_settings);
 
             // What the target's peer subsystem calls the supporting node once
-            // it has read its certificate: the legacy CN hostname under a
-            // default build, the whole SAN under `bootroot`. The address in
+            // it has read its certificate: the whole SAN. The address in
             // the same record is a loopback IP with no port, so it is the same
             // for both nodes and says nothing about which one answered.
             let support_dedup_key = peer_dedup_key_from_cert(&support_process.cert)
@@ -7433,7 +7408,6 @@ mod tests {
         /// observer takes that lock for writing once the RocksDB deletes are
         /// done — and the drain's own `close` is what the test waits on, so no
         /// step here is timed.
-        #[cfg(feature = "bootroot")]
         #[tokio::test]
         async fn an_accepted_deletion_finishes_before_the_generation_closes_the_database() {
             use crate::storage::CustomerDataDeletionStatus;
@@ -7540,7 +7514,6 @@ mod tests {
             }
         }
 
-        #[cfg(feature = "bootroot")]
         fn job_status(
             db: &storage::Database,
             customer_id: u32,
@@ -8016,7 +7989,6 @@ mod tests {
         }
 
         /// What the seam below found in the job store when it ran.
-        #[cfg(feature = "bootroot")]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum ShutdownObservation {
             /// The customer had no deletion job at all.
@@ -8031,7 +8003,6 @@ mod tests {
         /// The ordering under test is a fact about the job rather than a line
         /// in a log, and this is where that fact is legible: the seam runs
         /// exactly once, at the top of the last teardown phase.
-        #[cfg(feature = "bootroot")]
         #[derive(Clone)]
         struct JobStatusAtShutdown {
             db: storage::Database,
@@ -8041,7 +8012,6 @@ mod tests {
             observed: Arc<Mutex<Option<ShutdownObservation>>>,
         }
 
-        #[cfg(feature = "bootroot")]
         impl JobStatusAtShutdown {
             fn new(db: storage::Database, customer_id: u32) -> Self {
                 Self {
@@ -8056,7 +8026,6 @@ mod tests {
             }
         }
 
-        #[cfg(feature = "bootroot")]
         impl LifecycleEffects for JobStatusAtShutdown {
             fn shutdown_database(&self, _database: &storage::Database) -> Result<()> {
                 let observation = job_status(&self.db, self.customer_id)

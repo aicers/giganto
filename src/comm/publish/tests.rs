@@ -1,7 +1,5 @@
 #![allow(clippy::items_after_statements)]
 
-#[cfg(not(feature = "bootroot"))]
-use std::fs;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -56,9 +54,6 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::{Server, process_stream};
-#[cfg(not(feature = "bootroot"))]
-use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
-#[cfg(feature = "bootroot")]
 use crate::test_bootroot::{TestNode, bootroot_cluster_certs, bootroot_cluster_server_name};
 use crate::{
     cancellation::TaskTracker,
@@ -97,19 +92,11 @@ const FIXED_RAW_EVENT_START_TIME_NANOS: i64 = 1_740_787_200_000_000_000;
 const FIXED_CONN_DURATION_NANOS: i64 = 12_345;
 
 const NODE1: NodeConfig = NodeConfig {
-    cert_path: "tests/certs/node1/cert.pem",
-    key_path: "tests/certs/node1/key.pem",
-    host: "node1",
-    #[cfg(feature = "bootroot")]
     test_node: TestNode::Node1,
     ingest_sensors: &["src1", "src 1", "ingest src 1"],
 };
 
 const NODE2: NodeConfig = NodeConfig {
-    cert_path: "tests/certs/node2/cert.pem",
-    key_path: "tests/certs/node2/key.pem",
-    host: "node2",
-    #[cfg(feature = "bootroot")]
     test_node: TestNode::Node2,
     ingest_sensors: &["src2", "src 2", "ingest src 2"],
 };
@@ -139,27 +126,14 @@ struct NetworkStreamCase {
     insert_db: StreamInsertFn,
 }
 
-#[allow(dead_code)]
 struct NodeConfig {
-    cert_path: &'static str,
-    key_path: &'static str,
-    host: &'static str,
-    #[cfg(feature = "bootroot")]
     test_node: TestNode,
     ingest_sensors: &'static [&'static str],
 }
 
 impl NodeConfig {
     fn build_certs(&self) -> Arc<Certs> {
-        #[cfg(not(feature = "bootroot"))]
-        {
-            build_certs_from_paths(self.cert_path, self.key_path)
-        }
-
-        #[cfg(feature = "bootroot")]
-        {
-            Arc::new(bootroot_cluster_certs(self.test_node))
-        }
+        Arc::new(bootroot_cluster_certs(self.test_node))
     }
 
     fn build_ingest_sensors(&self) -> IngestSensors {
@@ -186,15 +160,7 @@ impl NodeConfig {
     }
 
     fn server_name(&self) -> &str {
-        #[cfg(not(feature = "bootroot"))]
-        {
-            self.host
-        }
-
-        #[cfg(feature = "bootroot")]
-        {
-            bootroot_cluster_server_name(self.test_node)
-        }
+        bootroot_cluster_server_name(self.test_node)
     }
 }
 
@@ -669,31 +635,6 @@ mod fixtures {
 
     pub(super) fn build_ingest_sensors() -> IngestSensors {
         NODE1.build_ingest_sensors()
-    }
-
-    #[cfg_attr(feature = "bootroot", allow(dead_code))]
-    pub(super) fn build_certs_from_paths(cert_path: &str, key_path: &str) -> Arc<Certs> {
-        #[cfg(not(feature = "bootroot"))]
-        {
-            let cert_pem = fs::read(cert_path).unwrap();
-            let cert = to_cert_chain(&cert_pem).unwrap();
-            let key_pem = fs::read(key_path).unwrap();
-            let key = to_private_key(&key_pem).unwrap();
-            let ca_cert_path = vec!["tests/certs/ca_cert.pem".to_string()];
-            let root = to_root_cert(&ca_cert_path).unwrap();
-
-            Arc::new(Certs {
-                certs: cert,
-                key,
-                root,
-            })
-        }
-
-        #[cfg(feature = "bootroot")]
-        {
-            let _ = (cert_path, key_path);
-            unreachable!("bootroot tests use dynamic cluster fixtures")
-        }
     }
 
     pub(super) fn build_test_certs() -> Arc<Certs> {
@@ -7050,7 +6991,6 @@ async fn connect_supports_ipv6() {
     let _ = server_task.await;
 }
 
-#[cfg(not(feature = "bootroot"))]
 mod tls_reload_connect {
     use std::{
         net::{IpAddr, Ipv6Addr, SocketAddr},
@@ -7517,7 +7457,6 @@ mod tls_reload_connect {
     }
 }
 
-#[cfg(feature = "bootroot")]
 mod bootroot_service_fqdn_contract {
     use std::{
         collections::{HashMap, HashSet},

@@ -61,14 +61,26 @@ drain_report_interval = "5s"
 ```toml
 peer_srv_addr = "10.0.0.10:38383"
 peers = [
-  { addr = "10.0.0.11:38383", hostname = "giganto-node-2" },
-  { addr = "10.0.0.12:38383", hostname = "giganto-node-3" }
+  { addr = "10.0.0.11:38383", hostname = "001.giganto.node2.example.com" },
+  { addr = "10.0.0.12:38383", hostname = "001.giganto.node3.example.com" }
 ]
 ```
 
 P2P cluster mode is enabled **only when a valid `peer_srv_addr` is
-configured**. `peers` addresses and hostnames should be defined
-according to the actual operational network and certificate policies.
+configured**. `peers` addresses should be defined according to the actual
+operational network. `peers[].hostname` is the peer certificate's SAN DNS name;
+Giganto verifies the peer's certificate against it when connecting.
+
+## Certificate Requirements
+
+Every certificate Giganto handles — its own, cluster peers', and ingest and
+publish clients' — must carry a SAN DNS name of the form
+`<instance>.<service>.<host>.<domain>` (for example,
+`001.giganto.node1.example.com`). Giganto derives sensor names, node names, and
+peer identities from this SAN, and rejects a certificate that does not carry
+one; a `<service>@<host>` common name alone is not accepted. Bootroot issues
+such certificates in production. For tests, static certificates from any CA
+work as long as they carry the SAN.
 
 ## Configuration Backup and Recovery
 

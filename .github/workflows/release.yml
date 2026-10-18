@@ -14,7 +14,6 @@ on:
 env:
   TITLE: Giganto
   BINARY: giganto
-  BOOTROOT_BINARY: giganto-bootroot
   TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
 
 jobs:
@@ -37,9 +36,6 @@ jobs:
 
           cargo build --release
           cp "target/release/${{ env.BINARY }}" "$RELEASE_TMP_DIR/${{ env.BINARY }}"
-
-          cargo build --release --features bootroot
-          cp "target/release/${{ env.BINARY }}" "$RELEASE_TMP_DIR/${{ env.BOOTROOT_BINARY }}"
       - name: Extract release notes from CHANGELOG.md
         id: release_notes
         run: |
@@ -99,7 +95,7 @@ jobs:
           fi
           RELEASE_ID=$(jq -r .id release.json)
 
-          for ASSET_NAME in "${{ env.BINARY }}" "${{ env.BOOTROOT_BINARY }}"; do
+          for ASSET_NAME in "${{ env.BINARY }}"; do
             FILE="$RELEASE_TMP_DIR/$ASSET_NAME"
             UPLOAD_URL="https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=$ASSET_NAME"
             curl -X POST \

@@ -6,6 +6,9 @@
   that the process can create `data` in its working directory.
 - Verify that the paths for the certificate, private key, and CA
   certificate are correct.
+- Verify that Giganto's certificate carries a SAN DNS name of the form
+  `<instance>.<service>.<host>.<domain>`. A certificate identified only by a
+  `<service>@<host>` common name is rejected at startup.
 - If a log path is specified, verify that the file has write permission.
 
 ## When GraphQL cannot be accessed
@@ -20,7 +23,8 @@
   network configuration.
 - Check firewall policies and routing between peer nodes.
 - Verify that the node certificates and hostname policies meet the
-  mutual verification requirements.
+  mutual verification requirements: each `peers[].hostname` must be the
+  peer certificate's SAN DNS name.
 
 ## When the process exits while it was serving
 

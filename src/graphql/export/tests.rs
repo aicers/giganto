@@ -13,7 +13,6 @@ use super::{
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::datetime::DateTime;
 use crate::graphql::TimeRange;
-#[cfg(feature = "bootroot")]
 use crate::graphql::export::tests::fixture::assert_export_response_with_node_name;
 use crate::graphql::export::tests::fixture::{
     assert_export_error, assert_export_response, export_cases, export_filter_base,
@@ -1233,7 +1232,6 @@ async fn export_dhcp() {
     assert_export_response(&schema, &res, "dhcp", "json").await;
 }
 
-#[cfg(feature = "bootroot")]
 #[tokio::test]
 async fn export_download_path_uses_host_fqdn_under_bootroot() {
     let schema = TestSchema::new_with_node_name("node1.example.test");

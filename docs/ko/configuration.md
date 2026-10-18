@@ -58,13 +58,25 @@ drain_report_interval = "5s"
 ```toml
 peer_srv_addr = "10.0.0.10:38383"
 peers = [
-  { addr = "10.0.0.11:38383", hostname = "giganto-node-2" },
-  { addr = "10.0.0.12:38383", hostname = "giganto-node-3" }
+  { addr = "10.0.0.11:38383", hostname = "001.giganto.node2.example.com" },
+  { addr = "10.0.0.12:38383", hostname = "001.giganto.node3.example.com" }
 ]
 ```
 
 `peer_srv_addr`는 **유효한 주소가 설정된 경우에만** P2P 클러스터 모드로 동작합니다.
-`peers` 주소와 호스트명은 실제 운영 네트워크와 인증서 정책에 맞춰 결정해야 합니다.
+`peers` 주소는 실제 운영 네트워크에 맞춰 결정해야 합니다. `peers[].hostname`은
+피어 인증서의 SAN DNS 이름이며, Giganto는 피어에 연결할 때 이 이름으로 피어
+인증서를 검증합니다.
+
+## 인증서 요구사항
+
+Giganto가 다루는 모든 인증서(Giganto 자신의 인증서, 클러스터 피어의 인증서,
+ingest 및 publish 클라이언트의 인증서)는 `<instance>.<service>.<host>.<domain>`
+형식의 SAN DNS 이름(예: `001.giganto.node1.example.com`)을 가져야 합니다.
+Giganto는 이 SAN에서 센서 이름, 노드 이름, 피어 식별자를 도출하며, 이 SAN이 없는
+인증서는 거부합니다. `<service>@<host>` 형식의 CN만 있는 인증서는 허용되지
+않습니다. 운영 환경에서는 Bootroot가 이러한 인증서를 발급하며, 테스트에서는 SAN을
+갖춘 인증서라면 어떤 CA가 발급한 정적 인증서도 사용할 수 있습니다.
 
 ## 설정 파일 백업/복구
 
