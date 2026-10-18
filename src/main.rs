@@ -3307,8 +3307,9 @@ mod tests {
         /// The same certificate, named after `hostname`.
         ///
         /// A cluster test needs the two nodes told apart, so the hostname
-        /// label of the SAN is what a caller chooses. The files go under `dir`, which is what keeps two
-        /// nodes' material from landing on the same paths.
+        /// label of the SAN is what a caller chooses. The files go under
+        /// `dir`, which is what keeps two nodes' material from landing on the
+        /// same paths.
         fn write_node_pki_named(dir: &Path, hostname: &str) -> CertPaths {
             let key_pair = KeyPair::generate().expect("generate key pair");
             // The peer subsystem announces itself to the cluster under its
