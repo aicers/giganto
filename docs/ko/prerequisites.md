@@ -15,6 +15,9 @@ Giganto의 GraphQL 서버는 HTTPS로 동작하며 mTLS 클라이언트 인증�
 ## 인증서 준비 원칙
 
 - 서버 인증서와 개인 키는 Giganto 실행 시 필수입니다.
+- Giganto 자신의 인증서와 클러스터 피어, ingest 및 publish 클라이언트의 인증서는
+  `<instance>.<service>.<host>.<domain>` 형식의 SAN DNS 이름을 가져야 합니다.
+  설정 문서의 "인증서 요구사항"을 참고합니다.
 - GraphQL API에 접속하는 클라이언트도 mTLS용 인증서를 준비해야 합니다.
 - CA 인증서는 `--ca-certs`로 전달합니다.
 - 여러 CA 인증서를 사용할 때는 쉼표로 구분하거나 인자를 반복할 수 있습니다.

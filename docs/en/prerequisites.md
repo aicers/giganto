@@ -18,6 +18,10 @@ private key, and trusted CA.
 ## Certificate Preparation Guidelines
 
 - A server certificate and private key are required.
+- Giganto's own certificate, and those of cluster peers and ingest and publish
+  clients, must carry a SAN DNS name of the form
+  `<instance>.<service>.<host>.<domain>`. See "Certificate Requirements" in
+  the configuration guide.
 - Clients accessing the GraphQL API must also provide an mTLS client
   certificate.
 - CA certificates are provided via the `--ca-certs` option.
