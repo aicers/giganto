@@ -572,8 +572,7 @@ mod tests {
         fn subject_from_cert_rejects_legacy_cn_without_bootroot_san_in_bootroot_build() {
             let certs = build_self_signed_cert_chain("giganto@node1", "node1");
 
-            let err = subject_from_cert(&certs)
-                .expect_err("bootroot build should reject legacy-only cert");
+            let err = subject_from_cert(&certs).expect_err("legacy-only cert should be rejected");
 
             assert!(
                 err.to_string()
