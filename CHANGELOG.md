@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.31.0] - 2026-10-18
 
 ### Added
 
@@ -22,6 +22,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   suffixes now always use the FQDN forms, so data written by a build without
   the former `bootroot` feature needs a one-time reset; there is no automated
   migration.
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<0.32.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<0.32.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0,<0.32.0".
+- Updated `PEER_VERSION_REQ` to ">=0.31.0,<0.32.0".
 
 ### Removed
 
@@ -1272,7 +1276,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.30.1...main
+[0.31.0]: https://github.com/aicers/giganto/compare/0.30.1...0.31.0
 [0.30.1]: https://github.com/aicers/giganto/compare/0.30.0...0.30.1
 [0.30.0]: https://github.com/aicers/giganto/compare/0.29.1...0.30.0
 [0.29.1]: https://github.com/aicers/giganto/compare/0.29.0...0.29.1
