@@ -1,0 +1,6 @@
+# What this repository carries from aicers/agent-instructions: the release
+# it is on, and the shared blocks it has. Its drift check reads this file,
+# and its apply job rewrites it. Which blocks a repository should carry is
+# decided upstream in repos.json, not here.
+ref = "0.4.0"
+blocks = ["workflow", "agentcoop", "rust", "changelog"]
