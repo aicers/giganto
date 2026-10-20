@@ -390,6 +390,20 @@ Where the crate handles key material or secrets:
 
 - Use `tempfile::tempdir()` for tests that need temporary files or
   directories. Never write to fixed paths.
+- Do not change process-wide state in tests, such as the environment,
+  the working directory, the umask, the locale, or a signal handler.
+  `cargo test` runs tests as threads in one process, so the change is
+  visible to every test running beside it, and what fails is whichever
+  test read the value at that moment, with no trace of the cause. A
+  lock shared between tests serialises only the tests that take it, and
+  restoring the value afterwards narrows the window without closing it.
+  Where the behaviour under test depends on such a value and cannot be
+  passed it, the test re-runs the current test binary with `--exact`
+  and its own full name, marking the child with an environment variable
+  set through `Command::env`; only the child changes the value and runs
+  the body. The parent asserts that the child passed and ran exactly
+  one test, because libtest reports a filter that matched nothing as a
+  success.
 - Do not mutate the process environment in tests with `env::set_var` or
   `env::remove_var`. In Rust 2024 these are `unsafe`: outside Windows,
   another thread reading the environment concurrently can cause
