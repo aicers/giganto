@@ -50,12 +50,19 @@ jobs:
         run: git diff-index --quiet HEAD --
   lint:
     runs-on: ubuntu-latest
+    # Read-only, as in the other consumers of aicers/agent-instructions.
+    # Nothing here writes: `scripts/fetch-theme.sh` reads the public
+    # aicers/docs-theme, and the drift check reads the pin and the upstream
+    # release.
+    permissions:
+      contents: read
     steps:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - uses: actions/checkout@v5
+        id: checkout
       - uses: biomejs/setup-biome@v2
         with:
           version: latest
@@ -80,6 +87,31 @@ jobs:
         run: python3 -m pip install --upgrade pip mkdocs-material mkdocs-static-i18n
       - name: Build Docs
         run: mkdocs build --strict
+      # Fails when this repository's copy of the shared instruction blocks
+      # stops matching the release `.agent-instructions.toml` pins --
+      # because a generated region of AGENTS.md was edited here, or because
+      # an update pull request was never merged.
+      #
+      # In `lint` because that is the job that already concerns itself with
+      # Markdown, and last so that a drift failure cannot hide the docs
+      # build behind it.
+      #
+      # `@main`: the scripts are mechanism and come from wherever this
+      # reference points, while the blocks are content and come from the
+      # pin. No `with:` block, because the release to compare against and
+      # the blocks to compare are both read from that one file.
+      #
+      # Guarded rather than left to the default `success()`, which would
+      # skip it whenever a step above failed. The checks are independent --
+      # a drifted block is drift whether or not the Markdown lint or the
+      # docs build also failed. `!cancelled()` rather than `always()`,
+      # because a cancelled run should stop. The `checkout` clause keeps a
+      # failed checkout from being reported as drift: the action fails
+      # outright when it cannot read the pin file, and in an empty workspace
+      # that message names the pin for a problem that is not the pin's.
+      - name: Check shared instruction-block drift
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        uses: aicers/agent-instructions/check-drift@main
   schema:
     runs-on: ubuntu-latest
     steps:
