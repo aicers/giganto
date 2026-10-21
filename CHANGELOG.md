@@ -9,7 +9,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Fixed
 
 - Fixed incorrect millisecond-to-second conversion of NetFlow5 `first` and `last`
-  fields in GraphQL query responses and JSON exports.
+  fields in GraphQL query responses, publish query responses, and JSON/CSV exports.
 
 ## [0.31.0] - 2026-10-18
 

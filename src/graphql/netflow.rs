@@ -107,8 +107,8 @@ pub struct Netflow5RawEvent {
     output: u16,
     d_pkts: StringNumberU32,
     d_octets: StringNumberU32,
-    first: String, // milliseconds
-    last: String,  // milliseconds
+    first: String, // seconds, formatted to three decimal places
+    last: String,  // seconds, formatted to three decimal places
     src_port: u16,
     dst_port: u16,
     tcp_flags: String,
