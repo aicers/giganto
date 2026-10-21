@@ -107,8 +107,8 @@ pub struct Netflow5RawEvent {
     output: u16,
     d_pkts: StringNumberU32,
     d_octets: StringNumberU32,
-    first: String, // milliseconds
-    last: String,  // milliseconds
+    first: String, // seconds, formatted to three decimal places
+    last: String,  // seconds, formatted to three decimal places
     src_port: u16,
     dst_port: u16,
     tcp_flags: String,
@@ -193,7 +193,7 @@ impl FromKeyValue<Netflow9> for Netflow9RawEvent {
 }
 
 pub(crate) fn millis_to_secs(millis: u32) -> String {
-    format!("{}.{}", millis / 1000, millis - (millis / 1000) * 1000)
+    format!("{}.{:03}", millis / 1000, millis % 1000)
 }
 
 pub(crate) fn tcp_flags(b: u8) -> String {
@@ -335,12 +335,30 @@ mod tests {
 
     use giganto_client::ingest::netflow::{Netflow5, Netflow9};
 
-    use super::{NetflowFilter, tcp_flags};
+    use super::{NetflowFilter, millis_to_secs, tcp_flags};
     use crate::{
         datetime::DateTime,
         graphql::{IpRange, PortRange, RawEventFilter, TimeRange, tests::TestSchema},
         storage::{KeyExtractor, RawEventStore},
     };
+
+    #[test]
+    fn millis_to_secs_formats_three_fractional_digits() {
+        for (millis, expected) in [
+            (0, "0.000"),
+            (1, "0.001"),
+            (10, "0.010"),
+            (100, "0.100"),
+            (999, "0.999"),
+            (1000, "1.000"),
+            (1001, "1.001"),
+            (1010, "1.010"),
+            (1999, "1.999"),
+            (u32::MAX, "4294967.295"),
+        ] {
+            assert_eq!(millis_to_secs(millis), expected, "millis: {millis}");
+        }
+    }
 
     #[tokio::test]
     async fn netflow5_timestamp_format_stability() {
@@ -354,7 +372,7 @@ mod tests {
             .as_nanosecond()
             .try_into()
             .expect("timestamp fits i64");
-        insert_netflow5_raw_event(&store, sensor, timestamp, 123_456, 123_789);
+        insert_netflow5_raw_event(&store, sensor, timestamp, 1001, 1010);
 
         let query = format!(
             r#"
@@ -393,8 +411,8 @@ mod tests {
         assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
         assert_eq!(node["dPkts"].as_str().unwrap(), "10");
         assert_eq!(node["dOctets"].as_str().unwrap(), "20");
-        assert_eq!(node["first"].as_str().unwrap(), "123.456");
-        assert_eq!(node["last"].as_str().unwrap(), "123.789");
+        assert_eq!(node["first"].as_str().unwrap(), "1.001");
+        assert_eq!(node["last"].as_str().unwrap(), "1.010");
         assert_eq!(node["tcpFlags"].as_str().unwrap(), "FIN-SYN");
         assert_eq!(node["tos"].as_str().unwrap(), "1f");
         assert_eq!(node["samplingMode"].as_str().unwrap(), "0");

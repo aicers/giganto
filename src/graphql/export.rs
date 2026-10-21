@@ -1028,8 +1028,8 @@ pub struct Netflow5JsonOutput {
     output: u16,
     d_pkts: u32,
     d_octets: u32,
-    first: String, // milliseconds
-    last: String,  // milliseconds
+    first: String, // seconds, formatted to three decimal places
+    last: String,  // seconds, formatted to three decimal places
     src_port: u16,
     dst_port: u16,
     tcp_flags: String,
@@ -1931,7 +1931,7 @@ impl JsonOutput<Netflow5JsonOutput> for Netflow5 {
             d_pkts: self.d_pkts,
             d_octets: self.d_octets,
             first: millis_to_secs(self.first),
-            last: millis_to_secs(self.last), // milliseconds
+            last: millis_to_secs(self.last),
             src_port: self.src_port,
             dst_port: self.dst_port,
             tcp_flags: tcp_flags(self.tcp_flags),

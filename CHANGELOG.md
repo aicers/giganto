@@ -4,6 +4,13 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed incorrect millisecond-to-second conversion of NetFlow5 `first` and `last`
+  fields in GraphQL query responses, publish query responses, and JSON/CSV exports.
+
 ## [0.31.0] - 2026-10-18
 
 ### Added
@@ -1276,6 +1283,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.31.0...main
 [0.31.0]: https://github.com/aicers/giganto/compare/0.30.1...0.31.0
 [0.30.1]: https://github.com/aicers/giganto/compare/0.30.0...0.30.1
 [0.30.0]: https://github.com/aicers/giganto/compare/0.29.1...0.30.0
