@@ -1,10 +1,17 @@
 //! Tests of the multi-source range read and the re-read with status.
 
+use std::str::FromStr;
+
 use futures_util::stream;
-use giganto_client::publish::{
-    range::{RangeStatus, RequestMultiSourceRange, SourceStatus},
-    receive_range_status,
+use giganto_client::{
+    RawEventKind,
+    frame::send_raw,
+    publish::{
+        range::{RangeStatus, RequestMultiSourceRange, SourceStatus},
+        receive_range_status,
+    },
 };
+use quinn::VarInt;
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::*;
@@ -526,6 +533,92 @@ async fn multi_source_range_refuses_malformed_requests() {
     .await;
 }
 
+/// Every kind name the two requests serve, as a client spells it: the kinds
+/// `ReqRange` serves, with each alias.
+const SERVED_KINDS: &[&str] = &[
+    "conn",
+    "dns",
+    "malformed_dns",
+    "rdp",
+    "http",
+    "smtp",
+    "log",
+    "ntlm",
+    "kerberos",
+    "ssh",
+    "dce_rpc",
+    "dce rpc",
+    "ftp",
+    "mqtt",
+    "timeseries",
+    "periodic_time_series",
+    "ldap",
+    "tls",
+    "smb",
+    "nfs",
+    "bootp",
+    "dhcp",
+    "radius",
+    "icmp",
+    "process_create",
+    "file_create_time",
+    "network_connect",
+    "process_terminate",
+    "image_load",
+    "file_create",
+    "registry_value_set",
+    "registry_key_rename",
+    "file_create_stream_hash",
+    "pipe_event",
+    "dns_query",
+    "dns_event",
+    "file_delete",
+    "process_tamper",
+    "file_delete_detected",
+    "netflow5",
+    "netflow9",
+];
+
+#[tokio::test]
+async fn multi_source_requests_serve_every_kind_range_reads_serve() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            for kind in SERVED_KINDS {
+                // A name that does not parse would be read as a log kind and
+                // pass without reaching its own store.
+                RawEventKind::from_str(kind).expect("a kind name");
+                // Time series are served locally under any ID; for any other
+                // kind the source is a sensor no node serves.
+                let expected = if matches!(*kind, "timeseries" | "periodic_time_series") {
+                    SourceStatus::Served
+                } else {
+                    SourceStatus::NoNode
+                };
+                let expected = vec![(UNKNOWN_SENSOR.to_string(), expected)];
+
+                let request = multi_source_request(kind, &[(UNKNOWN_SENSOR, 0)], 10);
+                let (_, status) = request_with_status::<u8, _>(
+                    &harness.publish,
+                    MessageCode::MultiSourceRange,
+                    request,
+                )
+                .await;
+                assert_eq!(statuses(status), expected, "multi-source range of {kind}");
+
+                let request = raw_data_request(kind, &[(UNKNOWN_SENSOR, &[1])]);
+                let (_, status) = request_with_status::<u8, _>(
+                    &harness.publish,
+                    MessageCode::RawDataWithStatus,
+                    request,
+                )
+                .await;
+                assert_eq!(statuses(status), expected, "raw data with status of {kind}");
+            }
+        })
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn raw_data_with_status_rereads_events_of_a_byte_kind() {
     with_test_harness(|harness| {
@@ -798,14 +891,16 @@ fn build_conn_range_payload(timestamp: i64, sensor: &str) -> Event<u8> {
 async fn multi_source_range_merges_events_across_nodes() {
     let context = setup_cluster_with_cases(|node2_db| {
         insert_conn(node2_db, "src2", &[2, 4, 6, 8, 10]);
+        insert_conn(node2_db, "src 2", &[7]);
         Vec::<()>::new()
     })
     .await;
     insert_conn(&context.node1_db, "src1", &[1, 3, 5]);
 
+    // Both of node 2's sources go to it in one forwarded request.
     let request = multi_source_request(
         "conn",
-        &[("src1", 0), ("src2", 0), (UNKNOWN_SENSOR, 0)],
+        &[("src1", 0), ("src2", 0), ("src 2", 0), (UNKNOWN_SENSOR, 0)],
         100,
     );
     let (events, status) =
@@ -820,6 +915,7 @@ async fn multi_source_range_merges_events_across_nodes() {
             (4, "src2"),
             (5, "src1"),
             (6, "src2"),
+            (7, "src 2"),
             (8, "src2"),
             (10, "src2"),
         ]
@@ -829,6 +925,7 @@ async fn multi_source_range_merges_events_across_nodes() {
         vec![
             ("src1".to_string(), SourceStatus::Served),
             ("src2".to_string(), SourceStatus::Served),
+            ("src 2".to_string(), SourceStatus::Served),
             (UNKNOWN_SENSOR.to_string(), SourceStatus::NoNode),
         ]
     );
@@ -1225,6 +1322,231 @@ async fn raw_data_with_status_fails_the_sources_of_a_peer_that_breaks_off() {
     assert_peer_failed(status, peer_server.addr, "broke off");
 }
 
+#[tokio::test]
+async fn requests_fail_the_sources_of_a_peer_whose_response_is_wrong() {
+    init_crypto();
+    // The cause each response should be reported with, and the response.
+    let cases = [
+        (
+            "which it was not asked for",
+            vec![event_frame(2, "stray")],
+            AfterScript::Finish,
+        ),
+        (
+            "waiting for its status timed out",
+            vec![terminator_frame()],
+            AfterScript::Hold,
+        ),
+        (
+            "ended without a status",
+            vec![terminator_frame()],
+            AfterScript::Finish,
+        ),
+        (
+            "did not list the source",
+            vec![terminator_frame(), status_frame(&Ok(Vec::new()))],
+            AfterScript::Finish,
+        ),
+        (
+            "failed the whole request: refused",
+            vec![
+                terminator_frame(),
+                status_frame(&Err("refused".to_string())),
+            ],
+            AfterScript::Finish,
+        ),
+    ];
+    for (cause, frames, after) in cases {
+        let peer_server = setup_scripted_peer_server(
+            &NODE2.build_certs(),
+            crate::comm::publish::PUBLISH_VERSION_REQ,
+            frames,
+            after,
+        );
+        let fixture = DirectFixture::new(peer_server.addr);
+
+        let (events, status) = fixture
+            .multi_source_range(
+                "multi.source.wrong",
+                &CancellationToken::new(),
+                SHORT_PEER_TIMEOUT,
+            )
+            .await;
+        assert_eq!(
+            order(&events),
+            vec![(1, LOCAL_SOURCE), (3, LOCAL_SOURCE)],
+            "{cause}"
+        );
+        assert_peer_failed(status, peer_server.addr, cause);
+
+        let (events, status) = fixture
+            .raw_data_with_status(
+                "raw.status.wrong",
+                &CancellationToken::new(),
+                SHORT_PEER_TIMEOUT,
+            )
+            .await;
+        assert_eq!(
+            sorted_order(&events),
+            vec![(1, LOCAL_SOURCE), (3, LOCAL_SOURCE)],
+            "{cause}"
+        );
+        assert_peer_failed(status, peer_server.addr, cause);
+    }
+}
+
+#[tokio::test]
+async fn multi_source_range_fails_a_peer_that_refuses_the_handshake() {
+    init_crypto();
+    // No version meets this requirement, so the peer refuses ours.
+    let peer_server = setup_scripted_peer_server(
+        &NODE2.build_certs(),
+        ">=999.0.0",
+        Vec::new(),
+        AfterScript::Finish,
+    );
+    let fixture = DirectFixture::new(peer_server.addr);
+
+    let (events, status) = fixture
+        .multi_source_range(
+            "multi.source.refused",
+            &CancellationToken::new(),
+            SHORT_PEER_TIMEOUT,
+        )
+        .await;
+
+    assert_eq!(order(&events), vec![(1, LOCAL_SOURCE), (3, LOCAL_SOURCE)]);
+    assert_peer_failed(status, peer_server.addr, "connecting failed");
+}
+
+#[tokio::test]
+async fn multi_source_range_times_out_a_peer_that_grants_no_stream() {
+    init_crypto();
+    let peer_server = setup_streamless_peer_server(&NODE2.build_certs());
+    let fixture = DirectFixture::new(peer_server.addr);
+
+    let (events, status) = fixture
+        .multi_source_range(
+            "multi.source.streamless",
+            &CancellationToken::new(),
+            SHORT_PEER_TIMEOUT,
+        )
+        .await;
+
+    assert_eq!(order(&events), vec![(1, LOCAL_SOURCE), (3, LOCAL_SOURCE)]);
+    assert_peer_failed(
+        status,
+        peer_server.addr,
+        "opening a stream and sending the request timed out",
+    );
+}
+
+/// A response that can no longer be written is an error, and the peer is
+/// closed rather than waited on.
+#[tokio::test]
+async fn requests_whose_response_cannot_be_written_return_an_error() {
+    init_crypto();
+    let peer_server = setup_scripted_peer_server(
+        &NODE2.build_certs(),
+        crate::comm::publish::PUBLISH_VERSION_REQ,
+        vec![event_frame(2, PEER_SOURCE)],
+        AfterScript::Hold,
+    );
+    let fixture = DirectFixture::new(peer_server.addr);
+    let token = CancellationToken::new();
+    let routing = fixture.routing(&token, PEER_RESPONSE_TIMEOUT);
+
+    let request = multi_source_request("conn", &[(LOCAL_SOURCE, 0), (PEER_SOURCE, 0)], 100);
+    let body = bincode::serialize(&request).expect("encode the request");
+    let (mut send, _client_conn) = open_range_stream("multi.source.unwritable").await;
+    send.reset(VarInt::from_u32(0))
+        .expect("reset the response stream");
+    let served = tokio::time::timeout(
+        FRAME_TIMEOUT,
+        process_multi_source_range(&mut send, &fixture.db, &body, &routing),
+    )
+    .await
+    .expect("the request should not wait on the peer");
+    assert!(served.is_err(), "a failed write is an error");
+
+    // Only the peer's source, so the first write is the relay of its event.
+    let request = raw_data_request("conn", &[(PEER_SOURCE, &[2])]);
+    let body = bincode::serialize(&request).expect("encode the request");
+    let (mut send, _client_conn) = open_range_stream("raw.status.unwritable").await;
+    send.reset(VarInt::from_u32(0))
+        .expect("reset the response stream");
+    let served = tokio::time::timeout(
+        FRAME_TIMEOUT,
+        process_raw_data_with_status(&mut send, &fixture.db, &body, &routing),
+    )
+    .await
+    .expect("the request should not wait on the peer");
+    assert!(served.is_err(), "a failed write is an error");
+}
+
+/// A request cancelled while it waits on a peer, after it has sent events,
+/// ends without the terminator and without a status.
+#[tokio::test]
+async fn a_request_cancelled_while_waiting_on_a_peer_writes_no_terminator() {
+    init_crypto();
+    // What the peer sends before going quiet, and the event after which the
+    // client cancels the request.
+    let cases = [
+        // The relay is waiting for the peer's next event.
+        (vec![event_frame(2, PEER_SOURCE)], (2, PEER_SOURCE)),
+        // The merge reads the peer's terminator before it sends the first
+        // event, so the relay is left waiting for the peer's status.
+        (vec![terminator_frame()], (1, LOCAL_SOURCE)),
+    ];
+    for (frames, cancel_after) in cases {
+        let peer_server = setup_scripted_peer_server(
+            &NODE2.build_certs(),
+            crate::comm::publish::PUBLISH_VERSION_REQ,
+            frames,
+            AfterScript::Hold,
+        );
+        let fixture = DirectFixture::new(peer_server.addr);
+        let token = CancellationToken::new();
+        let routing = fixture.routing(&token, PEER_RESPONSE_TIMEOUT);
+        let request = multi_source_request("conn", &[(LOCAL_SOURCE, 0), (PEER_SOURCE, 0)], 100);
+        let body = bincode::serialize(&request).expect("encode the request");
+        let (mut send, client_conn) = open_range_stream("multi.source.cancelled.peer").await;
+
+        let serve = async {
+            process_multi_source_range(&mut send, &fixture.db, &body, &routing)
+                .await
+                .expect("giving up is a normal return, not an error");
+            // Dropping the stream finishes it, so the client reads to its end.
+            drop(send);
+        };
+        let client = async {
+            let mut recv = client_conn.accept_uni().await.expect("accept the response");
+            let mut frames = Vec::new();
+            while let Ok(Ok(frame)) = tokio::time::timeout(
+                FRAME_TIMEOUT,
+                receive_range_data::<Option<Event<u8>>>(&mut recv),
+            )
+            .await
+            {
+                if frame.as_ref().is_some_and(|(timestamp, source, _)| {
+                    (*timestamp, source.as_str()) == cancel_after
+                }) {
+                    token.cancel();
+                }
+                frames.push(frame);
+            }
+            frames
+        };
+        let ((), frames) = tokio::join!(serve, client);
+
+        assert!(token.is_cancelled(), "the client should have cancelled");
+        assert!(
+            frames.iter().all(Option::is_some),
+            "a cancelled request must not write the terminator, got {frames:?}"
+        );
+    }
+}
+
 /// A request cancelled during shutdown sends neither the terminator nor a
 /// status, so the client sees an incomplete response.
 #[tokio::test]
@@ -1318,6 +1640,117 @@ fn setup_silent_peer_server(certs: &Arc<Certs>) -> PeerHandshakeServer {
         // dropped stream would reset it, which reads as a broken-off response.
         connection.closed().await;
         drop((send, recv));
+    });
+
+    PeerHandshakeServer {
+        addr,
+        _endpoint: endpoint,
+    }
+}
+
+/// What a scripted peer does once it has written its frames.
+#[derive(Clone, Copy)]
+enum AfterScript {
+    /// Finishes the response stream.
+    Finish,
+    /// Keeps the response open without writing anything more.
+    Hold,
+}
+
+fn event_frame(timestamp: i64, source: &str) -> Vec<u8> {
+    bincode::serialize(&Some((timestamp, source.to_string(), vec![0_u8])))
+        .expect("encode an event frame")
+}
+
+fn terminator_frame() -> Vec<u8> {
+    bincode::serialize::<Option<Event<u8>>>(&None).expect("encode the terminator")
+}
+
+fn status_frame(status: &RangeStatus) -> Vec<u8> {
+    bincode::serialize(status).expect("encode a status frame")
+}
+
+/// Starts a peer publish server that handshakes with `version_req` and
+/// answers each request, one connection at a time, with `frames` as they are,
+/// then does what `after` says.
+fn setup_scripted_peer_server(
+    certs: &Arc<Certs>,
+    version_req: &'static str,
+    frames: Vec<Vec<u8>>,
+    after: AfterScript,
+) -> PeerHandshakeServer {
+    let server_config = config_server(certs).expect("peer server config");
+    let endpoint = Endpoint::server(
+        server_config,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .expect("start the scripted peer server");
+    let addr = endpoint.local_addr().expect("scripted peer server address");
+
+    let endpoint_for_accept = endpoint.clone();
+    tokio::spawn(async move {
+        while let Some(connecting) = endpoint_for_accept.accept().await {
+            let Ok(connection) = connecting.await else {
+                continue;
+            };
+            if server_handshake(&connection, version_req).await.is_err() {
+                continue;
+            }
+            let Ok((mut send, mut recv)) = connection.accept_bi().await else {
+                continue;
+            };
+            let _ = receive_range_data_request(&mut recv).await;
+            for frame in &frames {
+                let _ = send_raw(&mut send, frame).await;
+            }
+            if matches!(after, AfterScript::Finish) {
+                let _ = send.finish();
+            }
+            // The relay closes the connection once it is done with the peer.
+            connection.closed().await;
+            drop((send, recv));
+        }
+    });
+
+    PeerHandshakeServer {
+        addr,
+        _endpoint: endpoint,
+    }
+}
+
+/// Starts a peer publish server that completes the handshake and then grants
+/// no stream to send a request on.
+fn setup_streamless_peer_server(certs: &Arc<Certs>) -> PeerHandshakeServer {
+    let mut server_config = config_server(certs).expect("peer server config");
+    Arc::get_mut(&mut server_config.transport)
+        .expect("the transport config is not shared yet")
+        .max_concurrent_bidi_streams(1_u8.into());
+    let endpoint = Endpoint::server(
+        server_config,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+    )
+    .expect("start the streamless peer server");
+    let addr = endpoint
+        .local_addr()
+        .expect("streamless peer server address");
+
+    let endpoint_for_accept = endpoint.clone();
+    tokio::spawn(async move {
+        let Some(connecting) = endpoint_for_accept.accept().await else {
+            return;
+        };
+        let Ok(connection) = connecting.await else {
+            return;
+        };
+        let Ok(handshake) =
+            server_handshake(&connection, crate::comm::publish::PUBLISH_VERSION_REQ).await
+        else {
+            return;
+        };
+        // The handshake's stream stays open while it is held, using up the
+        // one stream the client may open.
+        connection.closed().await;
+        drop(handshake);
     });
 
     PeerHandshakeServer {

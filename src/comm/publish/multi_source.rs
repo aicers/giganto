@@ -144,10 +144,7 @@ where
             let (key, value) = item.map_err(|e| format!("reading the store failed: {e:#}"))?;
             let timestamp = key_timestamp(&key)
                 .ok_or_else(|| "the store holds a key without a timestamp".to_string())?;
-            let frame = value
-                .response_data(timestamp, &source)
-                .map_err(|e| format!("encoding the event at {timestamp} failed: {e}"))?;
-            Ok((timestamp, frame))
+            encode_frame(&value, timestamp, &source)
         }))
     }
 
@@ -159,24 +156,28 @@ where
     ) -> Vec<FrameResult> {
         self.checked_multi_get(source, mid_key, timestamps)
             .into_iter()
-            .filter_map(|(timestamp, value)| match value {
-                Ok(None) => None,
-                Ok(Some(value)) => Some(
-                    bincode::deserialize::<T>(&value)
-                        .map_err(|e| format!("decoding the event at {timestamp} failed: {e}"))
-                        .and_then(|value| {
-                            value.response_data(timestamp, source).map_err(|e| {
-                                format!("encoding the event at {timestamp} failed: {e}")
-                            })
-                        })
-                        .map(|frame| (timestamp, frame)),
-                ),
-                Err(e) => Some(Err(format!(
-                    "looking up the event at {timestamp} failed: {e}"
-                ))),
+            .filter_map(|(timestamp, value)| {
+                // A timestamp with no stored event yields nothing.
+                let value = value
+                    .map_err(|e| format!("looking up the event at {timestamp} failed: {e}"))
+                    .transpose()?;
+                Some(value.and_then(|value| {
+                    let value = bincode::deserialize::<T>(&value)
+                        .map_err(|e| format!("decoding the event at {timestamp} failed: {e}"))?;
+                    encode_frame(&value, timestamp, source)
+                }))
             })
             .collect()
     }
+}
+
+/// Encodes `value`, the event of `source` at `timestamp`, as the frame a
+/// client receives.
+fn encode_frame<T: ResponseRangeData>(value: &T, timestamp: i64, source: &str) -> FrameResult {
+    value
+        .response_data(timestamp, source)
+        .map(|frame| (timestamp, frame))
+        .map_err(|e| format!("encoding the event at {timestamp} failed: {e}"))
 }
 
 /// Reads the big-endian timestamp that ends a store key.
@@ -360,31 +361,24 @@ where
 
     let mut sent = 0;
     let mut last = None;
-    while let Some((position, order)) = heads
-        .iter()
-        .enumerate()
-        .filter_map(|(position, head)| {
-            head.as_ref()
-                .map(|event| (position, (event.timestamp, event.source)))
+    while let Some((order, head, input, failure)) = heads
+        .iter_mut()
+        .zip(inputs.iter_mut())
+        .zip(failures.iter_mut())
+        .filter_map(|((head, input), failure)| {
+            let order = head.as_ref().map(|event| (event.timestamp, event.source))?;
+            Some((order, head, input, failure))
         })
-        .min_by_key(|(_, order)| *order)
+        .min_by_key(|(order, ..)| *order)
     {
         if sent >= count && last != Some(order) {
             break;
         }
-        let (Some(head), Some(input), Some(failure)) = (
-            heads.get_mut(position),
-            inputs.get_mut(position),
-            failures.get_mut(position),
-        ) else {
-            break;
-        };
-        let Some(event) = head.take() else {
-            break;
-        };
-        sink.emit(event).await?;
-        sent += 1;
-        last = Some(order);
+        if let Some(event) = head.take() {
+            sink.emit(event).await?;
+            sent += 1;
+            last = Some(order);
+        }
         *head = next_head(input, failure).await;
     }
     Ok(failures)
@@ -467,9 +461,9 @@ async fn serve_multi_source_range(
     let mut statuses: Vec<Option<SourceStatus>> = vec![None; request.sources.len()];
     let mut local = Vec::new();
     let mut peer_reads: Vec<PeerRead> = Vec::new();
-    for (position, (source, _)) in request.sources.iter().enumerate() {
+    for (position, (source, start)) in request.sources.iter().enumerate() {
         match route_source(source, layout, routing).await {
-            Route::Local => local.push(position),
+            Route::Local => local.push((position, source.as_str(), *start)),
             Route::Peer(addr) => add_to_peer(&mut peer_reads, addr, source, position),
             Route::NoNode => set_status(&mut statuses, position, SourceStatus::NoNode),
         }
@@ -492,13 +486,10 @@ async fn serve_multi_source_range(
 
     let mut inputs: Vec<MergeInput<'_>> = Vec::with_capacity(local.len() + peer_reads.len());
     let mut local_owners = Vec::with_capacity(local.len());
-    for position in local {
-        let Some((source, start)) = request.sources.get(position) else {
-            continue;
-        };
+    for (position, source, start) in local {
         let events = kind_store
             .store
-            .range_frames(source, mid_key, *start, request.end)
+            .range_frames(source, mid_key, start, request.end)
             .map(move |event| {
                 event.map(|(timestamp, frame)| SourceEvent {
                     timestamp,
@@ -1057,4 +1048,38 @@ fn decode_event_header(
                 .map(|(timestamp, source, _)| (timestamp, source))
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KindLayout, decode_event_header};
+
+    #[test]
+    fn decode_event_header_reads_the_payload_type_of_the_layout() {
+        let event = bincode::serialize(&Some((7_i64, "sensor".to_string(), vec![1_u8])))
+            .expect("encode an event frame");
+        let series = bincode::serialize(&Some((5_i64, "policy".to_string(), vec![1.5_f64])))
+            .expect("encode a time-series frame");
+        let terminator = bincode::serialize::<Option<(i64, String, Vec<f64>)>>(&None)
+            .expect("encode the terminator");
+
+        for layout in [KindLayout::Event, KindLayout::Log] {
+            assert_eq!(
+                decode_event_header(&event, layout).expect("decode an event frame"),
+                Some((7, "sensor".to_string()))
+            );
+        }
+        assert_eq!(
+            decode_event_header(&series, KindLayout::TimeSeries)
+                .expect("decode a time-series frame"),
+            Some((5, "policy".to_string()))
+        );
+        assert_eq!(
+            decode_event_header(&terminator, KindLayout::TimeSeries)
+                .expect("decode the terminator"),
+            None
+        );
+        // A one-byte payload is too short for an `f64`.
+        assert!(decode_event_header(&event, KindLayout::TimeSeries).is_err());
+    }
 }
