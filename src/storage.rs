@@ -1185,12 +1185,24 @@ impl Iterator for Iter<'_> {
     }
 }
 
+/// The timestamps, in nanoseconds since the Unix epoch, before which a
+/// retention pass deletes records.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RetentionCutoffs {
+    /// The cutoff for every column family other than the operation log,
+    /// derived from `retention`.
+    data: i64,
+    /// The cutoff for the operation log, derived from `oplog_retention`.
+    oplog: i64,
+}
+
 /// Performs one iteration of synchronous RocksDB retention cleanup.
 fn retain_cleanup_iteration(
     db: &Database,
-    retention_timestamp: i64,
+    cutoffs: RetentionCutoffs,
     from_timestamp: [u8; 8],
 ) -> Result<()> {
+    let retention_timestamp = cutoffs.data;
     let retention_timestamp_vec = retention_timestamp.to_be_bytes();
     let sensors = db.sensors_store()?.names();
     let all_store = db.retain_period_store()?;
@@ -1248,7 +1260,7 @@ fn retain_cleanup_iteration(
     from.push(0x00);
     from.extend_from_slice(&1_usize.to_be_bytes());
 
-    let mut to: Vec<u8> = retention_timestamp_vec.to_vec();
+    let mut to: Vec<u8> = cutoffs.oplog.to_be_bytes().to_vec();
     to.push(0x00);
     to.extend_from_slice(&usize::MAX.to_be_bytes());
 
@@ -1288,62 +1300,79 @@ enum PassOutcome {
     Cancelled,
 }
 
-/// Applies the shortened retention window a pass runs under while the disk is
+/// Applies the shortened retention windows a pass runs under while the disk is
 /// over `USAGE_THRESHOLD`.
 ///
-/// Returns the timestamp the pass starts from, and whether it runs under disk
-/// pressure — the flag [`retain_cleanup_pass`] reads to decide whether asking
-/// the filesystem about usage again is worth it.
+/// Returns the cutoffs the pass starts from, both moved a day forward under
+/// disk pressure, and whether it runs under disk pressure — the flag
+/// [`retain_cleanup_pass`] reads to decide whether asking the filesystem about
+/// usage again is worth it.
 ///
 /// `over_threshold` is passed in rather than read here so that the decision
 /// this makes is exercised by tests, which have no disk to fill.
-fn open_under_disk_pressure(retention_timestamp: i64, over_threshold: bool) -> (i64, bool) {
+fn open_under_disk_pressure(
+    cutoffs: RetentionCutoffs,
+    over_threshold: bool,
+) -> (RetentionCutoffs, bool) {
     if !over_threshold {
-        return (retention_timestamp, false);
+        return (cutoffs, false);
     }
     info!(
         "Disk usage is over {USAGE_THRESHOLD}%. \
         Retention period is temporarily reduced."
     );
     (
-        retention_timestamp.saturating_add(ONE_DAY_TIMESTAMP_NANOS),
+        RetentionCutoffs {
+            data: cutoffs.data.saturating_add(ONE_DAY_TIMESTAMP_NANOS),
+            oplog: cutoffs.oplog.saturating_add(ONE_DAY_TIMESTAMP_NANOS),
+        },
         true,
     )
 }
 
-/// Moves the retention window a further day forward for a pass that is still
+/// Moves the retention windows a further day forward for a pass that is still
 /// over `USAGE_LOW` after an iteration.
 ///
+/// Each cutoff moves on its own: one whose next step would pass
+/// `now_timestamp` stays where it is while the other may still move.
+///
 /// Returns `None` when the pass is done: either the disk has come back under
-/// `USAGE_LOW`, or the window has caught up with `now_timestamp` and every
+/// `USAGE_LOW`, or both windows have caught up with `now_timestamp` and every
 /// record the retention policy allows deleting is already gone, so no further
 /// iteration could bring usage down.
 ///
 /// `still_over_low` is passed in rather than read here so that the decision
 /// this makes is exercised by tests, which have no disk to fill.
 fn relax_retention_timestamp(
-    retention_timestamp: i64,
+    cutoffs: RetentionCutoffs,
     now_timestamp: i64,
     still_over_low: bool,
-) -> Option<i64> {
+) -> Option<RetentionCutoffs> {
     if !still_over_low {
         info!("Disk usage is under {USAGE_LOW}%");
         return None;
     }
-    let relaxed = retention_timestamp.saturating_add(ONE_DAY_TIMESTAMP_NANOS);
-    if relaxed > now_timestamp {
+    let relax = |cutoff: i64| {
+        let relaxed = cutoff.saturating_add(ONE_DAY_TIMESTAMP_NANOS);
+        (relaxed <= now_timestamp).then_some(relaxed)
+    };
+    let (data, oplog) = (relax(cutoffs.data), relax(cutoffs.oplog));
+    if data.is_none() && oplog.is_none() {
         warn!("cannot delete data to usage under {USAGE_LOW}");
         return None;
     }
-    Some(relaxed)
+    Some(RetentionCutoffs {
+        data: data.unwrap_or(cutoffs.data),
+        oplog: oplog.unwrap_or(cutoffs.oplog),
+    })
 }
 
 /// Runs the blocking cleanup iterations of one retention pass.
 ///
 /// A pass is normally a single iteration. It repeats only while disk usage
-/// stays above `USAGE_LOW`, each repeat relaxing `retention_timestamp` by a
-/// further day until the pass either brings usage down or reaches
-/// `now_timestamp` with nothing left to give.
+/// stays above `USAGE_LOW`, each repeat relaxing `cutoffs` by a further day
+/// until the pass either brings usage down or reaches `now_timestamp` with
+/// nothing left to give.
 ///
 /// `spawn_iteration` is what the pass calls to put one iteration on the
 /// blocking pool; taking it as an argument is what lets a test drive the
@@ -1367,13 +1396,13 @@ fn relax_retention_timestamp(
 async fn retain_cleanup_pass<F>(
     cancel: &CancellationToken,
     db_path: &Path,
-    mut retention_timestamp: i64,
+    mut cutoffs: RetentionCutoffs,
     now_timestamp: i64,
     usage_flag: bool,
     mut spawn_iteration: F,
 ) -> Result<PassOutcome>
 where
-    F: FnMut(i64) -> JoinHandle<Result<()>>,
+    F: FnMut(RetentionCutoffs) -> JoinHandle<Result<()>>,
 {
     loop {
         // Nothing is in flight here, so this is the cheap place to stop: the
@@ -1386,7 +1415,7 @@ where
         // task that has already begun anyway, so aborting would only detach a
         // live RocksDB operation from the task that is supposed to be waiting
         // for it.
-        match spawn_iteration(retention_timestamp).await {
+        match spawn_iteration(cutoffs).await {
             Ok(Ok(())) => {}
             // A cleanup error is the pass's own failure and is surfaced
             // whether or not shutdown is under way.
@@ -1426,12 +1455,11 @@ where
             return Ok(PassOutcome::Completed);
         }
         let still_over_low = !cfg!(test) && check_db_usage(db_path).1;
-        let Some(relaxed) =
-            relax_retention_timestamp(retention_timestamp, now_timestamp, still_over_low)
+        let Some(relaxed) = relax_retention_timestamp(cutoffs, now_timestamp, still_over_low)
         else {
             return Ok(PassOutcome::Completed);
         };
-        retention_timestamp = relaxed;
+        cutoffs = relaxed;
     }
 }
 
@@ -1464,11 +1492,12 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if the retention period cannot be expressed in
+/// Returns an error if either retention period cannot be expressed in
 /// nanoseconds, or if a cleanup pass fails.
 pub async fn retain_periodically(
     interval: Duration,
     retention_period: Duration,
+    oplog_retention_period: Duration,
     db: Database,
     cancel: CancellationToken,
     deletion_coordination: Arc<CustomerDeletionCoordinator>,
@@ -1477,6 +1506,7 @@ pub async fn retain_periodically(
 
     let mut itv = time::interval(interval);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
+    let oplog_retention_duration = i64::try_from(oplog_retention_period.as_nanos())?;
     let from_timestamp = DEFAULT_FROM_TIMESTAMP_NANOS.to_be_bytes();
     loop {
         select! {
@@ -1503,24 +1533,27 @@ pub async fn retain_periodically(
 
         info!("Begin to cleanup the database based on retention period.");
         let now = DateTime::now();
-        let retention_timestamp =
-            now.timestamp_nanos_opt().unwrap_or(retention_duration) - retention_duration;
-        let (retention_timestamp, usage_flag) = open_under_disk_pressure(
-            retention_timestamp,
-            !cfg!(test) && check_db_usage(db.path()).0,
-        );
+        let cutoffs = RetentionCutoffs {
+            data: now.timestamp_nanos_opt().unwrap_or(retention_duration) - retention_duration,
+            oplog: now
+                .timestamp_nanos_opt()
+                .unwrap_or(oplog_retention_duration)
+                - oplog_retention_duration,
+        };
+        let (cutoffs, usage_flag) =
+            open_under_disk_pressure(cutoffs, !cfg!(test) && check_db_usage(db.path()).0);
 
         let now_timestamp = now.timestamp_nanos_opt().unwrap_or(0);
         let outcome = retain_cleanup_pass(
             &cancel,
             db.path(),
-            retention_timestamp,
+            cutoffs,
             now_timestamp,
             usage_flag,
-            |retention_timestamp| {
+            |cutoffs| {
                 let db = db.clone();
                 tokio::task::spawn_blocking(move || {
-                    retain_cleanup_iteration(&db, retention_timestamp, from_timestamp)
+                    retain_cleanup_iteration(&db, cutoffs, from_timestamp)
                 })
             },
         )
@@ -1845,6 +1878,23 @@ mod tests {
 
     fn conn_key_is_gone(db: &Database, key: &[u8]) -> bool {
         let cf = db.get_cf_handle("conn").unwrap();
+        db.db.get_cf(cf, key).unwrap().is_none()
+    }
+
+    /// Writes an operation log record under the key ingest writes, and returns
+    /// that key.
+    fn insert_oplog(db: &Database, timestamp: i64) -> Vec<u8> {
+        let key = StorageKey::timestamp_builder()
+            .start_key(timestamp)
+            .mid_key(1)
+            .build()
+            .key();
+        db.op_log_store().unwrap().append(&key, b"oplog").unwrap();
+        key
+    }
+
+    fn oplog_key_is_gone(db: &Database, key: &[u8]) -> bool {
+        let cf = db.get_cf_handle("oplog").unwrap();
         db.db.get_cf(cf, key).unwrap().is_none()
     }
 
@@ -2631,6 +2681,7 @@ mod tests {
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
             std::time::Duration::from_hours(1),
+            std::time::Duration::from_hours(1),
             db,
             cancel.clone(),
             idle_coordination(),
@@ -2668,6 +2719,7 @@ mod tests {
         let result = super::retain_periodically(
             std::time::Duration::from_millis(10),
             std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(2),
             db.clone(),
             cancel,
             idle_coordination(),
@@ -2688,9 +2740,9 @@ mod tests {
         cancel.cancel();
 
         let iterations = Arc::new(AtomicUsize::new(0));
-        let outcome = super::retain_cleanup_pass(&cancel, dir.path(), 0, 0, true, {
+        let outcome = super::retain_cleanup_pass(&cancel, dir.path(), NO_CUTOFFS, 0, true, {
             let iterations = Arc::clone(&iterations);
-            move |_retention_timestamp| {
+            move |_cutoffs| {
                 iterations.fetch_add(1, Ordering::SeqCst);
                 tokio::task::spawn_blocking(|| Ok(()))
             }
@@ -2706,28 +2758,43 @@ mod tests {
         );
     }
 
-    /// A disk under `USAGE_THRESHOLD` leaves the retention window alone.
+    /// Cutoffs for passes that never look at them.
+    const NO_CUTOFFS: super::RetentionCutoffs = super::RetentionCutoffs { data: 0, oplog: 0 };
+
+    /// The data cutoff the disk-pressure tests start from; the operation log
+    /// cutoff sits ten days earlier, as with a longer `oplog_retention`.
+    const PRESSURE_CUTOFFS: super::RetentionCutoffs = super::RetentionCutoffs {
+        data: 1_700_000_000_000_000_000,
+        oplog: 1_700_000_000_000_000_000 - 10 * super::ONE_DAY_TIMESTAMP_NANOS,
+    };
+
+    /// `cutoffs` with both moved one day forward.
+    fn one_day_later(cutoffs: super::RetentionCutoffs) -> super::RetentionCutoffs {
+        super::RetentionCutoffs {
+            data: cutoffs.data + super::ONE_DAY_TIMESTAMP_NANOS,
+            oplog: cutoffs.oplog + super::ONE_DAY_TIMESTAMP_NANOS,
+        }
+    }
+
+    /// A disk under `USAGE_THRESHOLD` leaves both retention windows alone.
     #[test]
     fn a_healthy_disk_shortens_no_retention_window() {
-        let retention_timestamp = 1_700_000_000_000_000_000;
+        let (opened, usage_flag) = super::open_under_disk_pressure(PRESSURE_CUTOFFS, false);
 
-        let (opened, usage_flag) = super::open_under_disk_pressure(retention_timestamp, false);
-
-        assert_eq!(opened, retention_timestamp);
+        assert_eq!(opened, PRESSURE_CUTOFFS);
         assert!(!usage_flag);
     }
 
-    /// A disk over `USAGE_THRESHOLD` opens the pass a day further along.
+    /// A disk over `USAGE_THRESHOLD` opens the pass a day further along, for
+    /// the operation log as for every other column family.
     #[test]
     fn disk_pressure_shortens_the_retention_window_by_a_day() {
-        let retention_timestamp = 1_700_000_000_000_000_000;
-
-        let (opened, usage_flag) = super::open_under_disk_pressure(retention_timestamp, true);
+        let (opened, usage_flag) = super::open_under_disk_pressure(PRESSURE_CUTOFFS, true);
 
         assert_eq!(
             opened,
-            retention_timestamp + super::ONE_DAY_TIMESTAMP_NANOS,
-            "the shortened window should reach a day further into the data"
+            one_day_later(PRESSURE_CUTOFFS),
+            "both shortened windows should reach a day further into the data"
         );
         assert!(
             usage_flag,
@@ -2735,31 +2802,63 @@ mod tests {
         );
     }
 
-    /// A window that has not caught up with the present is relaxed by a day.
+    /// Windows that have not caught up with the present are relaxed by a day.
     #[test]
     fn a_relaxed_window_reaches_one_day_further() {
-        let retention_timestamp = 1_700_000_000_000_000_000;
-        let now_timestamp = retention_timestamp + 2 * super::ONE_DAY_TIMESTAMP_NANOS;
+        let now_timestamp = PRESSURE_CUTOFFS.data + 2 * super::ONE_DAY_TIMESTAMP_NANOS;
 
         assert_eq!(
-            super::relax_retention_timestamp(retention_timestamp, now_timestamp, true),
-            Some(retention_timestamp + super::ONE_DAY_TIMESTAMP_NANOS)
+            super::relax_retention_timestamp(PRESSURE_CUTOFFS, now_timestamp, true),
+            Some(one_day_later(PRESSURE_CUTOFFS))
         );
     }
 
     /// A disk back under `USAGE_LOW` ends the pass where it stands.
     #[test]
     fn a_recovered_disk_relaxes_the_window_no_further() {
-        let retention_timestamp = 1_700_000_000_000_000_000;
-        let now_timestamp = retention_timestamp + 2 * super::ONE_DAY_TIMESTAMP_NANOS;
+        let now_timestamp = PRESSURE_CUTOFFS.data + 2 * super::ONE_DAY_TIMESTAMP_NANOS;
 
         assert_eq!(
-            super::relax_retention_timestamp(retention_timestamp, now_timestamp, false),
+            super::relax_retention_timestamp(PRESSURE_CUTOFFS, now_timestamp, false),
             None
         );
     }
 
-    /// Once the window would pass the present there is nothing left to delete.
+    /// A cutoff a few hours before the present stays where it is, while the
+    /// other, still days behind, keeps moving.
+    #[test]
+    fn a_cutoff_near_the_present_stays_while_the_other_moves() {
+        let now_timestamp = 1_700_000_000_000_000_000;
+        let a_few_hours = 3 * 3_600_000_000_000;
+        let days_behind = now_timestamp - 5 * super::ONE_DAY_TIMESTAMP_NANOS;
+
+        let data_near = super::RetentionCutoffs {
+            data: now_timestamp - a_few_hours,
+            oplog: days_behind,
+        };
+        assert_eq!(
+            super::relax_retention_timestamp(data_near, now_timestamp, true),
+            Some(super::RetentionCutoffs {
+                data: data_near.data,
+                oplog: days_behind + super::ONE_DAY_TIMESTAMP_NANOS,
+            })
+        );
+
+        let oplog_near = super::RetentionCutoffs {
+            data: days_behind,
+            oplog: now_timestamp - a_few_hours,
+        };
+        assert_eq!(
+            super::relax_retention_timestamp(oplog_near, now_timestamp, true),
+            Some(super::RetentionCutoffs {
+                data: days_behind + super::ONE_DAY_TIMESTAMP_NANOS,
+                oplog: oplog_near.oplog,
+            })
+        );
+    }
+
+    /// Once both windows would pass the present there is nothing left to
+    /// delete.
     ///
     /// The pass has to stop there rather than keep relaxing: every record the
     /// retention policy allows deleting is already gone, so another iteration
@@ -2769,11 +2868,25 @@ mod tests {
         let now_timestamp = 1_700_000_000_000_000_000;
 
         assert_eq!(
-            super::relax_retention_timestamp(now_timestamp, now_timestamp, true),
+            super::relax_retention_timestamp(
+                super::RetentionCutoffs {
+                    data: now_timestamp,
+                    oplog: now_timestamp - 3_600_000_000_000,
+                },
+                now_timestamp,
+                true
+            ),
             None
         );
         assert_eq!(
-            super::relax_retention_timestamp(i64::MAX, now_timestamp, true),
+            super::relax_retention_timestamp(
+                super::RetentionCutoffs {
+                    data: i64::MAX,
+                    oplog: i64::MAX,
+                },
+                now_timestamp,
+                true
+            ),
             None,
             "a window at the end of the range should stop, not overflow"
         );
@@ -2791,15 +2904,16 @@ mod tests {
         let cancel = CancellationToken::new();
         let iterations = Arc::new(AtomicUsize::new(0));
 
-        let outcome = super::retain_cleanup_pass(&cancel, dir.path(), 0, i64::MAX, true, {
-            let iterations = Arc::clone(&iterations);
-            move |_retention_timestamp| {
-                iterations.fetch_add(1, Ordering::SeqCst);
-                tokio::task::spawn_blocking(|| Ok(()))
-            }
-        })
-        .await
-        .expect("a pass with no failing iteration should complete");
+        let outcome =
+            super::retain_cleanup_pass(&cancel, dir.path(), NO_CUTOFFS, i64::MAX, true, {
+                let iterations = Arc::clone(&iterations);
+                move |_cutoffs| {
+                    iterations.fetch_add(1, Ordering::SeqCst);
+                    tokio::task::spawn_blocking(|| Ok(()))
+                }
+            })
+            .await
+            .expect("a pass with no failing iteration should complete");
 
         assert_eq!(outcome, super::PassOutcome::Completed);
         assert_eq!(iterations.load(Ordering::SeqCst), 1);
@@ -2828,10 +2942,10 @@ mod tests {
                 super::retain_cleanup_pass(
                     &cancel,
                     dir.path(),
-                    0,
+                    NO_CUTOFFS,
                     0,
                     false,
-                    move |_retention_timestamp| {
+                    move |_cutoffs| {
                         let release_rx = release_rx.take().expect("one iteration only");
                         let started = Arc::clone(&started);
                         let finished = Arc::clone(&finished);
@@ -2879,7 +2993,7 @@ mod tests {
         let cancel = CancellationToken::new();
 
         let error =
-            super::retain_cleanup_pass(&cancel, dir.path(), 0, 0, false, |_retention_timestamp| {
+            super::retain_cleanup_pass(&cancel, dir.path(), NO_CUTOFFS, 0, false, |_cutoffs| {
                 tokio::task::spawn_blocking(|| Err(anyhow!("cleanup failed")))
             })
             .await
@@ -2898,9 +3012,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let cancel = CancellationToken::new();
 
-        let error = super::retain_cleanup_pass(&cancel, dir.path(), 0, 0, false, {
+        let error = super::retain_cleanup_pass(&cancel, dir.path(), NO_CUTOFFS, 0, false, {
             let cancel = cancel.clone();
-            move |_retention_timestamp| {
+            move |_cutoffs| {
                 let cancel = cancel.clone();
                 tokio::task::spawn_blocking(move || {
                     cancel.cancel();
@@ -2924,9 +3038,9 @@ mod tests {
         let cancel = CancellationToken::new();
         let iterations = Arc::new(AtomicUsize::new(0));
 
-        let outcome = super::retain_cleanup_pass(&cancel, dir.path(), 0, 0, false, {
+        let outcome = super::retain_cleanup_pass(&cancel, dir.path(), NO_CUTOFFS, 0, false, {
             let iterations = Arc::clone(&iterations);
-            move |_retention_timestamp| {
+            move |_cutoffs| {
                 let attempt = iterations.fetch_add(1, Ordering::SeqCst);
                 tokio::task::spawn_blocking(move || {
                     assert!(attempt > 0, "cleanup panicked");
@@ -2972,10 +3086,10 @@ mod tests {
                 super::retain_cleanup_pass(
                     &cancel,
                     dir.path(),
-                    0,
+                    NO_CUTOFFS,
                     0,
                     false,
-                    move |_retention_timestamp| {
+                    move |_cutoffs| {
                         iterations.fetch_add(1, Ordering::SeqCst);
                         let about_to_panic_tx =
                             about_to_panic_tx.take().expect("one iteration only");
@@ -3047,6 +3161,7 @@ mod tests {
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
             retention_period,
+            retention_period,
             db.clone(),
             cancel.clone(),
             idle_coordination(),
@@ -3074,6 +3189,124 @@ mod tests {
         cancel.cancel();
         let result = task.await.unwrap();
         assert!(result.is_ok());
+    }
+
+    /// Starts a retention task over `db` that runs a pass every 10ms.
+    fn spawn_retention(
+        db: &Database,
+        retention: std::time::Duration,
+        oplog_retention: std::time::Duration,
+    ) -> (
+        CancellationToken,
+        tokio::task::JoinHandle<anyhow::Result<()>>,
+    ) {
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(super::retain_periodically(
+            std::time::Duration::from_millis(10),
+            retention,
+            oplog_retention,
+            db.clone(),
+            cancel.clone(),
+            idle_coordination(),
+        ));
+        (cancel, task)
+    }
+
+    /// With `oplog_retention` the longer period, operation logs outlive the
+    /// other data of the same age.
+    #[tokio::test]
+    async fn oplog_retention_longer_than_retention_keeps_oplog_longer() {
+        let (_dir, db) = setup_db();
+        let sensor = "oplog_longer_sensor";
+        register_sensor(&db, sensor);
+
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let ten_secs_ago = now_nanos - 10_000_000_000;
+        let conn = conn_key(sensor, ten_secs_ago);
+        insert_conn(&db.conn_store().unwrap(), sensor, ten_secs_ago, b"old");
+        let recent_oplog = insert_oplog(&db, ten_secs_ago);
+        let expired_oplog = insert_oplog(&db, now_nanos - 30_000_000_000);
+
+        let (cancel, task) = spawn_retention(
+            &db,
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(20),
+        );
+
+        wait_until(
+            || conn_key_is_gone(&db, &conn) && oplog_key_is_gone(&db, &expired_oplog),
+            "retention did not delete the data older than its period",
+        )
+        .await;
+        assert!(
+            !oplog_key_is_gone(&db, &recent_oplog),
+            "an operation log within oplog_retention should be kept"
+        );
+
+        cancel.cancel();
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    /// With `oplog_retention` the shorter period, operation logs go before the
+    /// other data of the same age.
+    #[tokio::test]
+    async fn oplog_retention_shorter_than_retention_deletes_oplog_first() {
+        let (_dir, db) = setup_db();
+        let sensor = "oplog_shorter_sensor";
+        register_sensor(&db, sensor);
+
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let ten_secs_ago = now_nanos - 10_000_000_000;
+        let conn = conn_key(sensor, ten_secs_ago);
+        insert_conn(&db.conn_store().unwrap(), sensor, ten_secs_ago, b"old");
+        let oplog = insert_oplog(&db, ten_secs_ago);
+
+        let (cancel, task) = spawn_retention(
+            &db,
+            std::time::Duration::from_secs(20),
+            std::time::Duration::from_secs(2),
+        );
+
+        wait_until(
+            || oplog_key_is_gone(&db, &oplog),
+            "retention did not delete the operation log older than oplog_retention",
+        )
+        .await;
+        assert_conn_key_exists(&db, &conn);
+
+        cancel.cancel();
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    /// The longest `oplog_retention` validation accepts still leaves the cutoff
+    /// after the epoch, so it deletes only what is older than it.
+    #[tokio::test]
+    async fn the_longest_oplog_retention_deletes_only_older_oplog() {
+        let (_dir, db) = setup_db();
+
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let recent = insert_oplog(&db, now_nanos - 10_000_000_000);
+        // Older than 3650 days, and after the 61s a pass starts from.
+        let ancient = insert_oplog(&db, 100_000_000_000);
+
+        let (cancel, task) = spawn_retention(
+            &db,
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_hours(3650 * 24),
+        );
+
+        wait_until(
+            || oplog_key_is_gone(&db, &ancient),
+            "retention did not delete the operation log older than 3650 days",
+        )
+        .await;
+        assert!(
+            !oplog_key_is_gone(&db, &recent),
+            "an operation log within oplog_retention should be kept"
+        );
+
+        cancel.cancel();
+        assert!(task.await.unwrap().is_ok());
     }
 
     /// A cycle that comes due while a customer's deletion owns the store gives
@@ -3104,6 +3337,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(2),
             std::time::Duration::from_secs(2),
             db.clone(),
             cancel.clone(),
@@ -3152,6 +3386,7 @@ mod tests {
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
             retention_period,
+            retention_period,
             db.clone(),
             cancel.clone(),
             idle_coordination(),
@@ -3184,6 +3419,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
+            retention_period,
             retention_period,
             db.clone(),
             cancel.clone(),
@@ -3229,6 +3465,7 @@ mod tests {
 
         let task = tokio::spawn(super::retain_periodically(
             std::time::Duration::from_millis(10),
+            retention_period,
             retention_period,
             db.clone(),
             cancel.clone(),

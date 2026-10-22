@@ -4,6 +4,18 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `oplog_retention` configuration option, the retention period of operation
+  logs (OpLog), default `365d`, from one day to 3650 days, readable as
+  `oplogRetention` in the GraphQL `config` query and settable through
+  `updateConfig`. Operation logs are now deleted when they are older than
+  `oplog_retention` instead of `retention`, so by default they are kept for 365
+  days; other data still follows `retention`. Under disk pressure both periods
+  are shortened by the same daily steps.
+
 ## [0.32.0] - 2026-10-23
 
 ### Added
@@ -1317,6 +1329,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.32.0...main
 [0.32.0]: https://github.com/aicers/giganto/compare/0.31.0...0.32.0
 [0.31.0]: https://github.com/aicers/giganto/compare/0.30.1...0.31.0
 [0.30.1]: https://github.com/aicers/giganto/compare/0.30.0...0.30.1

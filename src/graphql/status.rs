@@ -1,4 +1,4 @@
-use std::{io::Write, path::Path};
+use std::{io::Write, path::Path, time::Duration};
 
 use anyhow::{Context as AnyhowContext, anyhow};
 use async_graphql::{Context, Object, Result};
@@ -37,6 +37,18 @@ struct Properties {
     stats: String,
 }
 
+/// Formats a retention period as whole days, rounded up, such as `"100d"`.
+fn format_retention_days(period: Duration) -> String {
+    let secs = period.as_secs();
+    let days = secs / 86400;
+    let days = if secs.is_multiple_of(86400) {
+        days
+    } else {
+        days + 1
+    };
+    format!("{days}d")
+}
+
 #[Object(name = "Config")]
 impl ConfigVisible {
     async fn ingest_srv_addr(&self) -> String {
@@ -52,14 +64,11 @@ impl ConfigVisible {
     }
 
     async fn retention(&self) -> String {
-        let retention_secs = self.retention.as_secs();
-        let days = retention_secs / 86400;
-        let days = if retention_secs.is_multiple_of(86400) {
-            days
-        } else {
-            days + 1
-        };
-        format!("{days}d")
+        format_retention_days(self.retention)
+    }
+
+    async fn oplog_retention(&self) -> String {
+        format_retention_days(self.oplog_retention)
     }
 
     async fn data_dir(&self) -> String {
@@ -147,7 +156,8 @@ impl ConfigMutation {
     /// Returns an error if `new` is empty or if either `old` or `new` cannot be parsed as a
     /// configuration. It also returns an error if `old` does not match the current configuration, if
     /// `new` matches the current configuration, or if the `data_dir` in `new` does not name an existing
-    /// directory. A configuration update is also rejected when another update is already pending, or
+    /// directory. It also refuses a `new` whose `oplog_retention` is below one day or above 3650 days.
+    /// A configuration update is also rejected when another update is already pending, or
     /// when the service is stopping or restarting.
     async fn update_config(
         &self,
@@ -309,8 +319,8 @@ mod tests {
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::{
-        insert_toml_peers, parent_directory, parse_toml_element_to_string, read_toml_file,
-        write_toml_file,
+        Duration, format_retention_days, insert_toml_peers, parent_directory,
+        parse_toml_element_to_string, read_toml_file, write_toml_file,
     };
     use crate::{comm::peer::PeerIdentity, graphql::tests::TestSchema};
 
@@ -434,6 +444,7 @@ mod tests {
                     graphqlSrvAddr
                     dataDir
                     retention
+                    oplogRetention
                     exportDir
                     ackTransmission
                     maxOpenFiles
@@ -465,6 +476,7 @@ mod tests {
                     graphqlSrvAddr
                     dataDir
                     retention
+                    oplogRetention
                     exportDir
                     ackTransmission
                     maxOpenFiles
@@ -479,7 +491,7 @@ mod tests {
         let res = schema.execute(&query).await;
         assert_eq!(
             res.data.to_string(),
-            "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubcompactions: \"2\"}}"
+            "{updateConfig: {ingestSrvAddr: \"0.0.0.0:48370\", publishSrvAddr: \"0.0.0.0:48371\", graphqlSrvAddr: \"127.0.0.1:8443\", dataDir: \"tests\", retention: \"100d\", oplogRetention: \"365d\", exportDir: \"tests\", ackTransmission: 1024, maxOpenFiles: 8000, maxMbOfLevelBase: \"512\", numOfThread: 10, maxSubcompactions: \"2\"}}"
         );
         assert_eq!(
             schema.config_update_rx.recv().await,
@@ -561,6 +573,79 @@ mod tests {
         let data = res.data.into_json().unwrap();
         let config = data["config"].as_object().unwrap();
         assert_eq!(config["retention"].as_str().unwrap(), "100d");
+    }
+
+    #[tokio::test]
+    async fn config_oplog_retention_defaults_to_365_days() {
+        let schema = TestSchema::new();
+        let query = r"
+        {
+            config {
+                oplogRetention
+            }
+        }";
+
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let config = data["config"].as_object().unwrap();
+        assert_eq!(config["oplogRetention"].as_str().unwrap(), "365d");
+    }
+
+    #[test]
+    fn format_retention_days_rounds_up_to_whole_days() {
+        assert_eq!(format_retention_days(Duration::from_hours(36)), "2d");
+        assert_eq!(format_retention_days(Duration::from_hours(24)), "1d");
+    }
+
+    #[tokio::test]
+    async fn test_update_config_changing_only_oplog_retention() {
+        let mut schema = TestSchema::new();
+        let new_config = format!("{}oplog_retention = \"30d\"\n", old_config());
+
+        let res = schema
+            .execute(&update_config_query(&old_config(), &new_config))
+            .await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let sent = schema
+            .config_update_rx
+            .recv()
+            .await
+            .expect("the accepted update should be sent");
+        assert_eq!(sent.oplog_retention, Duration::from_hours(30 * 24));
+    }
+
+    #[tokio::test]
+    async fn test_update_config_refuses_oplog_retention_below_one_day() {
+        let mut schema = TestSchema::new();
+        let new_config = format!("{}oplog_retention = \"12h\"\n", old_config());
+
+        let res = schema
+            .execute(&update_config_query(&old_config(), &new_config))
+            .await;
+        assert_eq!(
+            res.errors.first().map(|error| error.message.as_str()),
+            Some("oplog_retention must be at least one day")
+        );
+        assert!(schema.config_update_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_config_with_old_oplog_retention_mismatch() {
+        let mut schema = TestSchema::new();
+        let mismatched_old_config = format!("{}oplog_retention = \"30d\"\n", old_config());
+
+        let res = schema
+            .execute(&update_config_query(
+                &mismatched_old_config,
+                &changed_config(),
+            ))
+            .await;
+        assert_eq!(
+            res.errors.first().map(|error| error.message.as_str()),
+            Some("Old config does not match the current config.")
+        );
+        assert!(schema.config_update_rx.try_recv().is_err());
     }
 
     #[cfg(all(test, feature = "storage_diagnostics"))]

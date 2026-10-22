@@ -776,6 +776,7 @@ async fn run_generation(
     // retention through the closure argument, which is the only thing its
     // shutdown travels on.
     let retention = settings.config.visible.retention;
+    let oplog_retention = settings.config.visible.oplog_retention;
     let retain_task_handle: ObservedHandle<Result<()>> = top_level_tracker
         .spawn_observed("retention", {
             let db = database.clone();
@@ -793,7 +794,15 @@ async fn run_generation(
                     ),
                 }
 
-                run_retention(ONE_DAY, retention, db, cancel, deletion_coordination).await
+                run_retention(
+                    ONE_DAY,
+                    retention,
+                    oplog_retention,
+                    db,
+                    cancel,
+                    deletion_coordination,
+                )
+                .await
             }
         })
         .map_err(|e| anyhow!("failed to register the retention task: {e}"))?;
@@ -1525,6 +1534,7 @@ async fn observe_entry_task(retained: RetainedEntryTask) -> bool {
 async fn run_retention(
     interval: Duration,
     retention_period: Duration,
+    oplog_retention_period: Duration,
     db: storage::Database,
     cancel: CancellationToken,
     deletion_coordination: Arc<CustomerDeletionCoordinator>,
@@ -1532,6 +1542,7 @@ async fn run_retention(
     let result = storage::retain_periodically(
         interval,
         retention_period,
+        oplog_retention_period,
         db,
         cancel,
         deletion_coordination,
@@ -3423,6 +3434,7 @@ mod tests {
                         ingest_srv_addr: ephemeral_addr(),
                         publish_srv_addr: ephemeral_addr(),
                         retention: ONE_DAY * 100,
+                        oplog_retention: ONE_DAY * 365,
                         export_dir,
                         data_dir,
                         max_open_files: 500,
@@ -5894,6 +5906,7 @@ mod tests {
             let result = run_retention(
                 ONE_DAY,
                 Duration::from_secs(u64::MAX),
+                ONE_DAY * 365,
                 database,
                 CancellationToken::new(),
                 Arc::new(CustomerDeletionCoordinator::new()),

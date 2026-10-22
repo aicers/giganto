@@ -25,6 +25,9 @@ const DEFAULT_DATA_DIR: &str = "data";
 const DEFAULT_EXPORT_DIR: &str = "export";
 const DEFAULT_ACK_TRANSMISSION: u16 = 1024;
 const DEFAULT_RETENTION: &str = "100d";
+const DEFAULT_OPLOG_RETENTION: Duration = Duration::from_hours(365 * 24);
+/// The longest retention period a configuration may set.
+const MAX_RETENTION: Duration = Duration::from_hours(3650 * 24);
 const DEFAULT_MAX_OPEN_FILES: i32 = 8000;
 const DEFAULT_MAX_MB_OF_LEVEL_BASE: u64 = 512;
 const DEFAULT_NUM_OF_THREAD: i32 = 8;
@@ -115,6 +118,12 @@ fn default_web_shutdown_timeout() -> Duration {
     DEFAULT_WEB_SHUTDOWN_TIMEOUT
 }
 
+/// The default operation log retention period used when the configuration
+/// omits `oplog_retention`.
+fn default_oplog_retention() -> Duration {
+    DEFAULT_OPLOG_RETENTION
+}
+
 /// The default drain reporting cadence used when the configuration file omits
 /// `drain_report_interval`.
 fn default_drain_report_interval() -> Duration {
@@ -131,6 +140,8 @@ pub struct ConfigVisible {
     pub publish_srv_addr: SocketAddr, // IP address & port to publish data
     #[serde(with = "humantime_serde")]
     pub retention: Duration, // Data retention period
+    #[serde(with = "humantime_serde", default = "default_oplog_retention")]
+    pub oplog_retention: Duration, // Operation log retention period
     pub export_dir: PathBuf, // giganto's export file path
 
     // DB and DB options
@@ -291,6 +302,12 @@ impl ConfigVisible {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !self.data_dir.exists() || !self.data_dir.is_dir() {
             bail!("data directory is invalid");
+        }
+        if self.oplog_retention < Duration::from_hours(24) {
+            bail!("oplog_retention must be at least one day");
+        }
+        if self.oplog_retention > MAX_RETENTION {
+            bail!("oplog_retention must be at most 3650 days");
         }
         Ok(())
     }
@@ -458,6 +475,7 @@ compression = {}
                 ingest_srv_addr: "[::]:38370".parse().unwrap(),
                 publish_srv_addr: "[::]:38371".parse().unwrap(),
                 retention: Duration::from_hours(2400),
+                oplog_retention: Duration::from_hours(365 * 24),
                 data_dir: data_dir.path().to_path_buf(),
                 export_dir: export_dir.path().to_path_buf(),
                 max_open_files: 8000,
@@ -632,6 +650,11 @@ export_dir = "{}"
             "retention should default to 100 days"
         );
         assert_eq!(
+            settings.config.visible.oplog_retention,
+            Duration::from_hours(365 * 24),
+            "oplog_retention should default to 365 days"
+        );
+        assert_eq!(
             settings.config.visible.max_open_files, DEFAULT_MAX_OPEN_FILES,
             "max_open_files should default to the expected value"
         );
@@ -669,6 +692,27 @@ export_dir = "{}"
             settings.config.drain_report_interval,
             Duration::from_secs(5),
             "drain_report_interval should default to 5 seconds"
+        );
+    }
+
+    #[test]
+    fn test_load_settings_honors_configured_oplog_retention() {
+        let data_dir = tempfile::tempdir().expect("Failed to create test_data dir");
+        let config_content = format!(
+            r#"
+data_dir = "{}"
+oplog_retention = "30d"
+"#,
+            data_dir.path().display()
+        );
+
+        let (_dir, config_path) = create_config_file(&config_content);
+        let settings = Settings::load_or_restore(config_path.to_str().unwrap())
+            .expect("Failed to load settings");
+
+        assert_eq!(
+            settings.config.visible.oplog_retention,
+            Duration::from_hours(30 * 24)
         );
     }
 
@@ -773,6 +817,7 @@ drain_report_interval = "500ms"
             ingest_srv_addr: original_config.ingest_srv_addr,
             publish_srv_addr: original_config.publish_srv_addr,
             retention: original_config.retention,
+            oplog_retention: original_config.oplog_retention,
             data_dir: original_config.data_dir.clone(),
             export_dir: original_config.export_dir.clone(),
             max_open_files: original_config.max_open_files,
@@ -827,6 +872,7 @@ drain_report_interval = "500ms"
             ingest_srv_addr: "[::]:12345".parse().unwrap(),
             publish_srv_addr: original_config.publish_srv_addr,
             retention: Duration::from_hours(4800), // 200 days
+            oplog_retention: Duration::from_hours(30 * 24),
             data_dir: original_config.data_dir.clone(),
             export_dir: original_config.export_dir.clone(),
             max_open_files: 9000,
@@ -854,6 +900,16 @@ drain_report_interval = "500ms"
         assert_eq!(
             reloaded_settings.config.visible, new_config,
             "Persisted visible config should exactly match new config"
+        );
+        assert_eq!(
+            reloaded_settings.config.visible.oplog_retention,
+            Duration::from_hours(30 * 24),
+            "oplog_retention should be read back as written"
+        );
+        let written = fs::read_to_string(config_path).expect("read written config");
+        assert!(
+            written.contains("oplog_retention = \"30days\""),
+            "the written file should carry oplog_retention, got: {written}"
         );
 
         // Verify that a backup file was created
@@ -885,6 +941,7 @@ drain_report_interval = "500ms"
             ingest_srv_addr: "[::]:12345".parse().unwrap(),
             publish_srv_addr: original_config.publish_srv_addr,
             retention: original_config.retention,
+            oplog_retention: original_config.oplog_retention,
             data_dir: original_config.data_dir.clone(),
             export_dir: original_config.export_dir.clone(),
             max_open_files: original_config.max_open_files + 1,
@@ -991,6 +1048,7 @@ drain_report_interval = "500ms"
             ingest_srv_addr: "[::]:12345".parse().unwrap(),
             publish_srv_addr: original_config.publish_srv_addr,
             retention: original_config.retention,
+            oplog_retention: original_config.oplog_retention,
             data_dir: original_config.data_dir.clone(),
             export_dir: original_config.export_dir.clone(),
             max_open_files: original_config.max_open_files + 1,
@@ -1175,6 +1233,36 @@ drain_report_interval = "500ms"
             err.to_string().contains("data directory is invalid"),
             "Unexpected error message: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_validate_oplog_retention_bounds() {
+        let (_temp_file, _data_dir, _export_dir, config_visible) = create_test_config(false);
+
+        for (refused, period) in [("23h", Duration::from_hours(23)), ("0s", Duration::ZERO)] {
+            let mut config = config_visible.clone();
+            config.oplog_retention = period;
+            let err = config.validate().expect_err("below one day should fail");
+            assert_eq!(
+                err.to_string(),
+                "oplog_retention must be at least one day",
+                "{refused}"
+            );
+        }
+
+        let mut config = config_visible.clone();
+        config.oplog_retention = Duration::from_hours(3651 * 24);
+        let err = config.validate().expect_err("above 3650 days should fail");
+        assert_eq!(err.to_string(), "oplog_retention must be at most 3650 days");
+
+        for (accepted, period) in [
+            ("1d", Duration::from_hours(24)),
+            ("3650d", Duration::from_hours(3650 * 24)),
+        ] {
+            let mut config = config_visible.clone();
+            config.oplog_retention = period;
+            assert!(config.validate().is_ok(), "{accepted} should be accepted");
+        }
     }
 
     #[test]
