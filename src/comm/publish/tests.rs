@@ -101,13 +101,20 @@ const NODE2: NodeConfig = NodeConfig {
     ingest_sensors: &["src2", "src 2", "ingest src 2"],
 };
 
+/// A sampling-policy ID that no sensor in `NODE1` or `NODE2` carries, so a
+/// time-series read by it cannot be served by way of the in-charge check that
+/// routes sensor reads.
+const TIME_SERIES_POLICY_ID: &str = "policy-not-a-sensor";
+
 // Stream types that do not have a time-series generator path.
 type StreamsWithoutTsgCase = (RequestStreamRecord, fn() -> Vec<u8>);
 
 struct ClusterContext<T> {
     publish: TestClient,
     cases: Vec<T>,
+    node1_db: Database,
     server_handles: Vec<ServerHandle>,
+    _temp_dirs: [TempDir; 2],
 }
 
 struct RangeCase {
@@ -198,6 +205,7 @@ mod fixtures {
         pub(super) publish: TestClient,
         pub(super) stream_direct_channels: StreamDirectChannels,
         pub(super) pcap_sensors: PcapSensors,
+        pub(super) ingest_sensors: IngestSensors,
         pub(super) server_handle: ServerHandle,
         pub(super) server_addr: SocketAddr,
     }
@@ -670,7 +678,7 @@ mod fixtures {
             db.clone(),
             pcap_sensors.clone(),
             stream_direct_channels.clone(),
-            ingest_sensors,
+            ingest_sensors.clone(),
             peers,
             peer_idents,
             &certs,
@@ -689,6 +697,7 @@ mod fixtures {
             publish,
             stream_direct_channels,
             pcap_sensors,
+            ingest_sensors,
             server_handle,
             server_addr,
         }
@@ -2106,11 +2115,7 @@ mod fixtures {
     }
 
     pub(super) fn cluster_raw_event_cases() -> Vec<RawEventCase> {
-        vec![
-            conn_raw_event_case(),
-            periodic_time_series_raw_event_case(),
-            log_raw_event_case(),
-        ]
+        vec![conn_raw_event_case(), log_raw_event_case()]
     }
 
     pub(super) fn conn_raw_event_case() -> RawEventCase {
@@ -4280,6 +4285,7 @@ mod fixtures {
     pub(super) fn prepare_periodic_time_series_range_cases(
         db: &Database,
         sensor: &str,
+        kind: &'static str,
     ) -> Vec<RangeCase> {
         let time_series_store = db.periodic_time_series_store().unwrap();
         let send_time_series_time = next_timestamp();
@@ -4292,7 +4298,7 @@ mod fixtures {
             .unwrap();
 
         vec![RangeCase {
-            kind: "timeseries",
+            kind,
             expected_payload: time_series_data
                 .response_data(send_time_series_time, sensor)
                 .unwrap(),
@@ -4381,7 +4387,9 @@ mod fixtures {
         ClusterContext {
             publish,
             cases: prepared_cluster_cases,
+            node1_db: db,
             server_handles: vec![node1_handle, node2_handle],
+            _temp_dirs: [db_dir, node2_dir],
         }
     }
 
@@ -4397,21 +4405,6 @@ mod fixtures {
         } = &context;
 
         assert_range_cases(publish, sensor, range_cases).await;
-        context.shutdown().await;
-    }
-
-    pub(super) async fn request_range_data_on_cluster_series<F>(sensor: &str, prepare_cases: F)
-    where
-        F: FnOnce(&Database) -> Vec<RangeCase>,
-    {
-        let context = setup_cluster_with_cases(prepare_cases).await;
-        let ClusterContext {
-            publish,
-            cases: range_cases,
-            ..
-        } = &context;
-
-        assert_range_cases_series(publish, sensor, range_cases).await;
         context.shutdown().await;
     }
 } // mod fixtures
@@ -4742,15 +4735,177 @@ async fn request_range_data_with_netflow() {
     .await;
 }
 
+#[test]
+fn time_series_policy_id_is_not_a_sensor() {
+    for node in [&NODE1, &NODE2] {
+        assert!(
+            !node.ingest_sensors.contains(&TIME_SERIES_POLICY_ID),
+            "{TIME_SERIES_POLICY_ID} must not name a sensor of {}",
+            node.server_name()
+        );
+    }
+}
+
 #[tokio::test]
 async fn request_range_data_with_periodic_time_series() {
-    const SAMPLING_POLICY_ID_AS_SENSOR: &str = "ingest src 1";
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let cases = prepare_periodic_time_series_range_cases(
+                &harness.db,
+                TIME_SERIES_POLICY_ID,
+                "timeseries",
+            );
+            assert_range_cases_series(&harness.publish, TIME_SERIES_POLICY_ID, &cases).await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn request_range_data_with_periodic_time_series_long_kind() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let cases = prepare_periodic_time_series_range_cases(
+                &harness.db,
+                TIME_SERIES_POLICY_ID,
+                "periodic_time_series",
+            );
+            assert_range_cases_series(&harness.publish, TIME_SERIES_POLICY_ID, &cases).await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn request_range_data_with_periodic_time_series_honours_range_and_count() {
+    const START: i64 = FIXED_RAW_EVENT_START_TIME_NANOS;
+    const END: i64 = START + 10;
 
     with_test_harness(|harness| {
         Box::pin(async move {
-            let cases =
-                prepare_periodic_time_series_range_cases(&harness.db, SAMPLING_POLICY_ID_AS_SENSOR);
-            assert_range_cases_series(&harness.publish, SAMPLING_POLICY_ID_AS_SENSOR, &cases).await;
+            let store = harness.db.periodic_time_series_store().unwrap();
+            // One point on each side of `[START, END)`, five inside it, and
+            // inserted out of order so the response order comes from the store.
+            for timestamp in [
+                END,
+                START + 4,
+                START + 2,
+                START,
+                START + 3,
+                START + 1,
+                START - 1,
+            ] {
+                insert_periodic_time_series_raw_event(&store, TIME_SERIES_POLICY_ID, timestamp);
+            }
+
+            for (count, expected) in [
+                (3, vec![START, START + 1, START + 2]),
+                (10, vec![START, START + 1, START + 2, START + 3, START + 4]),
+            ] {
+                let request = RequestRange {
+                    sensor: TIME_SERIES_POLICY_ID.to_string(),
+                    kind: "timeseries".to_string(),
+                    start: START,
+                    end: END,
+                    count,
+                };
+                let mut result_data = harness
+                    .publish
+                    .send_range_request::<(i64, String, Vec<f64>)>(RANGE_MESSAGE_CODE, request)
+                    .await;
+
+                assert_eq!(result_data.pop(), Some(None), "missing terminator");
+                let timestamps = result_data
+                    .into_iter()
+                    .map(|message| {
+                        let (timestamp, id, _values) = message.expect("data before terminator");
+                        assert_eq!(id, TIME_SERIES_POLICY_ID);
+                        timestamp
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(timestamps, expected, "count {count}");
+            }
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn request_range_data_of_unowned_sensor_ends_without_terminator() {
+    const SENSOR: &str = "sensor-nobody-owns";
+
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_conn_raw_event(
+                &harness.db.conn_store().unwrap(),
+                SENSOR,
+                FIXED_RAW_EVENT_START_TIME_NANOS,
+            );
+            let request = build_range_request(SENSOR, "conn");
+            let (mut send_pub_req, mut recv_pub_resp) = harness
+                .publish
+                .conn
+                .open_bi()
+                .await
+                .expect("failed to open stream");
+            send_range_data_request(&mut send_pub_req, RANGE_MESSAGE_CODE, request)
+                .await
+                .expect("failed to send range request");
+
+            // The refusal is only logged, so the stream ends before any
+            // message, data or terminator, is written.
+            tokio::time::timeout(
+                StdDuration::from_secs(5),
+                receive_range_data::<Option<(i64, String, Vec<u8>)>>(&mut recv_pub_resp),
+            )
+            .await
+            .expect("range response timeout")
+            .expect_err("a sensor no node is in charge of must not be served");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn time_series_reads_leave_sensor_sets_unchanged() {
+    const KNOWN_SENSOR: &str = "src1";
+
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let sensor_store = harness.db.sensors_store().unwrap();
+            sensor_store
+                .insert(
+                    KNOWN_SENSOR,
+                    crate::datetime::DateTime::from_timestamp_nanos(0),
+                )
+                .unwrap();
+            let stored_before = sensor_store.sensor_list();
+            let ingest_before = harness.ingest_sensors.read().await.clone();
+
+            let cases = prepare_periodic_time_series_range_cases(
+                &harness.db,
+                TIME_SERIES_POLICY_ID,
+                "timeseries",
+            );
+            assert_range_cases_series(&harness.publish, TIME_SERIES_POLICY_ID, &cases).await;
+            let case = periodic_time_series_raw_event_case();
+            let (timestamp, _expected, _ser_body) =
+                prepare_raw_event(&harness.db, TIME_SERIES_POLICY_ID, &case);
+            let result_data = fetch_raw_data_with_payload::<Vec<f64>>(
+                &harness.publish,
+                case.kind,
+                TIME_SERIES_POLICY_ID,
+                timestamp,
+            )
+            .await;
+            assert_eq!(result_data.len(), 1);
+
+            let stored_after = sensor_store.sensor_list();
+            let ingest_after = harness.ingest_sensors.read().await.clone();
+            assert_eq!(stored_after, stored_before);
+            assert_eq!(ingest_after, ingest_before);
+            assert!(!stored_after.contains(TIME_SERIES_POLICY_ID));
+            assert!(!ingest_after.contains(TIME_SERIES_POLICY_ID));
         })
     })
     .await;
@@ -5805,24 +5960,23 @@ async fn request_raw_events_log() {
 
 #[tokio::test]
 async fn request_raw_events_periodic_time_series() {
-    const SENSOR: &str = "src 1";
-
     with_test_harness(|harness| {
         Box::pin(async move {
             let case = periodic_time_series_raw_event_case();
-            let (timestamp, expected, _ser_body) = prepare_raw_event(&harness.db, SENSOR, &case);
+            let (timestamp, expected, _ser_body) =
+                prepare_raw_event(&harness.db, TIME_SERIES_POLICY_ID, &case);
 
             let mut result_data = fetch_raw_data_with_payload::<Vec<f64>>(
                 &harness.publish,
                 case.kind,
-                SENSOR,
+                TIME_SERIES_POLICY_ID,
                 timestamp,
             )
             .await;
 
             assert_eq!(result_data.len(), 1, "Failed for kind: {}", case.kind);
             assert_eq!(result_data[0].0, timestamp);
-            assert_eq!(&result_data[0].1, SENSOR);
+            assert_eq!(&result_data[0].1, TIME_SERIES_POLICY_ID);
             assert_eq!(
                 expected,
                 bincode::serialize(&Some(result_data.pop().unwrap())).unwrap()
@@ -5844,12 +5998,42 @@ async fn request_range_data_with_network_kinds_giganto_cluster() {
 #[tokio::test]
 #[serial_test::serial(publish_cluster)]
 async fn request_range_data_with_periodic_time_series_giganto_cluster() {
-    const SAMPLING_POLICY_ID_AS_SENSOR: &str = "ingest src 2";
-
-    request_range_data_on_cluster_series(SAMPLING_POLICY_ID_AS_SENSOR, |db| {
-        prepare_periodic_time_series_range_cases(db, SAMPLING_POLICY_ID_AS_SENSOR)
+    let context = setup_cluster_with_cases(|node2_db| {
+        prepare_periodic_time_series_range_cases(node2_db, TIME_SERIES_POLICY_ID, "timeseries")
     })
     .await;
+    let publish = &context.publish;
+    let request = build_range_request(TIME_SERIES_POLICY_ID, "timeseries");
+
+    // Node 2 holds the series, and node 1 does not fetch it from its peer.
+    let result_data = publish
+        .send_range_request::<(i64, String, Vec<f64>)>(RANGE_MESSAGE_CODE, request.clone())
+        .await;
+    assert_eq!(result_data, vec![None], "only the terminator is expected");
+
+    // Once node 1 holds a point of its own, it returns that point alone.
+    let local_cases = prepare_periodic_time_series_range_cases(
+        &context.node1_db,
+        TIME_SERIES_POLICY_ID,
+        "timeseries",
+    );
+    let result_data = publish
+        .send_range_request::<(i64, String, Vec<f64>)>(RANGE_MESSAGE_CODE, request.clone())
+        .await;
+    for case in &local_cases {
+        assert_range_result_common(
+            &result_data,
+            &request,
+            case.expected_payload.as_slice(),
+            case.expected_done.as_slice(),
+            case.min_data,
+            case.kind,
+        );
+    }
+    assert_eq!(result_data.len(), 2, "one local point and the terminator");
+
+    publish.close(b"publish_range_time_series_done").await;
+    context.shutdown().await;
 }
 
 #[tokio::test]
@@ -5881,31 +6065,64 @@ async fn request_raw_events_giganto_cluster() {
         expected,
     } in prepared_cases
     {
-        if kind == "timeseries" {
-            let mut result_data =
-                fetch_raw_data_with_payload::<Vec<f64>>(publish, kind, SENSOR, timestamp).await;
+        let mut result_data = fetch_raw_data(publish, kind, SENSOR, timestamp).await;
 
-            assert_eq!(result_data.len(), 1, "Failed for kind: {kind}");
-            assert_eq!(result_data[0].0, timestamp);
-            assert_eq!(&result_data[0].1, SENSOR);
-            assert_eq!(
-                expected,
-                bincode::serialize(&Some(result_data.pop().unwrap())).unwrap()
-            );
-        } else {
-            let mut result_data = fetch_raw_data(publish, kind, SENSOR, timestamp).await;
-
-            assert_eq!(result_data.len(), 1, "Failed for kind: {kind}");
-            assert_eq!(result_data[0].0, timestamp);
-            assert_eq!(&result_data[0].1, SENSOR);
-            assert_eq!(
-                expected,
-                bincode::serialize(&Some(result_data.pop().unwrap())).unwrap()
-            );
-        }
+        assert_eq!(result_data.len(), 1, "Failed for kind: {kind}");
+        assert_eq!(result_data[0].0, timestamp);
+        assert_eq!(&result_data[0].1, SENSOR);
+        assert_eq!(
+            expected,
+            bincode::serialize(&Some(result_data.pop().unwrap())).unwrap()
+        );
     }
 
     publish.close(b"publish_raw_events_done").await;
+    context.shutdown().await;
+}
+
+#[tokio::test]
+#[serial_test::serial(publish_cluster)]
+async fn request_raw_events_periodic_time_series_giganto_cluster() {
+    let case = periodic_time_series_raw_event_case();
+    let context = setup_cluster_with_cases(|node2_db| {
+        let (timestamp, _expected, _ser_body) =
+            prepare_raw_event(node2_db, TIME_SERIES_POLICY_ID, &case);
+        vec![timestamp]
+    })
+    .await;
+    let publish = &context.publish;
+
+    // Node 2 holds the event, and node 1 does not fetch it from its peer:
+    // the response is the terminator alone.
+    for &peer_timestamp in &context.cases {
+        let result_data = fetch_raw_data_with_payload::<Vec<f64>>(
+            publish,
+            case.kind,
+            TIME_SERIES_POLICY_ID,
+            peer_timestamp,
+        )
+        .await;
+        assert!(result_data.is_empty(), "unexpected data: {result_data:?}");
+    }
+
+    let (timestamp, expected, _ser_body) =
+        prepare_raw_event(&context.node1_db, TIME_SERIES_POLICY_ID, &case);
+    let mut result_data = fetch_raw_data_with_payload::<Vec<f64>>(
+        publish,
+        case.kind,
+        TIME_SERIES_POLICY_ID,
+        timestamp,
+    )
+    .await;
+    assert_eq!(result_data.len(), 1, "Failed for kind: {}", case.kind);
+    assert_eq!(result_data[0].0, timestamp);
+    assert_eq!(&result_data[0].1, TIME_SERIES_POLICY_ID);
+    assert_eq!(
+        expected,
+        bincode::serialize(&Some(result_data.pop().unwrap())).unwrap()
+    );
+
+    publish.close(b"publish_raw_time_series_done").await;
     context.shutdown().await;
 }
 
