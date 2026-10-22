@@ -94,6 +94,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   resend it again.
 - Retention now deletes periodic time series windows whose start is older than
   `retention`, as it does other records. They used to be kept forever.
+- GraphQL event connections now return empty edges for `first: 0` and `last: 0`,
+  with the corresponding page-info flag reflecting matching records within the
+  cursor and filter bounds.
 
 ## [0.33.0] - 2026-10-23
 

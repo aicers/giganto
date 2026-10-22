@@ -3625,6 +3625,60 @@ fn network_connection(
     let mut icmp_data = icmp_iter.next();
 
     loop {
+        if (result_vec.len() >= size)
+            || (conn_data.is_none()
+                && dns_data.is_none()
+                && malformed_dns_data.is_none()
+                && http_data.is_none()
+                && rdp_data.is_none()
+                && ntlm_data.is_none()
+                && kerberos_data.is_none()
+                && ssh_data.is_none()
+                && dce_rpc_data.is_none()
+                && ftp_data.is_none()
+                && mqtt_data.is_none()
+                && ldap_data.is_none()
+                && tls_data.is_none()
+                && smb_data.is_none()
+                && nfs_data.is_none()
+                && smtp_data.is_none()
+                && bootp_data.is_none()
+                && dhcp_data.is_none()
+                && radius_data.is_none()
+                && icmp_data.is_none())
+        {
+            if conn_data.is_some()
+                || dns_data.is_some()
+                || malformed_dns_data.is_some()
+                || http_data.is_some()
+                || rdp_data.is_some()
+                || ntlm_data.is_some()
+                || kerberos_data.is_some()
+                || ssh_data.is_some()
+                || dce_rpc_data.is_some()
+                || ftp_data.is_some()
+                || mqtt_data.is_some()
+                || ldap_data.is_some()
+                || tls_data.is_some()
+                || smb_data.is_some()
+                || nfs_data.is_some()
+                || smtp_data.is_some()
+                || bootp_data.is_some()
+                || dhcp_data.is_some()
+                || radius_data.is_some()
+                || icmp_data.is_some()
+            {
+                has_next_value = true;
+            }
+            if is_forward {
+                has_next_page = has_next_value;
+            } else {
+                result_vec.reverse();
+                has_previous_page = has_next_value;
+            }
+            break;
+        }
+
         let conn_ts = if let Some((ref key, _)) = conn_data {
             get_time_from_key(key)?
         } else {
@@ -3981,59 +4035,6 @@ fn network_connection(
                 }
             }
             _ => {}
-        }
-        if (result_vec.len() >= size)
-            || (conn_data.is_none()
-                && dns_data.is_none()
-                && malformed_dns_data.is_none()
-                && http_data.is_none()
-                && rdp_data.is_none()
-                && ntlm_data.is_none()
-                && kerberos_data.is_none()
-                && ssh_data.is_none()
-                && dce_rpc_data.is_none()
-                && ftp_data.is_none()
-                && mqtt_data.is_none()
-                && ldap_data.is_none()
-                && tls_data.is_none()
-                && smb_data.is_none()
-                && nfs_data.is_none()
-                && smtp_data.is_none()
-                && bootp_data.is_none()
-                && dhcp_data.is_none()
-                && radius_data.is_none()
-                && icmp_data.is_none())
-        {
-            if conn_data.is_some()
-                || dns_data.is_some()
-                || malformed_dns_data.is_some()
-                || http_data.is_some()
-                || rdp_data.is_some()
-                || ntlm_data.is_some()
-                || kerberos_data.is_some()
-                || ssh_data.is_some()
-                || dce_rpc_data.is_some()
-                || ftp_data.is_some()
-                || mqtt_data.is_some()
-                || ldap_data.is_some()
-                || tls_data.is_some()
-                || smb_data.is_some()
-                || nfs_data.is_some()
-                || smtp_data.is_some()
-                || bootp_data.is_some()
-                || dhcp_data.is_some()
-                || radius_data.is_some()
-                || icmp_data.is_some()
-            {
-                has_next_value = true;
-            }
-            if is_forward {
-                has_next_page = has_next_value;
-            } else {
-                result_vec.reverse();
-                has_previous_page = has_next_value;
-            }
-            break;
         }
     }
     let mut connection: Connection<String, NetworkRawEvents> =
