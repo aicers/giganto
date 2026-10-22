@@ -6,7 +6,7 @@ Giganto is started using the following command.
 
 ```bash
 giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
-<CA_CERT_PATH>[,<CA_CERT_PATH>,...] [--log-path <LOG_PATH>]
+<CA_CERT_PATH>[,<CA_CERT_PATH>,...]
 ```
 
 - `-c <CONFIG_PATH>`: TOML configuration file path (required)
@@ -14,20 +14,24 @@ giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
 - `--key <KEY_PATH>`: Server private key (PEM) (required)
 - `--ca-certs <CA_CERT_PATH>[,...]`: CA certificates (PEM) for verifying
   client certificates (required)
-- `--log-path <LOG_PATH>`: Log file path (optional)
 
 `--ca-certs` Input Method
 
 - Multiple CA certificates can be provided either as a comma-separated
   list or by repeating the `--ca-certs` option.
 
-`--log-path` Behavior
+Logging
 
-- Not specified: logs are written to `stdout`
-- Specified and writable: logs are written to the specified file
-- Specified but not writable: Giganto terminates
-- Logs generated before tracing initialization may be written directly to
-  stdout or stderr.
+- Logs are written to standard output.
+- `RUST_LOG` sets the level; the default is `info`.
+- Under the systemd journal (standard output or standard error connected to
+  it, as `JOURNAL_STREAM` names), each event is one line that starts with its
+  syslog priority (`<3>` error, `<4>` warning, `<6>` info, `<7>` debug and
+  trace), without a timestamp or colour codes, with line breaks inside an event
+  written as `\n`. A panic is logged as one error entry.
+- Elsewhere, colour codes are written only to a terminal.
+- `--log-path` was removed; a command line that passes it is refused at
+  startup.
 
 ## Basic Execution
 
