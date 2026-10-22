@@ -930,8 +930,8 @@ async fn multi_source_range_merges_events_across_nodes() {
         ]
     );
 
-    // A count that cuts inside the peer's events: the peer sends its first
-    // five, and the merge stops after the fifth event overall.
+    // A count that cuts inside the peer's events: the peer sends its four
+    // events from `src2`'s start, and the merge stops after the fifth overall.
     let request = multi_source_request("conn", &[("src1", 0), ("src2", 3)], 5);
     let (events, status) =
         request_with_status::<u8, _>(&context.publish, MessageCode::MultiSourceRange, request)
@@ -1192,6 +1192,47 @@ async fn multi_source_range_fails_a_peer_whose_server_name_is_unknown() {
     assert_eq!(order(&events), vec![(1, LOCAL_SOURCE), (3, LOCAL_SOURCE)]);
     let statuses = statuses(status);
     assert_failed(&statuses[1].1, &[&peer_addr.to_string(), "server name"]);
+}
+
+#[tokio::test]
+async fn status_requests_fail_whole_when_the_store_cannot_be_opened() {
+    init_crypto();
+    let mut fixture = DirectFixture::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1));
+    fixture
+        .db
+        .drop_cf_for_test("conn")
+        .expect("drop the conn column family");
+
+    let multi_source = fixture
+        .multi_source_range(
+            "multi.source.no.store",
+            &CancellationToken::new(),
+            SHORT_PEER_TIMEOUT,
+        )
+        .await;
+    let raw_data = fixture
+        .raw_data_with_status(
+            "raw.data.no.store",
+            &CancellationToken::new(),
+            SHORT_PEER_TIMEOUT,
+        )
+        .await;
+
+    for (request, (events, status)) in [
+        ("MultiSourceRange", multi_source),
+        ("RawDataWithStatus", raw_data),
+    ] {
+        assert_eq!(events, Vec::new(), "{request} should send no event");
+        let Err(reason) = status else {
+            panic!("{request} should fail as a whole, got {status:?}");
+        };
+        for needle in ["conn store", "open", "cannot access conn column family"] {
+            assert!(
+                reason.contains(needle),
+                "the {request} reason {reason:?} should contain {needle:?}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

@@ -21,6 +21,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Publish range and raw-event reads and CSV exports now replace tabs, line
   feeds, and carriage returns in string fields with spaces, and print as `-`
   the empty string fields they used to leave empty.
+- Ingest, publish and peer connections whose server handshake fails because the
+  client ends its handshake stream early, sends an oversized message, or cannot
+  be read from now report that cause, both in the reason the connection is
+  closed with and in the connection-failure log. All three used to be reported
+  as an invalid message.
 
 ### Fixed
 
@@ -30,6 +35,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   ID now return the stored series. They were refused or returned nothing before.
   They are served from the node's own store and are not forwarded to cluster
   peers.
+- Errors for a missing column family now name the column family instead of the
+  literal `{cf_name}`.
 
 ## [0.31.0] - 2026-10-18
 
