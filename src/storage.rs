@@ -278,7 +278,7 @@ impl Database {
     fn get_cf_handle(&self, cf_name: &str) -> Result<&ColumnFamily> {
         self.db
             .cf_handle(cf_name)
-            .context("cannot access {cf_name} column family")
+            .with_context(|| format!("cannot access {cf_name} column family"))
     }
 
     /// Creates a snapshot-based iterator for counting entries in a column family.
@@ -436,6 +436,15 @@ impl Database {
     pub(crate) fn get_cf_for_test(&self, cf_name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let cf = self.get_cf_handle(cf_name)?;
         Ok(self.db.get_cf(cf, key)?)
+    }
+
+    /// Drops the column family `cf_name`, so opening its store fails.
+    #[cfg(test)]
+    pub(crate) fn drop_cf_for_test(&mut self, cf_name: &str) -> Result<()> {
+        Arc::get_mut(&mut self.db)
+            .context("the database is shared")?
+            .drop_cf(cf_name)?;
+        Ok(())
     }
 
     /// Returns the store for Ftp
