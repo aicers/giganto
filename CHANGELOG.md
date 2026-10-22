@@ -18,9 +18,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- Publish range and raw-event reads now replace tabs, line feeds, and carriage
-  returns in string fields with spaces, and print as `-` the empty string
-  fields they used to leave empty.
+- Publish range and raw-event reads and CSV exports now replace tabs, line
+  feeds, and carriage returns in string fields with spaces, and print as `-`
+  the empty string fields they used to leave empty.
 
 ### Fixed
 
