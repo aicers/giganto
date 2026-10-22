@@ -6,6 +6,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Publish clients can read one event kind from many sensors, or
+  sampling-policy IDs, in a single range request. Each source is read from its
+  own start up to a shared end and a shared total count, and the events are
+  merged in time order across cluster nodes. The response ends with a status
+  for each sensor (served, served by no node, or failed with a reason), or with
+  the reason the whole request failed. Publish clients can also re-read given
+  events with the same per-sensor status.
+
+### Changed
+
+- Publish range and raw-event reads now replace tabs, line feeds, and carriage
+  returns in string fields with spaces, and print as `-` the empty string
+  fields they used to leave empty.
+
 ### Fixed
 
 - Fixed incorrect millisecond-to-second conversion of NetFlow5 `first` and `last`

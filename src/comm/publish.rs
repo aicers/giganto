@@ -1,4 +1,5 @@
 pub mod implement;
+mod multi_source;
 #[cfg(test)]
 mod tests;
 
@@ -47,6 +48,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use self::implement::RequestStreamMessage;
+use self::multi_source::{
+    PEER_RESPONSE_TIMEOUT, Routing, process_multi_source_range, process_raw_data_with_status,
+};
 use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::{
     IngestSensors, PcapSensors, StreamDirectChannels,
@@ -2306,6 +2310,38 @@ async fn handle_request(
                     warn!("Not expected to reach here");
                 }
             }
+        }
+        MessageCode::MultiSourceRange => {
+            process_multi_source_range(
+                &mut send,
+                &db,
+                &msg_buf,
+                &Routing {
+                    ingest_sensors: &ingest_sensors,
+                    peers: &peers,
+                    peer_idents: &peer_idents,
+                    tls_watch: &tls_watch,
+                    token: &token,
+                    peer_timeout: PEER_RESPONSE_TIMEOUT,
+                },
+            )
+            .await?;
+        }
+        MessageCode::RawDataWithStatus => {
+            process_raw_data_with_status(
+                &mut send,
+                &db,
+                &msg_buf,
+                &Routing {
+                    ingest_sensors: &ingest_sensors,
+                    peers: &peers,
+                    peer_idents: &peer_idents,
+                    tls_watch: &tls_watch,
+                    token: &token,
+                    peer_timeout: PEER_RESPONSE_TIMEOUT,
+                },
+            )
+            .await?;
         }
     }
     Ok(())
