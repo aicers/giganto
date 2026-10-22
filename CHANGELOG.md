@@ -10,6 +10,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Fixed incorrect millisecond-to-second conversion of NetFlow5 `first` and `last`
   fields in GraphQL query responses, publish query responses, and JSON/CSV exports.
+- Range and raw-event publish reads of periodic time series by sampling-policy
+  ID now return the stored series. They were refused or returned nothing before.
+  They are served from the node's own store and are not forwarded to cluster
+  peers.
 
 ## [0.31.0] - 2026-10-18
 

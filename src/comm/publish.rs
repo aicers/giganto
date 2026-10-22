@@ -1414,17 +1414,12 @@ async fn handle_request(
                     .await?;
                 }
                 RawEventKind::PeriodicTimeSeries => {
-                    process_range_data::<PeriodicTimeSeries, f64>(
+                    process_time_series_range_data(
                         &mut send,
                         db.periodic_time_series_store()
                             .context("Failed to open periodic time series storage")?,
                         msg,
-                        ingest_sensors,
-                        peers,
-                        peer_idents,
-                        &tls_watch,
                         &token,
-                        false,
                     )
                     .await?;
                 }
@@ -2090,14 +2085,10 @@ async fn handle_request(
                     .await?;
                 }
                 RawEventKind::PeriodicTimeSeries => {
-                    process_raw_events::<PeriodicTimeSeries, f64>(
+                    process_time_series_raw_events(
                         &mut send,
                         db.periodic_time_series_store()?,
                         msg,
-                        ingest_sensors,
-                        peers,
-                        peer_idents,
-                        &tls_watch,
                         &token,
                     )
                     .await?;
@@ -2354,11 +2345,38 @@ where
             request_range.sensor
         )
     }
-    // A peer relay that gave up on cancellation returns normally with only
-    // part of the peer's response written, and the missing terminator is the
-    // only thing that tells the client the response is incomplete. Writing it
-    // here would say the opposite, so a cancelled request leaves the stream
-    // unterminated and the client retries against the next generation.
+    finish_range_response::<T>(send, token).await
+}
+
+/// Serves a periodic time-series range read from this node's own store.
+///
+/// A time series is stored under its sampling-policy ID, which no sensor set
+/// carries, so the in-charge check `process_range_data` applies would refuse
+/// every one of them. Nor is it routed to a peer: the client sends the request
+/// to the node that holds the series, and a node that holds none of it answers
+/// with the terminator alone.
+async fn process_time_series_range_data(
+    send: &mut SendStream,
+    store: RawEventStore<'_, PeriodicTimeSeries>,
+    request_range: RequestRange,
+    token: &CancellationToken,
+) -> Result<()> {
+    process_range_data_in_current_giganto(send, store, request_range, false).await?;
+    finish_range_response::<PeriodicTimeSeries>(send, token).await
+}
+
+/// Writes the terminator of a range or raw-data response and finishes the
+/// stream, unless `token` has fired.
+///
+/// A peer relay that gave up on cancellation returns normally with only part
+/// of the peer's response written, and the missing terminator is the only
+/// thing that tells the client the response is incomplete. Writing it here
+/// would say the opposite, so a cancelled request leaves the stream
+/// unterminated and the client retries against the next generation.
+async fn finish_range_response<T>(send: &mut SendStream, token: &CancellationToken) -> Result<()>
+where
+    T: ResponseRangeData,
+{
     if token.is_cancelled() {
         return Ok(());
     }
@@ -2558,15 +2576,22 @@ where
         .await?;
     }
 
-    // Same reason as the range path: a relay that stopped on cancellation
-    // owes the client an unterminated stream, not a terminator that claims a
-    // partial answer is the whole one.
-    if token.is_cancelled() {
-        return Ok(());
-    }
-    send_range_data::<T>(send, None).await?;
-    send.finish()?;
-    Ok(())
+    finish_range_response::<T>(send, token).await
+}
+
+/// Serves a periodic time-series raw-data read from this node's own store.
+///
+/// Every input is looked up locally, for the reason
+/// `process_time_series_range_data` gives: its ID is a sampling-policy ID, not
+/// a sensor any node is in charge of, and time series are not routed to peers.
+async fn process_time_series_raw_events(
+    send: &mut SendStream,
+    store: RawEventStore<'_, PeriodicTimeSeries>,
+    req: RequestRawData,
+    token: &CancellationToken,
+) -> Result<()> {
+    process_raw_event_in_current_giganto(send, store, req.input).await?;
+    finish_range_response::<PeriodicTimeSeries>(send, token).await
 }
 
 async fn req_inputs_by_gigantos_in_charge(
