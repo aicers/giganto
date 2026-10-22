@@ -698,6 +698,47 @@ impl<'db, T> RawEventStore<'db, T> {
             .collect();
         result_vector
     }
+
+    /// Looks up the events of `sensor` at `timestamps` and returns each key's
+    /// lookup result, in ascending timestamp order.
+    ///
+    /// `mid_key`, when given, sits between the sensor and the timestamp, as it
+    /// does in the keys of log events. Unlike `batched_multi_get_with_sensor`,
+    /// a failed lookup is returned rather than dropped, so a caller can tell an
+    /// event that is not stored from one that could not be read.
+    pub fn checked_multi_get(
+        &self,
+        sensor: &str,
+        mid_key: Option<&[u8]>,
+        timestamps: &[i64],
+    ) -> Vec<(i64, CheckedValue)> {
+        let mut timestamps = timestamps.to_vec();
+        timestamps.sort_unstable();
+        timestamps.dedup();
+        let keys = timestamps
+            .iter()
+            .map(|timestamp| {
+                StorageKey::builder()
+                    .start_key(sensor)
+                    .mid_key(mid_key.map(<[u8]>::to_vec))
+                    .end_key(*timestamp)
+                    .build()
+                    .key()
+            })
+            .collect::<Vec<Vec<u8>>>();
+        let keys = keys.iter().map(std::vec::Vec::as_slice);
+
+        timestamps
+            .iter()
+            .zip(self.db.batched_multi_get_cf(self.cf, keys, true))
+            .map(|(timestamp, result)| {
+                (
+                    *timestamp,
+                    result.map(|value| value.map(|value| value.deref().to_vec())),
+                )
+            })
+            .collect()
+    }
 }
 
 impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
@@ -1015,6 +1056,9 @@ impl StorageTimestampKeyBuilder {
 }
 
 pub type KeyValue<T> = (Box<[u8]>, T);
+
+/// The result of looking up one key: its value if stored, or the lookup error.
+pub type CheckedValue = Result<Option<Vec<u8>>, rocksdb::Error>;
 pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
 pub struct StatisticsIter<'d, T> {

@@ -9626,3 +9626,5 @@ mod shutdown {
             .expect("the condition should hold inside the limit");
     }
 }
+
+mod multi_source;
