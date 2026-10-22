@@ -10,6 +10,8 @@
 - `export_dir`: Export file storage directory (optional, default: `export`),
   created on the first export.
 - `retention`: Data retention period, default `100d`
+- `oplog_retention`: Retention period for operation logs (OpLog), default
+  `365d`, from `1d` to `3650d`. Other data uses `retention`.
 - `ack_transmission`: ACK transmission threshold, default `1024`
 - `max_open_files`: RocksDB max open files, default `8000`
 - `max_mb_of_level_base`: RocksDB Level 1 size base (MB), default `512`
@@ -26,6 +28,10 @@
   that is still waiting says so. Must be greater than zero, default `5s`
 - `peer_srv_addr`: Node-to-node communication address, no default
 - `peers`: Connected cluster nodes, no default
+
+When disk usage exceeds 95 %, the retention task shortens both retention periods
+by one day at a time until usage falls under 85 % or no more data can be
+deleted.
 
 Relative `data_dir` and `export_dir` paths resolve against the process's working
 directory.
@@ -45,6 +51,7 @@ data_dir = "/path/to/giganto/data"
 export_dir = "/path/to/giganto/export"
 
 retention = "100d"
+oplog_retention = "365d"
 max_open_files = 8000
 max_mb_of_level_base = 512
 num_of_thread = 8

@@ -9,6 +9,8 @@
   명시적으로 설정한 디렉터리는 이미 존재해야 합니다.
 - `export_dir`: Export 파일 저장 디렉터리(선택, 기본값: `export`), 첫 Export 시 생성
 - `retention`: 데이터 보관 기간, 기본값 `100d`
+- `oplog_retention`: 운영 로그(OpLog) 보관 기간, 기본값 `365d`, `1d`~`3650d`.
+  다른 데이터는 `retention`을 따릅니다.
 - `ack_transmission`: ACK를 전송하는 기준값, 기본값 `1024`
 - `max_open_files`: RocksDB 최대 오픈 파일 수, 기본값 `8000`
 - `max_mb_of_level_base`: RocksDB Level 1 최대 크기 기준(MB), 기본값 `512`
@@ -24,6 +26,9 @@
   얼마나 자주 알릴지만 결정합니다. 0보다 커야 하며, 기본값 `5s`
 - `peer_srv_addr`: 노드 간 통신 수신 주소, 기본값 없음
 - `peers`: (클러스터) 연동 노드 목록, 기본값 없음
+
+디스크 사용량이 95%를 넘으면 보존 작업은 사용량이 85% 아래로 내려가거나 더 지울
+데이터가 없을 때까지 두 보관 기간을 하루씩 줄입니다.
 
 상대 경로인 `data_dir`와 `export_dir`는 프로세스의 작업 디렉터리를 기준으로 합니다.
 
@@ -42,6 +47,7 @@ data_dir = "/path/to/giganto/data"
 export_dir = "/path/to/giganto/export"
 
 retention = "100d"
+oplog_retention = "365d"
 max_open_files = 8000
 max_mb_of_level_base = 512
 num_of_thread = 8

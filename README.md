@@ -101,6 +101,7 @@ In the config file, you can specify the following options:
 | `graphql_srv_addr`     | Giganto's GraphQL address            | No       | [::]:8443             |
 | `data_dir`             | Path to directory to store data      | No       | data                  |
 | `retention`            | Retention period for data            | No       | 100d                  |
+| `oplog_retention`      | Retention period for operation logs  | No       | 365d                  |
 | `export_dir`           | Path to Giganto's export file        | No       | export                |
 | `max_open_files`       | Max open files for database          | No       | 8000                  |
 | `max_mb_of_level_base` | Max MB for RocksDB Level 1           | No       | 512                   |
@@ -130,6 +131,7 @@ publish_srv_addr = "0.0.0.0:38371"
 graphql_srv_addr = "127.0.0.1:8443"
 data_dir = "tests/data"
 retention = "100d"
+oplog_retention = "365d"
 export_dir = "/opt/clumit/var/giganto/export"
 max_open_files = 8000
 max_mb_of_level_base = 512
