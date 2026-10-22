@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.32.0] - 2026-10-23
 
 ### Added
 
@@ -26,6 +26,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   be read from now report that cause, both in the reason the connection is
   closed with and in the connection-failure log. All three used to be reported
   as an invalid message.
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<0.33.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<0.33.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0,<0.33.0".
+- Updated `PEER_VERSION_REQ` to ">=0.32.0,<0.33.0".
 
 ### Fixed
 
@@ -37,6 +41,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   peers.
 - Errors for a missing column family now name the column family instead of the
   literal `{cf_name}`.
+- NetFlow5 records in publish range and raw-event reads and in CSV exports now
+  show the CWR TCP flag (0x80). Every packet with the PSH flag (0x08) used to be
+  shown with CWR as well, and the CWR flag itself was never shown.
 
 ## [0.31.0] - 2026-10-18
 
@@ -1310,7 +1317,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.31.0...main
+[0.32.0]: https://github.com/aicers/giganto/compare/0.31.0...0.32.0
 [0.31.0]: https://github.com/aicers/giganto/compare/0.30.1...0.31.0
 [0.30.1]: https://github.com/aicers/giganto/compare/0.30.0...0.30.1
 [0.30.0]: https://github.com/aicers/giganto/compare/0.29.1...0.30.0
