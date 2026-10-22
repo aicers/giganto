@@ -6,25 +6,28 @@ Giganto는 아래 형태로 실행합니다.
 
 ```bash
 giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
-<CA_CERT_PATH>[,<CA_CERT_PATH>,...] [--log-path <LOG_PATH>]
+<CA_CERT_PATH>[,<CA_CERT_PATH>,...]
 ```
 
 - `-c <CONFIG_PATH>`: TOML 설정 파일 경로 (필수)
 - `--cert <CERT_PATH>`: 서버 인증서(PEM) (필수)
 - `--key <KEY_PATH>`: 서버 개인키(PEM) (필수)
 - `--ca-certs <CA_CERT_PATH>[,...]`: 클라이언트 인증 검증용 CA 인증서(PEM) 목록 (필수)
-- `--log-path <LOG_PATH>`: 로그 파일 경로 (선택)
 
 `--ca-certs` 입력 방식
 
 - 콤마(,)로 여러 값을 한 번에 전달하거나, `--ca-certs` 옵션을 반복해 여러 CA를 지정할 수 있습니다.
 
-`--log-path` 동작
+로그
 
-- 미지정: stdout로 출력
-- 지정 + 쓰기 가능: 해당 파일로 출력
-- 지정 + 쓰기 불가: Giganto 종료
-- 트레이싱 초기화 이전에 발생한 로그는 stdout/stderr로 직접 출력될 수 있습니다.
+- Giganto는 로그를 표준 출력에 씁니다.
+- 수준은 `RUST_LOG`로 정하며 기본값은 `info`입니다.
+- 표준 출력이나 표준 오류가 systemd 저널에 연결되어 있으면(`JOURNAL_STREAM`) 각
+  이벤트를 syslog 우선순위(`<3>` 오류, `<4>` 경고, `<6>` 정보, `<7>` 디버그·트레이스)로
+  시작하는 한 줄로, 타임스탬프와 색상 코드 없이 쓰고, 이벤트 안의 줄바꿈은 `\n`으로
+  씁니다. 패닉은 오류 항목 하나로 기록합니다.
+- 그 밖의 경우 색상 코드는 터미널에만 씁니다.
+- `--log-path`는 제거되었으며 지정하면 시작이 거부됩니다.
 
 ## 기본 실행
 

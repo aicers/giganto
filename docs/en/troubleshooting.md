@@ -9,7 +9,9 @@
 - Verify that Giganto's certificate carries a SAN DNS name of the form
   `<instance>.<service>.<host>.<domain>`. A certificate identified only by a
   `<service>@<host>` common name is rejected at startup.
-- If a log path is specified, verify that the file has write permission.
+- Read the error Giganto logs before it exits: on standard error when run from
+  a shell, and in the unit's journal at priority `err` under systemd
+  (`journalctl -u <unit> -p err`).
 
 ## When GraphQL cannot be accessed
 

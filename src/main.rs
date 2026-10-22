@@ -2,6 +2,7 @@ pub mod cancellation;
 mod comm;
 mod datetime;
 mod graphql;
+mod logging;
 mod server;
 mod settings;
 mod storage;
@@ -10,9 +11,7 @@ mod test_bootroot;
 mod tls_reload;
 mod web;
 
-use std::{
-    fs::OpenOptions, ops::ControlFlow, path::Path, process::exit, sync::Arc, time::Duration,
-};
+use std::{ops::ControlFlow, process::ExitCode, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
@@ -34,11 +33,8 @@ use tokio::{
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, metadata::LevelFilter, warn};
+use tracing::{error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{
-    EnvFilter, Layer, fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt,
-};
 
 use crate::{
     cancellation::{ObservedHandle, TaskTracker, drain_with_report},
@@ -84,6 +80,9 @@ const WEB_REAPER_DRAIN_LABEL: &str = "web PCAP reaper";
 /// name their tracker instead.
 const SHUTDOWN_PHASE: &str = "shutdown phase";
 
+/// The exit status clap uses for a command line it does not accept.
+const USAGE_EXIT_STATUS: u8 = 2;
+
 /// Creates a reqwest client configured for mTLS GraphQL communication.
 ///
 /// # Arguments
@@ -113,16 +112,88 @@ fn create_graphql_client(cert_pem: &[u8], key_pem: &[u8]) -> Result<reqwest::Cli
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
     // Initialize rustls crypto provider
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let args = Args::parse();
+    // The one place outside tests that reads the environment for logging.
+    let journal_stream = std::env::var_os(logging::JOURNAL_STREAM_ENV);
+    let journal = logging::output_is_journal(journal_stream.as_deref());
+    let guard = match logging::init_tracing(journal) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("Error: {error:?}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let args = match Args::try_parse() {
+        Ok(args) => args,
+        Err(error) => return refuse_command_line(&error, journal, guard),
+    };
+
+    let result = run(args).await;
+    if let Err(error) = &result {
+        // Under the journal, the plain `Error: …` text on stderr would be
+        // stored as several entries at priority 6.
+        if journal {
+            error!("{error:#}");
+        } else {
+            eprintln!("Error: {error:?}");
+        }
+    }
+    // Dropping the guard writes out every event still queued, so it has to
+    // happen before the process exits.
+    drop(guard);
+    if result.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Answers a command line clap did not accept, returning the exit status or
+/// exiting through clap.
+///
+/// Help and version requests are printed as clap prints them, under the
+/// journal too: that output is not logging. Every other error is a usage
+/// error: under the journal it is logged as one ERROR event, since clap's
+/// plain text on stderr would be stored at priority 6, and the process exits
+/// with clap's usage status; elsewhere clap prints it and exits as it always
+/// has. Either way `guard` is dropped first, so nothing logged is lost.
+fn refuse_command_line(error: &clap::Error, journal: bool, guard: WorkerGuard) -> ExitCode {
+    use clap::error::ErrorKind;
+
+    if journal
+        && !matches!(
+            error.kind(),
+            ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+        )
+    {
+        // `render` styles nothing that `Display` writes, and clap ends its
+        // message with a line feed the event's own line ends.
+        error!("{}", error.render().to_string().trim_end());
+        drop(guard);
+        return ExitCode::from(USAGE_EXIT_STATUS);
+    }
+    drop(guard);
+    error.exit();
+}
+
+/// Runs Giganto once the command line has been parsed and logging set up.
+///
+/// # Errors
+///
+/// Returns an error if the command line names the removed `--log-path`, if
+/// the configuration cannot be read or is invalid, or if the lifecycle fails.
+async fn run(args: Args) -> Result<()> {
+    if args.log_path.is_some() {
+        bail!(logging::LOG_PATH_REMOVED);
+    }
+
     let mut settings = Settings::load_or_restore(&args.config)?;
 
     settings.config.validate()?;
-
-    let _guard = init_tracing(args.log_path.as_deref())?;
 
     if args.repair {
         repair_db(
@@ -133,7 +204,7 @@ async fn main() -> Result<()> {
             settings.config.visible.max_subcompactions,
             settings.config.compression,
         );
-        exit(0);
+        return Ok(());
     }
 
     let cert_paths = CertPaths {
@@ -1591,53 +1662,6 @@ async fn finish_generation(
     Ok(())
 }
 
-/// Initializes the tracing subscriber and returns a `WorkerGuard`.
-///
-/// Logs will be written to the file specified by `log_path` if provided.
-/// If `log_path` is `None`, logs will be printed to stdout.
-///
-/// # Errors
-///
-/// Returns an error if the log file cannot be opened in the `log_path` path in the
-/// local configuration.
-fn init_tracing(log_path: Option<&Path>) -> Result<WorkerGuard> {
-    let (layer, guard) = if let Some(log_path) = log_path {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)
-            .with_context(|| format!("Failed to open the log file: {}", log_path.display()))?;
-        let (file_writer, file_guard) = tracing_appender::non_blocking(file);
-        (
-            fmt::Layer::default()
-                .with_ansi(false)
-                .with_target(false)
-                .with_writer(file_writer)
-                .with_filter(
-                    EnvFilter::builder()
-                        .with_default_directive(LevelFilter::INFO.into())
-                        .from_env_lossy(),
-                ),
-            file_guard,
-        )
-    } else {
-        let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
-        (
-            fmt::Layer::default()
-                .with_ansi(true)
-                .with_writer(stdout_writer)
-                .with_filter(
-                    EnvFilter::builder()
-                        .with_default_directive(LevelFilter::INFO.into())
-                        .from_env_lossy(),
-                ),
-            stdout_guard,
-        )
-    };
-    tracing_subscriber::Registry::default().with(layer).init();
-    Ok(guard)
-}
-
 async fn shutdown_web(web_controller: Option<WebController>) {
     if let Some(controller) = web_controller
         && let Err(e) = controller.shutdown().await
@@ -1800,8 +1824,11 @@ mod tests {
 
     use regex::Regex;
     use tokio::{sync::oneshot, time::sleep};
+    use tracing::metadata::LevelFilter;
     use tracing::subscriber::DefaultGuard;
-    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::{
+        EnvFilter, Layer, fmt, fmt::MakeWriter, prelude::__tracing_subscriber_SubscriberExt,
+    };
 
     use super::*;
 
@@ -1940,35 +1967,6 @@ mod tests {
         assert!(
             !re.is_match(&output),
             "stdout should not include file:line numbers, got: {output}"
-        );
-    }
-
-    #[test]
-    fn file_fmt_layer_excludes_line_numbers() {
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let writer = CaptureBuf::new(&buf);
-
-        let layer = fmt::Layer::default()
-            .with_ansi(false)
-            .with_target(false)
-            .with_writer(writer)
-            .with_filter(
-                EnvFilter::builder()
-                    .with_default_directive(LevelFilter::INFO.into())
-                    .from_env_lossy(),
-            );
-
-        let subscriber = tracing_subscriber::Registry::default().with(layer);
-
-        tracing::subscriber::with_default(subscriber, || {
-            tracing::info!("test log message");
-        });
-
-        let output = String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8 output");
-        let re = Regex::new(r"\w+\.rs:\d+").expect("valid regex");
-        assert!(
-            !re.is_match(&output),
-            "file log should not include file:line numbers, got: {output}"
         );
     }
 

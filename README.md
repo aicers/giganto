@@ -32,19 +32,18 @@ You can run Giganto by invoking the following command:
 
 ```sh
 giganto -c <CONFIG_PATH> --cert <CERT_PATH> --key <KEY_PATH> --ca-certs \
-<CA_CERT_PATH>[,<CA_CERT_PATH>,...] [--log-path <LOG_PATH>]
+<CA_CERT_PATH>[,<CA_CERT_PATH>,...]
 ```
 
 ### Arguments
 
 <!-- markdownlint-disable MD013 -->
-| Name             | Description                                     | Required |
-| ---------------- | ----------------------------------------------- | -------- |
-| `<CONFIG_PATH>`  | Path to the TOML configuration file.            | Yes      |
-| `<CERT_PATH>`    | Path to the certificate file.                   | Yes      |
-| `<KEY_PATH>`     | Path to the private key file.                   | Yes      |
-| `<CA_CERT_PATH>` | Path to the CA certificates file.               | Yes      |
-| `<LOG_PATH>`     | Path to the log file where logs will be stored. | No       |
+| Name             | Description                          | Required |
+| ---------------- | ------------------------------------ | -------- |
+| `<CONFIG_PATH>`  | Path to the TOML configuration file. | Yes      |
+| `<CERT_PATH>`    | Path to the certificate file.        | Yes      |
+| `<KEY_PATH>`     | Path to the private key file.        | Yes      |
+| `<CA_CERT_PATH>` | Path to the CA certificates file.    | Yes      |
 <!-- markdownlint-enable MD013 -->
 
 #### Certificates
@@ -61,15 +60,20 @@ carry the SAN.
 
 - The `--ca-certs` argument accepts multiple values, separated by commas. You
   can also repeat the argument to specify multiple CA certificates.
-- Logging behavior based on the `--log-path` argument is as follows:
-  - If `<LOG_PATH>` is not provided, logs are written to stdout using the
-    tracing library.
-  - If `<LOG_PATH>` is provided and writable, logs are written to the specified
-    file using the tracing library.
-  - If `<LOG_PATH>` is provided but not writable, Giganto will terminate.
-  - Any logs generated before the tracing functionality is initialized will be
-    written directly to stdout or stderr using `println`, `eprintln`, or
-    similar.
+
+#### Logging
+
+Giganto writes its log to standard output. `RUST_LOG` sets the level (default
+`info`).
+
+When standard output or standard error is connected to the systemd journal
+(`JOURNAL_STREAM`), each event is one line that starts with its syslog priority
+(`<3>` error, `<4>` warning, `<6>` info, `<7>` debug and trace), without a
+timestamp or colour codes, with line breaks inside an event written as `\n`, and
+a panic is logged as one error entry. Elsewhere colour codes are written only to
+a terminal.
+
+`--log-path` was removed; a command line that passes it is refused at startup.
 
 ### Example
 

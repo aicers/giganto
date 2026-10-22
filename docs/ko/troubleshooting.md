@@ -8,7 +8,9 @@
 - Giganto 인증서가 `<instance>.<service>.<host>.<domain>` 형식의 SAN DNS 이름을
   가지고 있는지 확인합니다. `<service>@<host>` 형식의 CN만 있는 인증서는 시작 시
   거부됩니다.
-- 로그 경로가 지정되었다면 해당 파일에 쓰기 권한이 있는지 확인합니다.
+- Giganto가 종료하기 전에 남긴 오류를 확인합니다. 셸에서 실행했다면 표준 오류에,
+  systemd에서 실행했다면 해당 유닛 저널에 `err` 우선순위로
+  기록됩니다(`journalctl -u <unit> -p err`).
 
 ## GraphQL 접속이 되지 않을 때
 

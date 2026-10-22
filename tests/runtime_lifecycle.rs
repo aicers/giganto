@@ -9,7 +9,7 @@
 //! a child process.
 //!
 //! The support here is sized for these process tests and no more: spawning a
-//! child, watching its `--log-path` file, generating throwaway PKI and a
+//! child, watching its standard output, generating throwaway PKI and a
 //! configuration under a temp directory, reading the addresses a port-0 QUIC
 //! listener actually bound, picking a loopback port for GraphQL, waiting under
 //! a bound on explicit conditions, signalling, and reaping. It is deliberately
@@ -363,13 +363,14 @@ fn free_loopback_addr() -> SocketAddr {
 
 /// One `giganto` child process, and the files the test reads it back through.
 ///
-/// The tracing log goes to `--log-path` so every state transition is
-/// observable; stdout and stderr are captured separately because an error
-/// `main` returns and a panic never reach the tracing log at all.
+/// The tracing log is the child's standard output, captured to a file so every
+/// state transition is observable; standard error is captured to a second file
+/// because an error `main` returns and a panic never reach the tracing log
+/// outside the journal.
 struct Node {
     label: String,
     child: Child,
-    log_path: PathBuf,
+    stdout_path: PathBuf,
     console_path: PathBuf,
     status: Option<ExitStatus>,
 }
@@ -393,10 +394,10 @@ fn signalable_pid(child: &Child) -> Option<libc::pid_t> {
 
 impl Node {
     fn spawn(label: &str, dir: &Path, cfg_path: &Path, pki: &TestPki) -> Self {
-        let log_path = dir.join(format!("{label}.log"));
+        let stdout_path = dir.join(format!("{label}.log"));
         let console_path = dir.join(format!("{label}.console"));
+        let stdout = File::create(&stdout_path).expect("create the stdout capture");
         let console = File::create(&console_path).expect("create the console capture");
-        let console_err = console.try_clone().expect("clone the console capture");
 
         let child = Command::new(env!("CARGO_BIN_EXE_giganto"))
             .current_dir(dir)
@@ -408,17 +409,19 @@ impl Node {
             .arg(&pki.node_key_path)
             .arg("--ca-certs")
             .arg(&pki.ca_path)
-            .arg("--log-path")
-            .arg(&log_path)
             // Every condition this test waits on is an `INFO` record, and the
             // child builds its filter with `EnvFilter::from_env_lossy`, so an
             // ambient `RUST_LOG` would reconfigure the one stream the test
             // reads. Naming the level here is what keeps the run from
             // depending on the shell it was started from.
             .env("RUST_LOG", "info")
+            // A `JOURNAL_STREAM` inherited from a test run under systemd
+            // could name a descriptor the child shares, and would switch its
+            // output to the journal format.
+            .env_remove("JOURNAL_STREAM")
             .stdin(Stdio::null())
-            .stdout(Stdio::from(console))
-            .stderr(Stdio::from(console_err))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(console))
             .spawn()
             .expect("spawn the giganto binary");
         eprintln!("{label}: spawned PID {}", child.id());
@@ -426,14 +429,14 @@ impl Node {
         Self {
             label: label.to_string(),
             child,
-            log_path,
+            stdout_path,
             console_path,
             status: None,
         }
     }
 
     fn log(&self) -> String {
-        read_text(&self.log_path)
+        read_text(&self.stdout_path)
     }
 
     fn console(&self) -> String {
@@ -443,9 +446,9 @@ impl Node {
     /// Everything the child wrote, for a failure to carry with it.
     fn diagnostics(&self) -> String {
         format!(
-            "--- {label} log ({log_path}) ---\n{log}\n--- {label} console ({console_path}) ---\n{console}",
+            "--- {label} stdout ({stdout_path}) ---\n{log}\n--- {label} stderr ({console_path}) ---\n{console}",
             label = self.label,
-            log_path = self.log_path.display(),
+            stdout_path = self.stdout_path.display(),
             log = self.log(),
             console_path = self.console_path.display(),
             console = self.console(),
@@ -1088,7 +1091,9 @@ async fn process_sighup_tls_reload() {
     node.wait_for_log_markers(
         &targets,
         0,
-        &["INFO listening on"],
+        // The peer listener's line differs from the ingest and publish ones
+        // only by its target.
+        &["giganto::comm::peer: listening on"],
         "peer listener readiness",
     )
     .await;

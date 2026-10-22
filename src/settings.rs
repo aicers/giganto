@@ -14,7 +14,7 @@ use config::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use toml_edit::DocumentMut;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{comm::peer::PeerIdentity, graphql::status::write_toml_file};
 
@@ -59,8 +59,10 @@ pub struct Args {
     )]
     pub ca_certs: Vec<String>,
 
-    /// Path to the log file.
-    #[arg(long, value_name = "LOG_PATH")]
+    /// The removed log file option, kept hidden only so that a command line
+    /// naming it is refused with a message saying so, rather than with clap's
+    /// generic unexpected-argument error.
+    #[arg(long, hide = true, value_name = "LOG_PATH")]
     pub log_path: Option<PathBuf>,
 
     /// Enable the repair mode.
@@ -188,7 +190,7 @@ impl Settings {
     pub fn load_or_restore(cfg_path: &str) -> anyhow::Result<Self> {
         let (settings, data_dir_defaulted) =
             Self::load_with_data_dir_default(cfg_path).or_else(|e| {
-                eprintln!("failed to read configuration file: {cfg_path}. Error: {e}");
+                warn!("failed to read configuration file: {cfg_path}. Error: {e}");
 
                 let backup_path = Path::new(cfg_path).with_extension("toml.bak");
 
@@ -197,10 +199,8 @@ impl Settings {
                         .context("no valid configuration file available, and no backup found.");
                 }
 
-                println!(
-                    "attempting to restore backup configuration from: {}",
-                    backup_path.display()
-                );
+                let backup = backup_path.display();
+                info!("attempting to restore backup configuration from: {backup}");
 
                 fs::copy(&backup_path, cfg_path).with_context(|| {
                     format!(
@@ -210,7 +210,7 @@ impl Settings {
                     )
                 })?;
 
-                println!("configuration restored from backup.");
+                info!("configuration restored from backup.");
 
                 Self::load_with_data_dir_default(cfg_path).with_context(|| {
                     format!(

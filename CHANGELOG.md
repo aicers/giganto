@@ -16,6 +16,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   days; other data still follows `retention`. Under disk pressure both periods
   are shortened by the same daily steps.
 
+### Changed
+
+- When its standard output or standard error is connected to the systemd
+  journal, Giganto writes each log event as one line that starts with the
+  event's syslog priority, without a timestamp or colour codes and with line
+  breaks inside the event written as `\n`, so the journal stores warnings and
+  errors at their own priority; a panic, a command-line error and an error that
+  stops the start-up are each logged as one error entry. Elsewhere the output is
+  unchanged, except that colour codes are written only to a terminal. The
+  messages about reading the configuration file and restoring it from its
+  backup are now log events on standard output.
+
+### Removed
+
+- **Breaking.** The `--log-path` option. Giganto always logs to standard
+  output; a command line that still passes `--log-path` is refused at startup
+  with a message saying so.
+
+### Fixed
+
+- `--repair` writes all of its log lines before it exits; the last ones could
+  be lost.
+
 ## [0.32.0] - 2026-10-23
 
 ### Added
