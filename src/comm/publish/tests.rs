@@ -65,6 +65,7 @@ use crate::{
         publish::{implement::RequestStreamMessage, send_direct_stream},
         stream_channel_key::StreamChannelKey,
     },
+    datetime::DateTime,
     server::{Certs, config_client, config_server},
     storage::{Database, DbOptions, RawEventStore},
     tls_reload::{TlsMaterial, TlsWatch},
@@ -4874,10 +4875,7 @@ async fn time_series_reads_leave_sensor_sets_unchanged() {
         Box::pin(async move {
             let sensor_store = harness.db.sensors_store().unwrap();
             sensor_store
-                .insert(
-                    KNOWN_SENSOR,
-                    crate::datetime::DateTime::from_timestamp_nanos(0),
-                )
+                .insert(KNOWN_SENSOR, DateTime::from_timestamp_nanos(0))
                 .unwrap();
             let stored_before = sensor_store.sensor_list();
             let ingest_before = harness.ingest_sensors.read().await.clone();
