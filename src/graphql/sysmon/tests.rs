@@ -2942,3 +2942,155 @@ async fn process_create_events_filtered_by_agent_id() {
     let edges = data["processCreateEvents"]["edges"].as_array().unwrap();
     assert_eq!(edges.len(), 2);
 }
+
+#[tokio::test]
+async fn zero_size_pagination_respects_cursor_and_filter_bounds() {
+    let schema = TestSchema::new();
+    let store = schema.db.process_create_store().unwrap();
+    for offset in 0..5 {
+        insert_process_create_event_with_agent_id(
+            &store,
+            "src 1",
+            FIXED_SYSMON_BASE_TIMESTAMP_NANOS + offset,
+            if offset == 2 { "match" } else { "other" },
+        );
+    }
+    for root in ["processCreateEvents", "sysmonEvents"] {
+        let response = schema
+            .execute(&format!(
+                r#"{{ {root}(filter: {{ sensor: "src 1" }}, first: 5) {{ edges {{ cursor }} }} }}"#,
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        let edges = data[root]["edges"].as_array().unwrap();
+        assert_eq!(edges.len(), 5);
+        let first_cursor = edges[0]["cursor"].as_str().unwrap();
+        let middle_cursor = edges[2]["cursor"].as_str().unwrap();
+        let last_cursor = edges[4]["cursor"].as_str().unwrap();
+
+        for (size_arg, cursor_arg, cursor, expected) in [
+            ("first", "after", first_cursor, true),
+            ("first", "after", middle_cursor, false),
+            ("first", "after", last_cursor, false),
+            ("last", "before", last_cursor, true),
+            ("last", "before", middle_cursor, false),
+            ("last", "before", first_cursor, false),
+        ] {
+            let response = schema
+                .execute(&format!(
+                    r#"{{ {root}(filter: {{ sensor: "src 1", agentId: "match" }},
+                    {size_arg}: 0, {cursor_arg}: "{cursor}") {{
+                    edges {{ cursor }} pageInfo {{ hasNextPage hasPreviousPage }}
+                }} }}"#,
+                ))
+                .await;
+            assert!(response.errors.is_empty(), "{:?}", response.errors);
+            let data = response.data.into_json().unwrap();
+            assert_eq!(data[root]["edges"], serde_json::json!([]));
+            let flag = if size_arg == "first" {
+                "hasNextPage"
+            } else {
+                "hasPreviousPage"
+            };
+            assert_eq!(
+                data[root]["pageInfo"][flag], expected,
+                "{root}: {size_arg}, {cursor_arg}: {cursor}"
+            );
+        }
+
+        for size_arg in ["first", "last"] {
+            for (filter, expected) in [
+                (r#"sensor: "src 1""#, true),
+                (r#"sensor: "src 1", agentId: "match""#, true),
+                (r#"sensor: "missing""#, false),
+                (
+                    r#"sensor: "src 1", time: { end: "2020-01-01T00:00:00Z" }"#,
+                    false,
+                ),
+                (r#"sensor: "src 1", agentId: "missing""#, false),
+            ] {
+                let response = schema.execute(&format!(
+                    "{{ {root}(filter: {{ {filter} }}, {size_arg}: 0) {{ edges {{ cursor }} pageInfo {{ hasNextPage hasPreviousPage }} }} }}",
+                )).await;
+                assert!(response.errors.is_empty(), "{:?}", response.errors);
+                let data = response.data.into_json().unwrap();
+                assert_eq!(data[root]["edges"], serde_json::json!([]));
+                let flag = if size_arg == "first" {
+                    "hasNextPage"
+                } else {
+                    "hasPreviousPage"
+                };
+                assert_eq!(
+                    data[root]["pageInfo"][flag], expected,
+                    "{root}: {size_arg}, {filter}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn pagination_preserves_positive_sizes_and_validation() {
+    let schema = TestSchema::new();
+    let store = schema.db.process_create_store().unwrap();
+    for offset in 0..105 {
+        insert_process_create_event(&store, "src 1", FIXED_SYSMON_BASE_TIMESTAMP_NANOS + offset);
+    }
+    for root in ["processCreateEvents", "sysmonEvents"] {
+        for size_arg in ["first", "last"] {
+            for (size, expected_len) in [(1, 1), (100, 100), (101, 100)] {
+                let response = schema
+                    .execute(&format!(
+                        r#"{{ {root}(filter: {{ sensor: "src 1" }}, {size_arg}: {size}) {{
+                        edges {{ cursor }} pageInfo {{ hasNextPage hasPreviousPage }}
+                    }} }}"#,
+                    ))
+                    .await;
+                assert!(response.errors.is_empty(), "{:?}", response.errors);
+                let data = response.data.into_json().unwrap();
+                assert_eq!(data[root]["edges"].as_array().unwrap().len(), expected_len);
+                let flag = if size_arg == "first" {
+                    "hasNextPage"
+                } else {
+                    "hasPreviousPage"
+                };
+                assert_eq!(data[root]["pageInfo"][flag], true);
+            }
+        }
+        for args in [
+            "first: -1",
+            "last: -1",
+            "first: 0, last: 0",
+            r#"before: "invalid", first: 0"#,
+            r#"after: "invalid", last: 0"#,
+            r#"after: "invalid", first: 0"#,
+            r#"before: "invalid", last: 0"#,
+        ] {
+            let response = schema.execute(&format!(
+                r#"{{ {root}(filter: {{ sensor: "src 1" }}, {args}) {{ edges {{ cursor }} }} }}"#,
+            )).await;
+            assert!(!response.errors.is_empty(), "{root}: {args}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn merged_zero_size_pagination_checks_later_stores() {
+    let schema = TestSchema::new();
+    let store = schema.db.file_delete_store().unwrap();
+    insert_file_delete_event(&store, "src 1", FIXED_SYSMON_BASE_TIMESTAMP_NANOS);
+    for (size_arg, flag) in [("first", "hasNextPage"), ("last", "hasPreviousPage")] {
+        let response = schema
+            .execute(&format!(
+                r#"{{ sysmonEvents(filter: {{ sensor: "src 1" }}, {size_arg}: 0) {{
+                edges {{ cursor }} pageInfo {{ hasNextPage hasPreviousPage }}
+            }} }}"#,
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        assert_eq!(data["sysmonEvents"]["edges"], serde_json::json!([]));
+        assert_eq!(data["sysmonEvents"]["pageInfo"][flag], true);
+    }
+}
