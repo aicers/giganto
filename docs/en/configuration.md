@@ -9,7 +9,8 @@
   it at startup when omitted; an explicit directory must already exist.
 - `export_dir`: Export file storage directory (optional, default: `export`),
   created on the first export.
-- `retention`: Data retention period, default `100d`
+- `retention`: Data retention period, default `100d`, at most `3650d` (write
+  it in days; `10y` is longer)
 - `oplog_retention`: Retention period for operation logs (OpLog), default
   `365d`, from `1d` to `3650d`. Other data uses `retention`.
 - `ack_transmission`: ACK transmission threshold, default `1024`

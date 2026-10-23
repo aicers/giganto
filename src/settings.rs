@@ -303,6 +303,9 @@ impl ConfigVisible {
         if !self.data_dir.exists() || !self.data_dir.is_dir() {
             bail!("data directory is invalid");
         }
+        if self.retention > MAX_RETENTION {
+            bail!("retention must be at most 3650 days");
+        }
         if self.oplog_retention < Duration::from_hours(24) {
             bail!("oplog_retention must be at least one day");
         }
@@ -582,6 +585,30 @@ graphql_srv_addr = "127.0.0.1:8443"
             .expect_err("invalid directory");
         assert_eq!(err.to_string(), "data directory is invalid");
         assert!(!data_dir.exists());
+    }
+
+    #[test]
+    fn test_startup_refuses_retention_above_3650_days() {
+        let dir = tempdir().expect("tempdir");
+        let data_dir = dir.path().join("data");
+        fs::create_dir(&data_dir).expect("create data dir");
+        let config_path = dir.path().join("config.toml");
+        write_file(
+            &config_path,
+            &format!("data_dir = {data_dir:?}\nretention = \"3651d\"\n"),
+        );
+
+        let settings =
+            Settings::load_or_restore(config_path.to_str().unwrap()).expect("load settings");
+        assert_eq!(
+            settings.config.visible.retention,
+            Duration::from_hours(3651 * 24)
+        );
+        let err = settings
+            .config
+            .validate()
+            .expect_err("above 3650 days should fail");
+        assert_eq!(err.to_string(), "retention must be at most 3650 days");
     }
 
     #[test]
@@ -1262,6 +1289,56 @@ drain_report_interval = "500ms"
             let mut config = config_visible.clone();
             config.oplog_retention = period;
             assert!(config.validate().is_ok(), "{accepted} should be accepted");
+        }
+    }
+
+    #[test]
+    fn test_validate_retention_bound() {
+        let (_temp_file, data_dir, _export_dir, config_visible) = create_test_config(false);
+
+        for (refused, period) in [
+            ("3651d", Duration::from_hours(3651 * 24)),
+            ("3650d 1h", Duration::from_hours(3650 * 24 + 1)),
+        ] {
+            let mut config = config_visible.clone();
+            config.retention = period;
+            let err = config.validate().expect_err("above 3650 days should fail");
+            assert_eq!(
+                err.to_string(),
+                "retention must be at most 3650 days",
+                "{refused}"
+            );
+        }
+
+        for (accepted, period) in [
+            ("3650d", Duration::from_hours(3650 * 24)),
+            ("100d", Duration::from_hours(100 * 24)),
+            ("0s", Duration::ZERO),
+        ] {
+            let mut config = config_visible.clone();
+            config.retention = period;
+            assert!(config.validate().is_ok(), "{accepted} should be accepted");
+        }
+
+        let mut config = config_visible.clone();
+        config.data_dir = data_dir.path().join("missing");
+        config.retention = Duration::from_hours(3651 * 24);
+        let err = config.validate().expect_err("invalid data_dir should fail");
+        assert_eq!(err.to_string(), "data directory is invalid");
+
+        for (oplog, oplog_period) in [
+            ("12h", Duration::from_hours(12)),
+            ("3651d", Duration::from_hours(3651 * 24)),
+        ] {
+            let mut config = config_visible.clone();
+            config.retention = Duration::from_hours(3651 * 24);
+            config.oplog_retention = oplog_period;
+            let err = config.validate().expect_err("above 3650 days should fail");
+            assert_eq!(
+                err.to_string(),
+                "retention must be at most 3650 days",
+                "oplog_retention {oplog}"
+            );
         }
     }
 
