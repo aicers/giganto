@@ -156,7 +156,8 @@ impl ConfigMutation {
     /// Returns an error if `new` is empty or if either `old` or `new` cannot be parsed as a
     /// configuration. It also returns an error if `old` does not match the current configuration, if
     /// `new` matches the current configuration, or if the `data_dir` in `new` does not name an existing
-    /// directory. It also refuses a `new` whose `oplog_retention` is below one day or above 3650 days.
+    /// directory. It also refuses a `new` whose `retention` is above 3650 days, or whose
+    /// `oplog_retention` is below one day or above 3650 days.
     /// A configuration update is also rejected when another update is already pending, or
     /// when the service is stopping or restarting.
     async fn update_config(
@@ -628,6 +629,40 @@ mod tests {
             Some("oplog_retention must be at least one day")
         );
         assert!(schema.config_update_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_config_refuses_retention_above_3650_days() {
+        let mut schema = TestSchema::new();
+        let new_config = old_config().replace("retention = \"100d\"", "retention = \"3651d\"");
+        assert_ne!(new_config, old_config());
+
+        let res = schema
+            .execute(&update_config_query(&old_config(), &new_config))
+            .await;
+        assert_eq!(
+            res.errors.first().map(|error| error.message.as_str()),
+            Some("retention must be at most 3650 days")
+        );
+        assert!(schema.config_update_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_config_accepts_retention_of_3650_days() {
+        let mut schema = TestSchema::new();
+        let new_config = old_config().replace("retention = \"100d\"", "retention = \"3650d\"");
+        assert_ne!(new_config, old_config());
+
+        let res = schema
+            .execute(&update_config_query(&old_config(), &new_config))
+            .await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        let sent = schema
+            .config_update_rx
+            .recv()
+            .await
+            .expect("the accepted update should be sent");
+        assert_eq!(sent.retention, Duration::from_hours(3650 * 24));
     }
 
     #[tokio::test]

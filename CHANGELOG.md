@@ -4,6 +4,15 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking.** `retention` must be at most 3650 days; Giganto refuses a larger
+  value at startup and in `updateConfig`. Previously a period longer than the
+  time since 1970 made the first retention pass delete most stored data, and
+  one above about 292 years stopped Giganto.
+
 ## [0.33.0] - 2026-10-23
 
 ### Added
@@ -1360,6 +1369,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.33.0...main
 [0.33.0]: https://github.com/aicers/giganto/compare/0.32.0...0.33.0
 [0.32.0]: https://github.com/aicers/giganto/compare/0.31.0...0.32.0
 [0.31.0]: https://github.com/aicers/giganto/compare/0.30.1...0.31.0

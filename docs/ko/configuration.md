@@ -8,7 +8,8 @@
 - `data_dir`: 이벤트 저장 디렉터리(선택, 기본값: `data`). 생략하면 시작 시 생성되며,
   명시적으로 설정한 디렉터리는 이미 존재해야 합니다.
 - `export_dir`: Export 파일 저장 디렉터리(선택, 기본값: `export`), 첫 Export 시 생성
-- `retention`: 데이터 보관 기간, 기본값 `100d`
+- `retention`: 데이터 보관 기간, 기본값 `100d`, 최대 `3650d`(일 단위로 쓰며
+  `10y`는 이보다 깁니다)
 - `oplog_retention`: 운영 로그(OpLog) 보관 기간, 기본값 `365d`, `1d`~`3650d`.
   다른 데이터는 `retention`을 따릅니다.
 - `ack_transmission`: ACK를 전송하는 기준값, 기본값 `1024`
