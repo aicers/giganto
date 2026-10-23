@@ -1694,6 +1694,11 @@ fn stored_timestamps_and_values<T: DeserializeOwned>(
 ///
 /// The harness must acknowledge every batch (`ack_transmission_cnt` of 1), so
 /// the ACK also says the handler has stored the whole batch.
+///
+/// The timeout only bounds a hang. It is wide because a batch that walks the
+/// whole probe limit makes 65,536 lookups, which an unoptimized or
+/// coverage-instrumented build on a busy runner can stretch toward the
+/// 2 seconds the other ACK waits here allow.
 async fn send_batch_and_receive_ack(
     send: &mut quinn::SendStream,
     recv: &mut quinn::RecvStream,
@@ -1703,7 +1708,7 @@ async fn send_batch_and_receive_ack(
     send_raw(send, &buf).await.expect("send batch");
     with_timeout(
         "receive_ack_timestamp",
-        std::time::Duration::from_secs(2),
+        std::time::Duration::from_secs(10),
         receive_ack_timestamp(recv),
     )
     .await
