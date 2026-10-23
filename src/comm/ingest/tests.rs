@@ -35,6 +35,7 @@ use giganto_client::{
         statistics::Statistics,
         timeseries::PeriodicTimeSeries,
     },
+    publish::stream::RequestStreamRecord,
 };
 use quinn::{Connection, Endpoint};
 use serde::{Serialize, de::DeserializeOwned};
@@ -64,11 +65,14 @@ use crate::test_bootroot::{
 use crate::{
     cancellation::TaskTracker,
     comm::{
-        IngestSensors, PcapSensors, RunTimeIngestSensors, new_ingest_sensors, new_pcap_sensors,
-        new_runtime_ingest_sensors, new_stream_direct_channels,
+        IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels, new_ingest_sensors,
+        new_pcap_sensors, new_runtime_ingest_sensors, new_stream_direct_channels,
+        stream_channel_key::StreamChannelKey,
     },
     server::{Certs, config_client, host_fqdn_from_cert, service_fqdn_from_cert},
-    storage::{Database, DbOptions, RawEventStore, StorageKey},
+    storage::{
+        APPEND_UNIQUE_MAX_PROBES, Database, DbOptions, RawEventStore, StorageKey, rocksdb_options,
+    },
     tls_reload::{TlsMaterial, TlsWatch},
 };
 
@@ -211,7 +215,7 @@ fn spawn_server_with(
         pcap_sensors.clone(),
         ingest_sensors.clone(),
         runtime_ingest_sensors.clone(),
-        stream_direct_channels,
+        stream_direct_channels.clone(),
         notify_sensor,
         ack_transmission_cnt,
         tls_watch,
@@ -225,6 +229,7 @@ fn spawn_server_with(
         pcap_sensors,
         ingest_sensors,
         runtime_ingest_sensors,
+        stream_direct_channels,
         _tls_sender: tls_sender,
     }
 }
@@ -237,6 +242,7 @@ struct TestServer {
     pcap_sensors: PcapSensors,
     ingest_sensors: IngestSensors,
     runtime_ingest_sensors: RunTimeIngestSensors,
+    stream_direct_channels: StreamDirectChannels,
     _tls_sender: watch::Sender<Arc<TlsMaterial>>,
 }
 
@@ -304,8 +310,13 @@ impl TestHarness {
     }
 
     async fn with_ack_transmission(ack_transmission_cnt: u16) -> Self {
-        init_crypto();
         let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+        Self::with_db_dir(db_dir, ack_transmission_cnt).await
+    }
+
+    /// Starts the harness over the database already in `db_dir`.
+    async fn with_db_dir(db_dir: TempDir, ack_transmission_cnt: u16) -> Self {
+        init_crypto();
         let db = Database::open(db_dir.path(), &DbOptions::default())
             .expect("open ingest test database");
         let server = spawn_server_with(
@@ -1653,6 +1664,681 @@ async fn op_log_sensor_uses_host_fqdn() {
     assert_eq!(stored_op_log.sensor, test_host_fqdn());
     assert_eq!(stored_op_log.sensor, "node1.example.test");
 
+    harness.shutdown(b"done").await;
+}
+
+/// Returns every key and value in `store`, in key order.
+fn stored_kvs<T: DeserializeOwned>(store: &RawEventStore<'_, T>) -> Vec<(Vec<u8>, Vec<u8>)> {
+    store
+        .iter_forward()
+        .map(|item| {
+            let (key, value) = item.expect("failed to read stored event");
+            (key.to_vec(), value.to_vec())
+        })
+        .collect()
+}
+
+/// Returns the timestamp at the end of a storage key.
+fn key_timestamp(key: &[u8]) -> i64 {
+    let (_, timestamp) = key
+        .split_last_chunk::<8>()
+        .expect("a storage key ends with a timestamp");
+    i64::from_be_bytes(*timestamp)
+}
+
+/// Returns each stored event's key timestamp and value, in key order.
+fn stored_timestamps_and_values<T: DeserializeOwned>(
+    store: &RawEventStore<'_, T>,
+) -> Vec<(i64, Vec<u8>)> {
+    stored_kvs(store)
+        .into_iter()
+        .map(|(key, value)| (key_timestamp(&key), value))
+        .collect()
+}
+
+/// Sends one batch of already serialized events and returns the ACK that
+/// follows it.
+///
+/// The harness must acknowledge every batch (`ack_transmission_cnt` of 1), so
+/// the ACK also says the handler has stored the whole batch.
+///
+/// The timeout only bounds a hang. It is wide because a batch that walks the
+/// whole probe limit makes 65,536 lookups, which an unoptimized or
+/// coverage-instrumented build on a busy runner can stretch toward the
+/// 2 seconds the other ACK waits here allow.
+async fn send_batch_and_receive_ack(
+    send: &mut quinn::SendStream,
+    recv: &mut quinn::RecvStream,
+    events: &[(i64, Vec<u8>)],
+) -> i64 {
+    let buf = bincode::serialize(events).expect("serialize batch");
+    send_raw(send, &buf).await.expect("send batch");
+    with_timeout(
+        "receive_ack_timestamp",
+        std::time::Duration::from_secs(10),
+        receive_ack_timestamp(recv),
+    )
+    .await
+    .expect("receive ack")
+}
+
+fn http_event(uri: &str) -> Vec<u8> {
+    bincode::serialize(&Http {
+        orig_addr: ip("192.168.4.76"),
+        orig_port: 46378,
+        resp_addr: ip("192.168.4.77"),
+        resp_port: 80,
+        proto: 6,
+        start_time: default_start_time(),
+        duration: 1_000_000_000,
+        orig_pkts: 1,
+        resp_pkts: 1,
+        orig_l2_bytes: 100,
+        resp_l2_bytes: 200,
+        method: "GET".to_string(),
+        host: "cluml".to_string(),
+        uri: uri.to_string(),
+        referer: String::new(),
+        version: String::new(),
+        user_agent: "giganto".to_string(),
+        request_len: 0,
+        response_len: 0,
+        status_code: 200,
+        status_msg: String::new(),
+        username: String::new(),
+        password: String::new(),
+        cookie: String::new(),
+        content_encoding: String::new(),
+        content_type: String::new(),
+        cache_control: String::new(),
+        filenames: Vec::new(),
+        mime_types: Vec::new(),
+        body: Vec::new(),
+        state: String::new(),
+    })
+    .expect("serialize http event")
+}
+
+#[tokio::test]
+async fn colliding_events_in_one_batch_are_stored_at_the_next_free_nanoseconds() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Http)
+        .await
+        .unwrap();
+
+    let timestamp = next_timestamp();
+    let events = [http_event("/a"), http_event("/b"), http_event("/c")];
+    let batch: Vec<_> = events.iter().map(|e| (timestamp, e.clone())).collect();
+    let ack = send_batch_and_receive_ack(&mut send, &mut recv, &batch).await;
+    assert_eq!(ack, timestamp, "the ack reports the received timestamp");
+
+    let stored = stored_timestamps_and_values(&harness.db.http_store().unwrap());
+    assert_eq!(
+        stored,
+        vec![
+            (timestamp, events[0].clone()),
+            (timestamp + 1, events[1].clone()),
+            (timestamp + 2, events[2].clone()),
+        ]
+    );
+    for (_, value) in &stored {
+        bincode::deserialize::<Http>(value).expect("stored event reads back");
+    }
+    let (key, _) = stored_kvs(&harness.db.http_store().unwrap())
+        .pop()
+        .expect("events are stored");
+    let expected_key = StorageKey::builder()
+        .start_key(&test_sensor_name())
+        .end_key(timestamp + 2)
+        .build()
+        .key();
+    assert_eq!(key, expected_key, "only the timestamp of the key moves");
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn colliding_events_across_batches_and_streams_are_all_kept() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (mut send_a, mut recv_a) = harness.open_bi().await;
+    send_record_header(&mut send_a, RawEventKind::Http)
+        .await
+        .unwrap();
+    let (mut send_b, mut recv_b) = harness.open_bi().await;
+    send_record_header(&mut send_b, RawEventKind::Http)
+        .await
+        .unwrap();
+
+    let timestamp = next_timestamp();
+    let first = http_event("/first");
+    let second = http_event("/second");
+    let third = http_event("/third");
+    let fourth = http_event("/fourth");
+
+    // T and T+1 are taken before the third event arrives at T, so it lands
+    // at T+2.
+    send_batch_and_receive_ack(&mut send_a, &mut recv_a, &[(timestamp, first.clone())]).await;
+    send_batch_and_receive_ack(&mut send_b, &mut recv_b, &[(timestamp + 1, second.clone())]).await;
+    let ack =
+        send_batch_and_receive_ack(&mut send_a, &mut recv_a, &[(timestamp, third.clone())]).await;
+    assert_eq!(ack, timestamp);
+    send_batch_and_receive_ack(&mut send_b, &mut recv_b, &[(timestamp, fourth.clone())]).await;
+
+    let stored = stored_timestamps_and_values(&harness.db.http_store().unwrap());
+    assert_eq!(
+        stored,
+        vec![
+            (timestamp, first),
+            (timestamp + 1, second),
+            (timestamp + 2, third),
+            (timestamp + 3, fourth),
+        ]
+    );
+
+    send_a.finish().expect("failed to shutdown stream");
+    send_b.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn an_identical_resend_is_stored_once() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Http)
+        .await
+        .unwrap();
+
+    let timestamp = next_timestamp();
+    let original = http_event("/original");
+    let other = http_event("/other");
+    send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[
+            (timestamp, original.clone()),
+            (timestamp, other.clone()),
+            (timestamp, original.clone()),
+        ],
+    )
+    .await;
+    // A resend in a later batch, of both the event at T and the one moved to
+    // T+1.
+    send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[(timestamp, other.clone()), (timestamp, original.clone())],
+    )
+    .await;
+
+    let stored = stored_timestamps_and_values(&harness.db.http_store().unwrap());
+    assert_eq!(stored, vec![(timestamp, original), (timestamp + 1, other)]);
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn colliding_log_and_secu_log_events_of_one_kind_are_kept() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let timestamp = next_timestamp();
+
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Log)
+        .await
+        .unwrap();
+    let logs: Vec<_> = [1, 2]
+        .into_iter()
+        .map(|n| {
+            bincode::serialize(&Log {
+                kind: "log_kind".to_string(),
+                log: vec![n],
+            })
+            .unwrap()
+        })
+        .collect();
+    let other_kind = bincode::serialize(&Log {
+        kind: "other_kind".to_string(),
+        log: vec![3],
+    })
+    .unwrap();
+    send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[
+            (timestamp, logs[0].clone()),
+            (timestamp, other_kind.clone()),
+            (timestamp, logs[1].clone()),
+        ],
+    )
+    .await;
+    send.finish().expect("failed to shutdown stream");
+
+    let log_key = |kind: &str, timestamp: i64| {
+        StorageKey::builder()
+            .start_key(&test_sensor_name())
+            .mid_key(Some(kind.as_bytes().to_vec()))
+            .end_key(timestamp)
+            .build()
+            .key()
+    };
+    assert_eq!(
+        stored_kvs(&harness.db.log_store().unwrap()),
+        vec![
+            (log_key("log_kind", timestamp), logs[0].clone()),
+            (log_key("log_kind", timestamp + 1), logs[1].clone()),
+            // Another kind has keys of its own, so it does not move.
+            (log_key("other_kind", timestamp), other_kind),
+        ]
+    );
+
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::SecuLog)
+        .await
+        .unwrap();
+    let secu_logs: Vec<_> = ["first", "second"]
+        .into_iter()
+        .map(|contents| {
+            bincode::serialize(&SecuLog {
+                kind: "secu_kind".to_string(),
+                log_type: "type".to_string(),
+                version: "1.0".to_string(),
+                orig_addr: None,
+                orig_port: None,
+                resp_addr: None,
+                resp_port: None,
+                proto: None,
+                contents: contents.to_string(),
+            })
+            .unwrap()
+        })
+        .collect();
+    send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[
+            (timestamp, secu_logs[0].clone()),
+            (timestamp, secu_logs[1].clone()),
+        ],
+    )
+    .await;
+    send.finish().expect("failed to shutdown stream");
+
+    assert_eq!(
+        stored_kvs(&harness.db.secu_log_store().unwrap()),
+        vec![
+            (log_key("secu_kind", timestamp), secu_logs[0].clone()),
+            (log_key("secu_kind", timestamp + 1), secu_logs[1].clone()),
+        ]
+    );
+
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn colliding_statistics_of_one_core_are_both_kept() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Statistics)
+        .await
+        .unwrap();
+
+    let timestamp = next_timestamp();
+    let records: Vec<_> = [1000, 10]
+        .into_iter()
+        .map(|count| {
+            bincode::serialize(&Statistics {
+                core: 3,
+                period: 600,
+                stats: vec![(RawEventKind::Conn, count, count * 100)],
+            })
+            .unwrap()
+        })
+        .collect();
+    send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[
+            (timestamp, records[0].clone()),
+            (timestamp, records[1].clone()),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        stored_timestamps_and_values(&harness.db.statistics_store().unwrap()),
+        vec![
+            (timestamp, records[0].clone()),
+            (timestamp + 1, records[1].clone()),
+        ]
+    );
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+/// A lookup that fails is handled like a failed write: the stream ends
+/// without acknowledging the batch, and the events after the failing one are
+/// not stored.
+#[tokio::test]
+async fn a_failed_lookup_ends_the_stream_without_an_ack() {
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let timestamp = next_timestamp();
+    {
+        // A raw handle, because `Database` flushes only the default column
+        // family. The other column families are added when the harness opens
+        // the database.
+        let (db_opts, cf_opts) = rocksdb_options(&DbOptions::default());
+        let db = rocksdb::DB::open_cf_descriptors(
+            &db_opts,
+            db_dir.path(),
+            [rocksdb::ColumnFamilyDescriptor::new("http", cf_opts)],
+        )
+        .unwrap();
+        let cf = db.cf_handle("http").unwrap();
+        let key = StorageKey::builder()
+            .start_key(&test_sensor_name())
+            .end_key(timestamp)
+            .build()
+            .key();
+        db.put_cf(cf, key, http_event("/stored")).unwrap();
+        db.flush_cf(cf).unwrap();
+    }
+    // The stored event is now the only data block, at the start of the only
+    // table file. Damaging it fails the checksum of the next read of that key,
+    // which is the lookup of an event colliding with it.
+    let mut tables = 0;
+    for entry in std::fs::read_dir(db_dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "sst") {
+            let mut bytes = std::fs::read(&path).unwrap();
+            for byte in &mut bytes[..8] {
+                *byte ^= 0xff;
+            }
+            std::fs::write(&path, bytes).unwrap();
+            tables += 1;
+        }
+    }
+    assert_eq!(tables, 1, "the stored event is flushed to one table file");
+
+    let harness = TestHarness::with_db_dir(db_dir, 1).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Http)
+        .await
+        .unwrap();
+    let after = timestamp + 1_000;
+    let batch = vec![
+        (timestamp, http_event("/colliding")),
+        (after, http_event("/after")),
+    ];
+    send_raw(
+        &mut send,
+        &bincode::serialize(&batch).expect("serialize batch"),
+    )
+    .await
+    .expect("send batch");
+    let ack = with_timeout(
+        "receive_ack_timestamp",
+        std::time::Duration::from_secs(2),
+        receive_ack_timestamp(&mut recv),
+    )
+    .await;
+    assert!(ack.is_err(), "the batch is not acknowledged: {ack:?}");
+
+    let stored_after = harness.db.http_store().unwrap().batched_multi_get_from_ts(
+        &test_sensor_name(),
+        &[DateTime::from_timestamp_nanos(after)],
+    );
+    assert!(
+        stored_after.is_empty(),
+        "nothing after the failure is stored"
+    );
+
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn direct_stream_subscribers_receive_the_stored_timestamps() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (subscriber, mut subscription) = mpsc::unbounded_channel();
+    harness.server.stream_direct_channels.write().await.insert(
+        StreamChannelKey::TimeSeriesGenerator {
+            id: "collision-test".to_string(),
+            target_sensor: test_sensor_name(),
+            record_type: RequestStreamRecord::Http,
+        },
+        subscriber,
+    );
+
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Http)
+        .await
+        .unwrap();
+    let timestamp = next_timestamp();
+    let first = http_event("/first");
+    let second = http_event("/second");
+    let ack = send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[
+            (timestamp, first.clone()),
+            (timestamp, second.clone()),
+            (timestamp, first.clone()),
+        ],
+    )
+    .await;
+    assert_eq!(ack, timestamp);
+
+    let mut forwarded = Vec::new();
+    while let Ok(payload) = subscription.try_recv() {
+        let (time, rest) = payload.split_at(8);
+        let (len, event) = rest.split_at(4);
+        assert_eq!(
+            usize::try_from(u32::from_le_bytes(len.try_into().unwrap())).unwrap(),
+            event.len()
+        );
+        forwarded.push((i64::from_le_bytes(time.try_into().unwrap()), event.to_vec()));
+    }
+    // The resend of the first event is forwarded with the time it is stored
+    // under.
+    assert_eq!(
+        forwarded,
+        vec![
+            (timestamp, first.clone()),
+            (timestamp + 1, second),
+            (timestamp, first),
+        ]
+    );
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn periodic_time_series_and_packet_writes_still_overwrite() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let timestamp = next_timestamp();
+
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::PeriodicTimeSeries)
+        .await
+        .unwrap();
+    let series: Vec<_> = [1.0, 2.0]
+        .into_iter()
+        .map(|value| {
+            bincode::serialize(&PeriodicTimeSeries {
+                id: "series".to_string(),
+                data: vec![value],
+            })
+            .unwrap()
+        })
+        .collect();
+    send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[
+            (timestamp, series[0].clone()),
+            (timestamp, series[1].clone()),
+        ],
+    )
+    .await;
+    send.finish().expect("failed to shutdown stream");
+    assert_eq!(
+        stored_timestamps_and_values(&harness.db.periodic_time_series_store().unwrap()),
+        vec![(timestamp, series[1].clone())]
+    );
+
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Packet)
+        .await
+        .unwrap();
+    let packet_timestamp = next_timestamp();
+    let packets: Vec<_> = [vec![1], vec![2]]
+        .into_iter()
+        .map(|packet| {
+            bincode::serialize(&Packet {
+                packet_timestamp,
+                packet,
+            })
+            .unwrap()
+        })
+        .collect();
+    send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[
+            (timestamp, packets[0].clone()),
+            (timestamp, packets[1].clone()),
+        ],
+    )
+    .await;
+    send.finish().expect("failed to shutdown stream");
+    assert_eq!(
+        stored_timestamps_and_values(&harness.db.packet_store().unwrap()),
+        vec![(packet_timestamp, packets[1].clone())]
+    );
+
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn a_collision_at_the_largest_timestamp_is_dropped_and_logged() {
+    let (logs, _guard) = capture_logs();
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (subscriber, mut subscription) = mpsc::unbounded_channel();
+    harness.server.stream_direct_channels.write().await.insert(
+        StreamChannelKey::TimeSeriesGenerator {
+            id: "overflow-test".to_string(),
+            target_sensor: test_sensor_name(),
+            record_type: RequestStreamRecord::Http,
+        },
+        subscriber,
+    );
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Http)
+        .await
+        .unwrap();
+
+    let kept = http_event("/kept");
+    let dropped = http_event("/dropped");
+    let next = http_event("/next");
+    let timestamp = next_timestamp();
+    let ack = send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[
+            (i64::MAX, kept.clone()),
+            (i64::MAX, dropped),
+            (timestamp, next.clone()),
+        ],
+    )
+    .await;
+    assert_eq!(ack, timestamp);
+
+    assert_eq!(
+        stored_timestamps_and_values(&harness.db.http_store().unwrap()),
+        vec![(timestamp, next), (i64::MAX, kept)]
+    );
+    let mut forwarded = 0;
+    while subscription.try_recv().is_ok() {
+        forwarded += 1;
+    }
+    assert_eq!(forwarded, 2, "the dropped event is not forwarded");
+    let output = captured(&logs);
+    assert!(
+        output.contains("ERROR")
+            && output.contains(&format!(
+                "Dropped Http event from {} at {}",
+                test_sensor_name(),
+                i64::MAX
+            )),
+        "{output}"
+    );
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn an_event_past_the_probe_limit_is_dropped_and_the_next_one_is_stored() {
+    let (logs, _guard) = capture_logs();
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let timestamp = next_timestamp();
+    // Take far more timestamps than `next_timestamp` hands out across the
+    // tests, starting well past them.
+    let crowded = timestamp + 1_000_000_000;
+    {
+        let store = harness.db.http_store().unwrap();
+        for offset in 0..APPEND_UNIQUE_MAX_PROBES {
+            store
+                .append(
+                    &StorageKey::builder()
+                        .start_key(&test_sensor_name())
+                        .end_key(crowded + offset)
+                        .build()
+                        .key(),
+                    &offset.to_be_bytes(),
+                )
+                .unwrap();
+        }
+    }
+
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Http)
+        .await
+        .unwrap();
+    let next = http_event("/next");
+    let ack = send_batch_and_receive_ack(
+        &mut send,
+        &mut recv,
+        &[(crowded, http_event("/dropped")), (timestamp, next.clone())],
+    )
+    .await;
+    assert_eq!(ack, timestamp);
+
+    let stored = stored_timestamps_and_values(&harness.db.http_store().unwrap());
+    assert_eq!(
+        stored.len(),
+        usize::try_from(APPEND_UNIQUE_MAX_PROBES).unwrap() + 1
+    );
+    assert_eq!(stored.first(), Some(&(timestamp, next)));
+    assert_eq!(
+        stored.last().map(|(time, _)| *time),
+        Some(crowded + APPEND_UNIQUE_MAX_PROBES - 1)
+    );
+    let output = captured(&logs);
+    assert!(
+        output.contains("ERROR")
+            && output.contains(&format!(
+                "Dropped Http event from {} at {crowded}",
+                test_sensor_name()
+            ))
+            && output.contains(&APPEND_UNIQUE_MAX_PROBES.to_string()),
+        "{output}"
+    );
+
+    send.finish().expect("failed to shutdown stream");
     harness.shutdown(b"done").await;
 }
 

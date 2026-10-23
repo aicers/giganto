@@ -65,7 +65,9 @@ use crate::server::{
     Certs, config_server, connected_client_display_from_cert, extract_cert_from_conn,
     host_fqdn_from_cert, service_fqdn_from_cert,
 };
-use crate::storage::{Database, RawEventStore, SensorStore, StorageKey};
+use crate::storage::{
+    APPEND_UNIQUE_MAX_PROBES, Database, RawEventStore, SensorStore, StorageKey, UniqueAppend,
+};
 use crate::tls_reload::TlsWatch;
 
 const ACK_INTERVAL_TIME: u64 = 60;
@@ -1238,6 +1240,14 @@ async fn handle_data<T>(
     #[cfg(feature = "benchmark")]
     let mut start = std::time::Instant::now();
 
+    // Events of these kinds are keyed by the time the sensor gives, which
+    // another event of the same kind can share, so they are stored at the next
+    // free nanosecond instead of overwriting it. The other kinds have keys that
+    // are unique by construction, or collisions this does not cover.
+    let keeps_colliding_events = !matches!(
+        raw_event_kind,
+        RawEventKind::PeriodicTimeSeries | RawEventKind::Packet | RawEventKind::OpLog
+    );
     let mut frame = Box::pin(recv_frame(recv, Vec::new()));
     let mut last_timestamp = 0;
     loop {
@@ -1417,15 +1427,45 @@ async fn handle_data<T>(
                     // reason as the ACK below: the flush on the way out is what
                     // everything appended before this event depends on, and
                     // returning here would skip it.
-                    if let Err(e) = store.append(&storage_key.key(), &raw_event) {
-                        err_msg = Some(format!("Failed to append {raw_event_kind:?} event: {e}"));
-                        break;
-                    }
+                    let appended = if keeps_colliding_events {
+                        store.append_unique(&storage_key.key(), &raw_event).await
+                    } else {
+                        store
+                            .append(&storage_key.key(), &raw_event)
+                            .map(|()| UniqueAppend::Stored(timestamp))
+                    };
+                    let stored_timestamp = match appended {
+                        Ok(UniqueAppend::Stored(stored) | UniqueAppend::Duplicate(stored)) => {
+                            stored
+                        }
+                        // A dropped event still counts as received, so the
+                        // sensor does not resend what cannot be stored.
+                        Ok(UniqueAppend::Overflow) => {
+                            error!(
+                                "Dropped {raw_event_kind:?} event from {sensor} at {timestamp}: \
+                                 every later timestamp up to i64::MAX holds a different event"
+                            );
+                            continue;
+                        }
+                        Ok(UniqueAppend::ProbeLimit) => {
+                            error!(
+                                "Dropped {raw_event_kind:?} event from {sensor} at {timestamp}: \
+                                 the {APPEND_UNIQUE_MAX_PROBES} timestamps from it on all hold \
+                                 different events"
+                            );
+                            continue;
+                        }
+                        Err(e) => {
+                            err_msg =
+                                Some(format!("Failed to append {raw_event_kind:?} event: {e}"));
+                            break;
+                        }
+                    };
                     if let Some(network_key) = network_key.as_ref()
                         && let Err(e) = send_direct_stream(
                             network_key,
                             &raw_event,
-                            timestamp,
+                            stored_timestamp,
                             &sensor,
                             stream_direct_channels.clone(),
                         )

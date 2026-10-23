@@ -5,10 +5,12 @@ mod migration;
 
 use std::{
     collections::HashSet,
+    hash::{BuildHasher, RandomState},
     marker::PhantomData,
     ops::Deref,
     path::{Path, PathBuf},
-    sync::Arc,
+    ptr,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
@@ -39,7 +41,7 @@ use rocksdb::{
     WriteBatch,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::{select, task::JoinHandle, time};
+use tokio::{select, sync::Mutex, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -125,6 +127,21 @@ const NON_STANDARD_CFS: [&str; 6] = [
 ];
 const USAGE_THRESHOLD: u64 = 95;
 const USAGE_LOW: u64 = 85;
+/// How many timestamps, starting at the received one, `append_unique` looks
+/// at for one event before giving up on it.
+pub(crate) const APPEND_UNIQUE_MAX_PROBES: i64 = 65_536;
+const APPEND_UNIQUE_LOCK_COUNT: usize = 64;
+
+/// The locks that serialize `append_unique`'s lookups and write.
+///
+/// One array for the whole process: every ingest stream gets its own
+/// `RawEventStore`, so locks held per store would serialize nothing between
+/// two streams writing the same keys.
+static APPEND_UNIQUE_LOCKS: [Mutex<()>; APPEND_UNIQUE_LOCK_COUNT] =
+    [const { Mutex::const_new(()) }; APPEND_UNIQUE_LOCK_COUNT];
+/// Picks the lock in `APPEND_UNIQUE_LOCKS`. Seeded randomly, so a sender
+/// cannot choose sensor or kind names that crowd onto one lock.
+static APPEND_UNIQUE_LOCK_HASHER: LazyLock<RandomState> = LazyLock::new(RandomState::new);
 
 pub struct RetentionStores<'db, T> {
     pub standard_cfs: Vec<RawEventStore<'db, T>>,
@@ -610,6 +627,33 @@ impl Database {
     }
 }
 
+/// Returns the lock in `APPEND_UNIQUE_LOCKS` for the keys of `cf` that start
+/// with `prefix`.
+///
+/// The column family is identified by its handle's address because a store
+/// keeps no name for it; the handle lives as long as the database.
+fn append_unique_lock(cf: &ColumnFamily, prefix: &[u8]) -> &'static Mutex<()> {
+    let hash = APPEND_UNIQUE_LOCK_HASHER.hash_one((ptr::from_ref(cf).addr(), prefix));
+    let lock_count = u64::try_from(APPEND_UNIQUE_LOCKS.len()).expect("the lock count fits in u64");
+    let index =
+        usize::try_from(hash % lock_count).expect("a remainder below the lock count fits in usize");
+    &APPEND_UNIQUE_LOCKS[index]
+}
+
+/// Where `RawEventStore::append_unique` put an event, or why it did not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UniqueAppend {
+    /// The event was written with this timestamp in its key.
+    Stored(i64),
+    /// A byte-identical event is already stored with this timestamp in its
+    /// key, so nothing was written.
+    Duplicate(i64),
+    /// Every timestamp up to `i64::MAX` holds a different event.
+    Overflow,
+    /// `APPEND_UNIQUE_MAX_PROBES` timestamps in a row hold different events.
+    ProbeLimit,
+}
+
 pub struct RawEventStore<'db, T> {
     db: &'db DB,
     cf: &'db ColumnFamily,
@@ -632,6 +676,51 @@ impl<'db, T> RawEventStore<'db, T> {
     pub fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
         self.db.put_cf(self.cf, key, raw_event)?;
         Ok(())
+    }
+
+    /// Appends an event without overwriting a different one stored under the
+    /// same key.
+    ///
+    /// `key` ends with a big-endian timestamp. If that key holds a different
+    /// event, the timestamp is moved forward one nanosecond at a time until
+    /// the key is free, in which case the event is written there, or holds a
+    /// byte-identical event, in which case nothing is written. Unlike
+    /// `append`, which migrations use to rewrite records in place, this never
+    /// replaces a stored value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `key` is too short to end with a timestamp, or if
+    /// a lookup or the write fails.
+    pub(crate) async fn append_unique(&self, key: &[u8], raw_event: &[u8]) -> Result<UniqueAppend> {
+        let Some((prefix, timestamp)) = key.split_last_chunk::<TIMESTAMP_SIZE>() else {
+            bail!("key of {} bytes has no timestamp", key.len());
+        };
+        let timestamp = i64::from_be_bytes(*timestamp);
+        let lock = append_unique_lock(self.cf, prefix);
+        // Nothing below awaits, so the guard is held only for the lookups and
+        // the write.
+        let _guard = lock.lock().await;
+
+        let mut probe_key = key.to_vec();
+        for offset in 0..APPEND_UNIQUE_MAX_PROBES {
+            let Some(probe_timestamp) = timestamp.checked_add(offset) else {
+                return Ok(UniqueAppend::Overflow);
+            };
+            probe_key.truncate(prefix.len());
+            probe_key.extend_from_slice(&probe_timestamp.to_be_bytes());
+            match self.db.get_pinned_cf(self.cf, &probe_key)? {
+                None => {
+                    self.db.put_cf(self.cf, &probe_key, raw_event)?;
+                    return Ok(UniqueAppend::Stored(probe_timestamp));
+                }
+                Some(stored) if *stored == *raw_event => {
+                    return Ok(UniqueAppend::Duplicate(probe_timestamp));
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(UniqueAppend::ProbeLimit)
     }
 
     pub fn delete(&self, key: &[u8]) -> Result<()> {
@@ -1771,13 +1860,16 @@ mod tests {
     use anyhow::anyhow;
     use giganto_client::ingest::network::Conn;
     use giganto_client::ingest::statistics::Statistics;
+    use rocksdb::WriteBatch;
     use tempfile::TempDir;
+    use tokio::{sync::Barrier, task::JoinSet};
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
-        StatisticsIter, StorageKey, deletion_coordination::CustomerDeletionCoordinator,
-        read_compression_metadata, store_compression_metadata,
+        APPEND_UNIQUE_MAX_PROBES, BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES,
+        RawEventStore, StatisticsIter, StorageKey, UniqueAppend,
+        deletion_coordination::CustomerDeletionCoordinator, read_compression_metadata,
+        store_compression_metadata,
     };
     use super::{CUSTOMER_DELETION_JOBS_CF, CustomerDataDeletion, CustomerDataDeletionStatus};
     use crate::datetime::DateTime;
@@ -3546,5 +3638,165 @@ mod tests {
         append_and_assert_first_conn(&db, key, value);
         db.shutdown().unwrap();
         drop(db);
+    }
+
+    fn get_conn(store: &RawEventStore<'_, Conn>, sensor: &str, timestamp: i64) -> Option<Vec<u8>> {
+        store
+            .db
+            .get_cf(store.cf, conn_key(sensor, timestamp))
+            .expect("read conn event")
+    }
+
+    #[tokio::test]
+    async fn append_unique_moves_past_different_events_and_skips_identical_ones() {
+        let (_dir, db) = setup_db();
+        let store = db.conn_store().unwrap();
+        let timestamp = 1_000;
+
+        let key = conn_key("sensor", timestamp);
+        assert_eq!(
+            store.append_unique(&key, b"first").await.unwrap(),
+            UniqueAppend::Stored(timestamp)
+        );
+        assert_eq!(
+            store.append_unique(&key, b"second").await.unwrap(),
+            UniqueAppend::Stored(timestamp + 1)
+        );
+        assert_eq!(
+            store.append_unique(&key, b"third").await.unwrap(),
+            UniqueAppend::Stored(timestamp + 2)
+        );
+        assert_eq!(
+            store.append_unique(&key, b"second").await.unwrap(),
+            UniqueAppend::Duplicate(timestamp + 1)
+        );
+        // Only the timestamp moves: another sensor's key at the same time is
+        // free.
+        assert_eq!(
+            store
+                .append_unique(&conn_key("other", timestamp), b"second")
+                .await
+                .unwrap(),
+            UniqueAppend::Stored(timestamp)
+        );
+
+        assert_eq!(
+            get_conn(&store, "sensor", timestamp).as_deref(),
+            Some(&b"first"[..])
+        );
+        assert_eq!(
+            get_conn(&store, "sensor", timestamp + 1).as_deref(),
+            Some(&b"second"[..])
+        );
+        assert_eq!(
+            get_conn(&store, "sensor", timestamp + 2).as_deref(),
+            Some(&b"third"[..])
+        );
+        assert_eq!(get_conn(&store, "sensor", timestamp + 3), None);
+    }
+
+    #[tokio::test]
+    async fn append_unique_rejects_a_key_without_a_timestamp() {
+        let (_dir, db) = setup_db();
+        let store = db.conn_store().unwrap();
+        assert!(store.append_unique(b"short", b"event").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn append_unique_drops_a_collision_at_the_overflow_boundary() {
+        let (_dir, db) = setup_db();
+        let store = db.conn_store().unwrap();
+        let key = conn_key("sensor", i64::MAX);
+        let below = conn_key("sensor", i64::MAX - 1);
+
+        store.append(&below, b"below").unwrap();
+        assert_eq!(
+            store.append_unique(&below, b"event").await.unwrap(),
+            UniqueAppend::Stored(i64::MAX)
+        );
+        assert_eq!(
+            store.append_unique(&key, b"event").await.unwrap(),
+            UniqueAppend::Duplicate(i64::MAX)
+        );
+        assert_eq!(
+            store.append_unique(&key, b"other").await.unwrap(),
+            UniqueAppend::Overflow
+        );
+        assert_eq!(
+            get_conn(&store, "sensor", i64::MAX).as_deref(),
+            Some(&b"event"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn append_unique_stops_at_the_probe_limit() {
+        let (_dir, db) = setup_db();
+        let store = db.conn_store().unwrap();
+        let timestamp = 1_000;
+        let key = conn_key("sensor", timestamp);
+
+        let mut batch = WriteBatch::default();
+        for offset in 0..APPEND_UNIQUE_MAX_PROBES - 1 {
+            batch.put_cf(
+                store.cf,
+                conn_key("sensor", timestamp + offset),
+                offset.to_be_bytes(),
+            );
+        }
+        store.db.write(batch).unwrap();
+
+        // The last slot within the limit is still found.
+        assert_eq!(
+            store.append_unique(&key, b"last").await.unwrap(),
+            UniqueAppend::Stored(timestamp + APPEND_UNIQUE_MAX_PROBES - 1)
+        );
+        assert_eq!(
+            store.append_unique(&key, b"last").await.unwrap(),
+            UniqueAppend::Duplicate(timestamp + APPEND_UNIQUE_MAX_PROBES - 1)
+        );
+        assert_eq!(
+            store.append_unique(&key, b"beyond").await.unwrap(),
+            UniqueAppend::ProbeLimit
+        );
+        assert_eq!(
+            get_conn(&store, "sensor", timestamp + APPEND_UNIQUE_MAX_PROBES),
+            None
+        );
+    }
+
+    /// Two ingest streams of one sensor and kind, each with its own store,
+    /// write different events under the same key at the same moment.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn append_unique_keeps_both_of_two_concurrent_writes() {
+        const KEYS: i64 = 1_000;
+
+        let (_dir, db) = setup_db();
+        let barrier = Arc::new(Barrier::new(2));
+        let mut tasks = JoinSet::new();
+        for value in [b"left", b"rght"] {
+            let db = db.clone();
+            let barrier = Arc::clone(&barrier);
+            tasks.spawn(async move {
+                let store = db.conn_store().unwrap();
+                for key_index in 0..KEYS {
+                    let key = conn_key("sensor", key_index * 10);
+                    barrier.wait().await;
+                    store.append_unique(&key, value).await.unwrap();
+                }
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
+
+        let store = db.conn_store().unwrap();
+        for key_index in 0..KEYS {
+            let mut stored = [
+                get_conn(&store, "sensor", key_index * 10).expect("first slot is taken"),
+                get_conn(&store, "sensor", key_index * 10 + 1).expect("second slot is taken"),
+            ];
+            stored.sort_unstable();
+            assert_eq!(stored, [b"left".to_vec(), b"rght".to_vec()]);
+        }
     }
 }
