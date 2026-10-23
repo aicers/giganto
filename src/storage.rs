@@ -1693,8 +1693,12 @@ fn check_db_usage(path: &Path) -> (bool, bool) {
     }
 }
 
+fn level_base_bytes(megabytes: u64) -> u64 {
+    megabytes.saturating_mul(1024 * 1024)
+}
+
 pub(crate) fn rocksdb_options(db_options: &DbOptions) -> (Options, Options) {
-    let max_bytes = db_options.max_mb_of_level_base * 1024 * 1024;
+    let max_bytes = level_base_bytes(db_options.max_mb_of_level_base);
     let mut db_opts = Options::default();
     db_opts.create_if_missing(true);
     db_opts.create_missing_column_families(true);
@@ -1873,6 +1877,105 @@ mod tests {
     };
     use super::{CUSTOMER_DELETION_JOBS_CF, CustomerDataDeletion, CustomerDataDeletionStatus};
     use crate::datetime::DateTime;
+
+    #[test]
+    fn level_base_byte_conversion_saturates() {
+        assert_eq!(super::level_base_bytes(1 << 44), u64::MAX);
+        assert_eq!(super::level_base_bytes(u64::MAX), u64::MAX);
+        assert_eq!(super::level_base_bytes(262_144), 274_877_906_944);
+    }
+
+    #[test]
+    fn boundary_options_are_unchanged() {
+        const CHILD: &str = "GIGANTO_BOUNDARY_OPTIONS_CHILD";
+        const NAME: &str = "storage::tests::boundary_options_are_unchanged";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success(),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(stdout.contains("1 passed"), "{stdout}");
+            return;
+        }
+        let soft = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
+            .ok()
+            .map(|(soft, _)| soft);
+        let cap = *crate::settings::RocksDbLimits::new(soft).open_files().end();
+        for (open, level, threads, subcompactions) in [(20, 1, 1, 1), (cap, 262_144, 128, 8)] {
+            let dir = tempfile::tempdir().unwrap();
+            let options = DbOptions::new(open, level, threads, subcompactions, false);
+            let db = Database::open(dir.path(), &options).unwrap();
+            let options_file = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("OPTIONS-")
+                })
+                .max()
+                .unwrap();
+            let content = std::fs::read_to_string(options_file).unwrap();
+            let mut section = "";
+            let mut checked_db = 0;
+            let mut checked_cf = 0;
+            for line in content.lines().map(str::trim) {
+                if line.starts_with('[') {
+                    section = line;
+                }
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let expected = if section == "[DBOptions]" {
+                    match key.trim() {
+                        "max_open_files" => Some(i64::from(open)),
+                        "max_subcompactions" => Some(i64::from(subcompactions)),
+                        "max_background_jobs" => Some(i64::from(threads)),
+                        _ => None,
+                    }
+                } else if section.starts_with("[CFOptions ") && section != "[CFOptions \"default\"]"
+                {
+                    let bytes = i64::try_from(super::level_base_bytes(level)).unwrap();
+                    match key.trim() {
+                        "write_buffer_size" => Some(bytes / 4),
+                        "max_bytes_for_level_base" => Some(bytes),
+                        "target_file_size_base" => Some(bytes / 10),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(expected) = expected {
+                    assert_eq!(
+                        value.trim().parse::<i64>().unwrap(),
+                        expected,
+                        "{section} {key}"
+                    );
+                    if section == "[DBOptions]" {
+                        checked_db += 1;
+                    } else {
+                        checked_cf += 1;
+                    }
+                }
+            }
+            assert_eq!(checked_db, 3);
+            assert_eq!(
+                checked_cf,
+                3 * (RAW_DATA_COLUMN_FAMILY_NAMES.len()
+                    + super::META_DATA_COLUMN_FAMILY_NAMES.len()
+                    + 1)
+            );
+            drop(db);
+        }
+    }
 
     fn setup_db() -> (TempDir, Database) {
         let dir = tempfile::tempdir().unwrap();

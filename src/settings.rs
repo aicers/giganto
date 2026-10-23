@@ -35,6 +35,31 @@ const DEFAULT_MAX_SUBCOMPACTIONS: u32 = 2;
 const DEFAULT_WEB_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Validity bounds for the RocksDB configuration on 64-bit targets.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RocksDbLimits {
+    max_open_files: i32,
+}
+
+impl RocksDbLimits {
+    const MIN_OPEN_FILES: i32 = 20;
+    const LEVEL_BASE: std::ops::RangeInclusive<u64> = 1..=262_144;
+    const THREADS: std::ops::RangeInclusive<i32> = 1..=128;
+    const SUBCOMPACTIONS: std::ops::RangeInclusive<u32> = 1..=8;
+
+    pub(crate) fn new(soft_limit: Option<u64>) -> Self {
+        Self {
+            max_open_files: i32::try_from(soft_limit.unwrap_or(0x40_0000))
+                .unwrap_or(i32::MAX)
+                .max(Self::MIN_OPEN_FILES),
+        }
+    }
+
+    pub(crate) fn open_files(self) -> std::ops::RangeInclusive<i32> {
+        Self::MIN_OPEN_FILES..=self.max_open_files
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(version)]
 pub struct Args {
@@ -232,6 +257,20 @@ impl Settings {
         Ok(settings)
     }
 
+    /// Loads and clamps startup settings after tracing has been initialized.
+    pub(crate) fn load_startup(cfg_path: &str, limits: RocksDbLimits) -> anyhow::Result<Self> {
+        let mut settings = Self::load_or_restore(cfg_path)?;
+        settings.config.visible.clamp_rocksdb(limits);
+        settings.config.validate(limits)?;
+        Ok(settings)
+    }
+
+    /// Restores configuration atomically without replacing the update backup.
+    pub(crate) fn write_config(&self, config: &Config) -> anyhow::Result<()> {
+        let doc = toml::to_string(config)?.parse::<DocumentMut>()?;
+        write_toml_file(&doc, &self.cfg_path)
+    }
+
     pub fn update_config_file(&mut self, new_config: &ConfigVisible) -> anyhow::Result<()> {
         // Create a temporary config with the new visible settings to serialize
         let temp_config = Config {
@@ -243,12 +282,9 @@ impl Settings {
             drain_report_interval: self.config.drain_report_interval,
         };
 
-        let toml_str = toml::to_string(&temp_config)?;
-        let doc = toml_str.parse::<DocumentMut>()?;
-
         // Perform persistence operations first; only update in-memory state if both succeed
         backup_toml_file(&self.cfg_path)?;
-        write_toml_file(&doc, &self.cfg_path)?;
+        self.write_config(&temp_config)?;
 
         // Only update in-memory config after successful persistence
         self.config.visible = temp_config.visible;
@@ -285,8 +321,8 @@ impl Config {
     ///
     /// Returns an error if the flattened visible settings are invalid, or if
     /// `drain_report_interval` is zero.
-    pub fn validate(&self) -> anyhow::Result<()> {
-        self.visible.validate()?;
+    pub(crate) fn validate(&self, limits: RocksDbLimits) -> anyhow::Result<()> {
+        self.visible.validate(limits)?;
         // A zero cadence still drains — the drain waits for every task either
         // way — but it spins the loop and writes one round per poll to the
         // log. No upper bound is imposed: the cadence is a reporting interval,
@@ -299,7 +335,64 @@ impl Config {
 }
 
 impl ConfigVisible {
-    pub fn validate(&self) -> anyhow::Result<()> {
+    /// Clamps legacy file values and reports each effective change after tracing setup.
+    pub(crate) fn clamp_rocksdb(&mut self, limits: RocksDbLimits) {
+        macro_rules! clamp {
+            ($field:ident, $range:expr) => {
+                clamp!($field, $range, self.$field)
+            };
+            ($field:ident, $range:expr, $value:expr) => {{
+                let range = $range;
+                let file_value = self.$field;
+                self.$field = $value.clamp(*range.start(), *range.end());
+                if file_value != self.$field {
+                    warn!(
+                        "{}: file value {}, selected value {}, valid range {}..={}",
+                        stringify!($field),
+                        file_value,
+                        self.$field,
+                        range.start(),
+                        range.end()
+                    );
+                }
+            }};
+        }
+        // -1 formerly meant unlimited; use the effective upper bound instead.
+        let open_files = if self.max_open_files == -1 {
+            limits.max_open_files
+        } else {
+            self.max_open_files
+        };
+        clamp!(max_open_files, limits.open_files(), open_files);
+        clamp!(max_mb_of_level_base, RocksDbLimits::LEVEL_BASE);
+        clamp!(num_of_thread, RocksDbLimits::THREADS);
+        clamp!(max_subcompactions, RocksDbLimits::SUBCOMPACTIONS);
+    }
+
+    pub(crate) fn validate(&self, limits: RocksDbLimits) -> anyhow::Result<()> {
+        macro_rules! check {
+            ($field:ident, $range:expr, $suffix:expr) => {{
+                let range = $range;
+                if !range.contains(&self.$field) {
+                    bail!(
+                        "{} received {}; valid range {}..={}{}",
+                        stringify!($field),
+                        self.$field,
+                        range.start(),
+                        range.end(),
+                        $suffix
+                    );
+                }
+            }};
+        }
+        check!(
+            max_open_files,
+            limits.open_files(),
+            " (upper bound comes from the process soft RLIMIT_NOFILE open-file limit)"
+        );
+        check!(max_mb_of_level_base, RocksDbLimits::LEVEL_BASE, "");
+        check!(num_of_thread, RocksDbLimits::THREADS, "");
+        check!(max_subcompactions, RocksDbLimits::SUBCOMPACTIONS, "");
         if !self.data_dir.exists() || !self.data_dir.is_dir() {
             bail!("data directory is invalid");
         }
@@ -389,6 +482,107 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn rocksdb_open_file_bound() {
+        for (soft, expected) in [
+            (Some(0), 20),
+            (Some(19), 20),
+            (Some(20), 20),
+            (Some(8000), 8000),
+            (Some(2_147_483_647), i32::MAX),
+            (Some(2_147_483_648), i32::MAX),
+            (Some(u64::MAX), i32::MAX),
+            (None, 0x40_0000),
+        ] {
+            assert_eq!(RocksDbLimits::new(soft).max_open_files, expected);
+        }
+    }
+
+    #[test]
+    fn rocksdb_ranges_and_clamping() {
+        let (_file, _data, _export, base) = create_test_config(false);
+        let limits = RocksDbLimits::new(Some(8000));
+        macro_rules! cases {
+            ($field:ident, $cases:expr, $range:expr) => {
+                for (value, selected, valid) in $cases {
+                    let mut config = base.clone();
+                    config.$field = value;
+                    if valid {
+                        config.validate(limits).unwrap();
+                    } else {
+                        let error = config.validate(limits).unwrap_err().to_string();
+                        assert!(error.contains(stringify!($field)), "{error}");
+                        assert!(error.contains(&value.to_string()), "{error}");
+                        assert!(error.contains($range), "{error}");
+                        if stringify!($field) == "max_open_files" {
+                            assert!(error.contains("process soft RLIMIT_NOFILE"));
+                        }
+                    }
+                    config.clamp_rocksdb(limits);
+                    assert_eq!(config.$field, selected);
+                    config.validate(limits).unwrap();
+                }
+            };
+        }
+        cases!(
+            max_open_files,
+            [
+                (i32::MIN, 20, false),
+                (-2, 20, false),
+                (-1, 8000, false),
+                (0, 20, false),
+                (19, 20, false),
+                (20, 20, true),
+                (21, 21, true),
+                (7999, 7999, true),
+                (8000, 8000, true),
+                (8001, 8000, false),
+                (i32::MAX, 8000, false),
+            ],
+            "20..=8000"
+        );
+        cases!(
+            max_mb_of_level_base,
+            [
+                (0, 1, false),
+                (1, 1, true),
+                (2, 2, true),
+                (262_143, 262_143, true),
+                (262_144, 262_144, true),
+                (262_145, 262_144, false),
+                (u64::MAX, 262_144, false),
+            ],
+            "1..=262144"
+        );
+        cases!(
+            num_of_thread,
+            [
+                (i32::MIN, 1, false),
+                (-1, 1, false),
+                (0, 1, false),
+                (1, 1, true),
+                (2, 2, true),
+                (127, 127, true),
+                (128, 128, true),
+                (129, 128, false),
+            ],
+            "1..=128"
+        );
+        cases!(
+            max_subcompactions,
+            [
+                (0, 1, false),
+                (1, 1, true),
+                (2, 2, true),
+                (7, 7, true),
+                (8, 8, true),
+                (9, 8, false),
+                (u32::MAX, 8, false),
+            ],
+            "1..=8"
+        );
+    }
 
     mod fixtures {
         use std::fs;
@@ -581,7 +775,7 @@ graphql_srv_addr = "127.0.0.1:8443"
         let err = settings
             .config
             .visible
-            .validate()
+            .validate(RocksDbLimits::new(Some(8000)))
             .expect_err("invalid directory");
         assert_eq!(err.to_string(), "data directory is invalid");
         assert!(!data_dir.exists());
@@ -606,7 +800,7 @@ graphql_srv_addr = "127.0.0.1:8443"
         );
         let err = settings
             .config
-            .validate()
+            .validate(RocksDbLimits::new(Some(8000)))
             .expect_err("above 3650 days should fail");
         assert_eq!(err.to_string(), "retention must be at most 3650 days");
     }
@@ -624,7 +818,10 @@ graphql_srv_addr = "127.0.0.1:8443"
             .expect("restore settings with an explicit directory");
         assert_eq!(fs::read_to_string(config_path).unwrap(), config);
         assert_eq!(settings.config.visible.data_dir, data_dir);
-        let err = settings.config.validate().expect_err("invalid directory");
+        let err = settings
+            .config
+            .validate(RocksDbLimits::new(Some(8000)))
+            .expect_err("invalid directory");
         assert_eq!(err.to_string(), "data directory is invalid");
         assert!(!data_dir.exists());
     }
@@ -810,7 +1007,7 @@ drain_report_interval = "500ms"
         };
 
         let err = config
-            .validate()
+            .validate(RocksDbLimits::new(Some(8000)))
             .expect_err("a zero drain_report_interval must be rejected");
         assert!(
             err.to_string()
@@ -822,9 +1019,9 @@ drain_report_interval = "500ms"
         // a long cadence only makes a hanging shutdown quieter.
         let mut valid = config.clone();
         valid.drain_report_interval = Duration::from_millis(1);
-        assert!(valid.validate().is_ok());
+        assert!(valid.validate(RocksDbLimits::new(Some(8000))).is_ok());
         valid.drain_report_interval = Duration::from_hours(24);
-        assert!(valid.validate().is_ok());
+        assert!(valid.validate(RocksDbLimits::new(Some(8000))).is_ok());
     }
 
     #[test]
@@ -1236,13 +1433,13 @@ drain_report_interval = "500ms"
         };
 
         // Case 1: Valid data directory
-        assert!(config.validate().is_ok());
+        assert!(config.validate(RocksDbLimits::new(Some(8000))).is_ok());
 
         // Case 2: Non-existent data directory
         let mut invalid_config = config.clone();
         invalid_config.visible.data_dir = PathBuf::from("non_existent_dir");
         let err = invalid_config
-            .validate()
+            .validate(RocksDbLimits::new(Some(8000)))
             .expect_err("Operation should have failed");
         assert!(
             err.to_string().contains("data directory is invalid"),
@@ -1254,7 +1451,7 @@ drain_report_interval = "500ms"
         fs::File::create(&file_path).expect("Failed to create file");
         invalid_config.visible.data_dir = file_path;
         let err = invalid_config
-            .validate()
+            .validate(RocksDbLimits::new(Some(8000)))
             .expect_err("Operation should have failed");
         assert!(
             err.to_string().contains("data directory is invalid"),
@@ -1269,7 +1466,9 @@ drain_report_interval = "500ms"
         for (refused, period) in [("23h", Duration::from_hours(23)), ("0s", Duration::ZERO)] {
             let mut config = config_visible.clone();
             config.oplog_retention = period;
-            let err = config.validate().expect_err("below one day should fail");
+            let err = config
+                .validate(RocksDbLimits::new(Some(8000)))
+                .expect_err("below one day should fail");
             assert_eq!(
                 err.to_string(),
                 "oplog_retention must be at least one day",
@@ -1279,7 +1478,9 @@ drain_report_interval = "500ms"
 
         let mut config = config_visible.clone();
         config.oplog_retention = Duration::from_hours(3651 * 24);
-        let err = config.validate().expect_err("above 3650 days should fail");
+        let err = config
+            .validate(RocksDbLimits::new(Some(8000)))
+            .expect_err("above 3650 days should fail");
         assert_eq!(err.to_string(), "oplog_retention must be at most 3650 days");
 
         for (accepted, period) in [
@@ -1288,7 +1489,10 @@ drain_report_interval = "500ms"
         ] {
             let mut config = config_visible.clone();
             config.oplog_retention = period;
-            assert!(config.validate().is_ok(), "{accepted} should be accepted");
+            assert!(
+                config.validate(RocksDbLimits::new(Some(8000))).is_ok(),
+                "{accepted} should be accepted"
+            );
         }
     }
 
@@ -1302,7 +1506,9 @@ drain_report_interval = "500ms"
         ] {
             let mut config = config_visible.clone();
             config.retention = period;
-            let err = config.validate().expect_err("above 3650 days should fail");
+            let err = config
+                .validate(RocksDbLimits::new(Some(8000)))
+                .expect_err("above 3650 days should fail");
             assert_eq!(
                 err.to_string(),
                 "retention must be at most 3650 days",
@@ -1317,13 +1523,18 @@ drain_report_interval = "500ms"
         ] {
             let mut config = config_visible.clone();
             config.retention = period;
-            assert!(config.validate().is_ok(), "{accepted} should be accepted");
+            assert!(
+                config.validate(RocksDbLimits::new(Some(8000))).is_ok(),
+                "{accepted} should be accepted"
+            );
         }
 
         let mut config = config_visible.clone();
         config.data_dir = data_dir.path().join("missing");
         config.retention = Duration::from_hours(3651 * 24);
-        let err = config.validate().expect_err("invalid data_dir should fail");
+        let err = config
+            .validate(RocksDbLimits::new(Some(8000)))
+            .expect_err("invalid data_dir should fail");
         assert_eq!(err.to_string(), "data directory is invalid");
 
         for (oplog, oplog_period) in [
@@ -1333,7 +1544,9 @@ drain_report_interval = "500ms"
             let mut config = config_visible.clone();
             config.retention = Duration::from_hours(3651 * 24);
             config.oplog_retention = oplog_period;
-            let err = config.validate().expect_err("above 3650 days should fail");
+            let err = config
+                .validate(RocksDbLimits::new(Some(8000)))
+                .expect_err("above 3650 days should fail");
             assert_eq!(
                 err.to_string(),
                 "retention must be at most 3650 days",
