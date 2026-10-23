@@ -30,8 +30,6 @@ jobs:
           - feature_set: all-features
             cargo_flags: --all-features
     steps:
-      - name: Increase ulimit size
-        run: ulimit -n 8096
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -115,8 +113,6 @@ jobs:
   schema:
     runs-on: ubuntu-latest
     steps:
-      - name: Increase ulimit size
-        run: ulimit -n 8096
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
@@ -139,8 +135,6 @@ jobs:
           - feature_set: all-features
             cargo_flags: --all-features
     steps:
-      - name: Increase ulimit size
-        run: ulimit -n 8096
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
@@ -152,7 +146,21 @@ jobs:
       - name: Build (${{ matrix.feature_set }})
         run: cargo build ${{ matrix.cargo_flags }} --verbose
       - name: Run tests (${{ matrix.feature_set }})
-        run: cargo test ${{ matrix.cargo_flags }} --verbose
+        run: |
+          soft_before=$(ulimit -Sn)
+          hard_before=$(ulimit -Hn)
+          echo "Open-file limits before: soft=$soft_before hard=$hard_before"
+          if [ "$soft_before" != unlimited ]; then
+            target=8096
+            if [ "$hard_before" != unlimited ] && [ "$hard_before" -lt "$target" ]; then
+              target=$hard_before
+            fi
+            if [ "$soft_before" -lt "$target" ]; then
+              ulimit -Sn "$target"
+            fi
+          fi
+          echo "Open-file limits after: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
+          cargo test ${{ matrix.cargo_flags }} --verbose
 
   coverage:
     runs-on: ubuntu-latest
@@ -163,8 +171,6 @@ jobs:
           - feature_set: default
             cargo_flags: ""
     steps:
-      - name: Increase ulimit size
-        run: ulimit -n 8096
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
@@ -177,8 +183,21 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Generate code coverage (${{ matrix.feature_set }})
-        run: cargo llvm-cov ${{ matrix.cargo_flags }} --workspace --lcov --output-path
-          lcov-${{ matrix.feature_set }}.info
+        run: |
+          soft_before=$(ulimit -Sn)
+          hard_before=$(ulimit -Hn)
+          echo "Open-file limits before: soft=$soft_before hard=$hard_before"
+          if [ "$soft_before" != unlimited ]; then
+            target=8096
+            if [ "$hard_before" != unlimited ] && [ "$hard_before" -lt "$target" ]; then
+              target=$hard_before
+            fi
+            if [ "$soft_before" -lt "$target" ]; then
+              ulimit -Sn "$target"
+            fi
+          fi
+          echo "Open-file limits after: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
+          cargo llvm-cov ${{ matrix.cargo_flags }} --workspace --lcov --output-path lcov-${{ matrix.feature_set }}.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
         env:

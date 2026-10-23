@@ -147,6 +147,29 @@ peers = [ { addr = "10.10.12.1:38383",
             hostname = "001.giganto.node1.example.test" } ]
 ```
 
+The RocksDB validity ranges on 64-bit targets are `max_open_files = 20..=C`,
+`max_mb_of_level_base = 1..=262144`, `num_of_thread = 1..=128`, and
+`max_subcompactions = 1..=8`. C is `max(20, min(soft RLIMIT_NOFILE, i32::MAX))`,
+using the process soft open-file limit read once at startup; if reading it fails,
+C is `4194304`. The thread caps are product policy limits. These ranges are
+validity limits, not tuning recommendations.
+
+At startup, out-of-range TOML values are clamped to the nearest bound, except
+`max_open_files = -1`, which becomes C. One WARN per changed field reports the
+file value, selected value, and valid range. The TOML is unchanged; RocksDB,
+`--repair`, and the `config` query use the effective values. In-range values
+are unchanged and produce no clamp warnings.
+
+`updateConfig` rejects out-of-range values, including negative `max_open_files`,
+without changing state or queuing the request. After an accepted update, a failure
+in compression metadata validation, data directory migration, or database opening
+logs an ERROR, restores the previous in-memory and persisted configuration, and
+restarts with it once. The restore does not overwrite the update backup. If the
+restore write fails, an ERROR asks that the file be checked and the previous
+in-memory configuration still starts. A failure of that restored generation,
+initial process startup, teardown, or startup after store opening is not recovered.
+Check the effective outcome with the `config` query.
+
 For the `max_mb_of_level_base`, the last level has 100,000 times capacity, and
 it is about 90% of total capacity. Therefore, about `db_total_mb / 111111` is
 appropriate. For example, 90 MB or less for 10 TB Database, 900 MB or less for

@@ -150,9 +150,17 @@ impl StatusQuery {
 impl ConfigMutation {
     /// Requests a configuration update. A successful response means that the service accepted the
     /// request for processing, not that the update has already been applied.
+    /// If the next generation fails while validating compression metadata, migrating the data
+    /// directory, or opening the database, the previous configuration is restored and restarted.
+    /// A restore-write failure is logged and the previous in-memory configuration is still used.
+    /// Failures after the store opens are not recovered. Check the effective outcome with `config`.
     ///
     /// # Errors
     ///
+    /// Rejects `max_open_files` outside 20..=C (including -1), where C is the process soft
+    /// `RLIMIT_NOFILE` open-file limit bounded to `20..=i32::MAX` (fallback 4194304).
+    /// Rejects `max_mb_of_level_base` outside 1..=262144, `num_of_thread` outside 1..=128,
+    /// and `max_subcompactions` outside 1..=8. These are validity limits, not tuning advice.
     /// Returns an error if `new` is empty or if either `old` or `new` cannot be parsed as a
     /// configuration. It also returns an error if `old` does not match the current configuration, if
     /// `new` matches the current configuration, or if the `data_dir` in `new` does not name an existing
@@ -190,7 +198,7 @@ impl ConfigMutation {
         }
 
         let new_config: ConfigVisible = toml::from_str(&new)?;
-        new_config.validate()?;
+        new_config.validate(*ctx.data::<crate::settings::RocksDbLimits>()?)?;
 
         if s.config.visible == new_config {
             info!("No changes");
@@ -860,6 +868,77 @@ mod tests {
         let err = read_toml_file(path.to_str().unwrap()).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("toml not found"));
+    }
+
+    #[tokio::test]
+    async fn rocksdb_update_ranges_reject_without_state_or_queue_changes() {
+        let mut schema = TestSchema::new();
+        let before = schema
+            .execute("{ config { maxOpenFiles maxMbOfLevelBase numOfThread maxSubcompactions } }")
+            .await
+            .data;
+        for (field, values, range) in [
+            (
+                "max_open_files",
+                vec![i64::from(i32::MIN), -1, 0, 19, 8001],
+                "20..=8000",
+            ),
+            ("max_mb_of_level_base", vec![0, 262_145], "1..=262144"),
+            (
+                "num_of_thread",
+                vec![i64::from(i32::MIN), -1, 0, 129],
+                "1..=128",
+            ),
+            ("max_subcompactions", vec![0, 9], "1..=8"),
+        ] {
+            for value in values {
+                let mut config: toml::Value = toml::from_str(&changed_config()).unwrap();
+                config[field] = toml::Value::Integer(value);
+                let response = schema
+                    .execute(&update_config_query(
+                        &old_config(),
+                        &toml::to_string(&config).unwrap(),
+                    ))
+                    .await;
+                let message = &response
+                    .errors
+                    .first()
+                    .expect("out of range should fail")
+                    .message;
+                for expected in [field.to_string(), value.to_string(), range.to_string()] {
+                    assert!(message.contains(&expected), "{message}");
+                }
+                if field == "max_open_files" {
+                    assert!(message.contains("process soft RLIMIT_NOFILE"));
+                }
+                assert!(matches!(
+                    schema.config_update_rx.try_recv(),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                ));
+                assert_eq!(schema.execute("{ config { maxOpenFiles maxMbOfLevelBase numOfThread maxSubcompactions } }").await.data, before);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rocksdb_update_ranges_accept_boundaries() {
+        let mut schema = TestSchema::new();
+        for (open, level, threads, subcompactions) in [(20, 1, 1, 1), (8000, 262_144, 128, 8)] {
+            let mut config: crate::settings::ConfigVisible =
+                toml::from_str(&changed_config()).unwrap();
+            config.max_open_files = open;
+            config.max_mb_of_level_base = level;
+            config.num_of_thread = threads;
+            config.max_subcompactions = subcompactions;
+            let response = schema
+                .execute(&update_config_query(
+                    &old_config(),
+                    &toml::to_string(&config).unwrap(),
+                ))
+                .await;
+            assert!(response.errors.is_empty(), "{:?}", response.errors);
+            assert_eq!(schema.config_update_rx.try_recv().unwrap(), config);
+        }
     }
 
     fn old_config() -> String {
