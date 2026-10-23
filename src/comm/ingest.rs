@@ -1427,42 +1427,39 @@ async fn handle_data<T>(
                     // reason as the ACK below: the flush on the way out is what
                     // everything appended before this event depends on, and
                     // returning here would skip it.
-                    let stored_timestamp = if keeps_colliding_events {
-                        match store.append_unique(&storage_key.key(), &raw_event).await {
-                            Ok(UniqueAppend::Stored(stored) | UniqueAppend::Duplicate(stored)) => {
-                                stored
-                            }
-                            // A dropped event still counts as received, so the
-                            // sensor does not resend what cannot be stored.
-                            Ok(UniqueAppend::Overflow) => {
-                                error!(
-                                    "Dropped {raw_event_kind:?} event from {sensor} at \
-                                     {timestamp}: every later timestamp up to i64::MAX \
-                                     holds a different event"
-                                );
-                                continue;
-                            }
-                            Ok(UniqueAppend::ProbeLimit) => {
-                                error!(
-                                    "Dropped {raw_event_kind:?} event from {sensor} at \
-                                     {timestamp}: the {APPEND_UNIQUE_MAX_PROBES} timestamps \
-                                     from it on all hold different events"
-                                );
-                                continue;
-                            }
-                            Err(e) => {
-                                err_msg =
-                                    Some(format!("Failed to append {raw_event_kind:?} event: {e}"));
-                                break;
-                            }
-                        }
+                    let appended = if keeps_colliding_events {
+                        store.append_unique(&storage_key.key(), &raw_event).await
                     } else {
-                        if let Err(e) = store.append(&storage_key.key(), &raw_event) {
+                        store
+                            .append(&storage_key.key(), &raw_event)
+                            .map(|()| UniqueAppend::Stored(timestamp))
+                    };
+                    let stored_timestamp = match appended {
+                        Ok(UniqueAppend::Stored(stored) | UniqueAppend::Duplicate(stored)) => {
+                            stored
+                        }
+                        // A dropped event still counts as received, so the
+                        // sensor does not resend what cannot be stored.
+                        Ok(UniqueAppend::Overflow) => {
+                            error!(
+                                "Dropped {raw_event_kind:?} event from {sensor} at {timestamp}: \
+                                 every later timestamp up to i64::MAX holds a different event"
+                            );
+                            continue;
+                        }
+                        Ok(UniqueAppend::ProbeLimit) => {
+                            error!(
+                                "Dropped {raw_event_kind:?} event from {sensor} at {timestamp}: \
+                                 the {APPEND_UNIQUE_MAX_PROBES} timestamps from it on all hold \
+                                 different events"
+                            );
+                            continue;
+                        }
+                        Err(e) => {
                             err_msg =
                                 Some(format!("Failed to append {raw_event_kind:?} event: {e}"));
                             break;
                         }
-                        timestamp
                     };
                     if let Some(network_key) = network_key.as_ref()
                         && let Err(e) = send_direct_stream(

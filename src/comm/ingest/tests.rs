@@ -70,7 +70,9 @@ use crate::{
         stream_channel_key::StreamChannelKey,
     },
     server::{Certs, config_client, host_fqdn_from_cert, service_fqdn_from_cert},
-    storage::{APPEND_UNIQUE_MAX_PROBES, Database, DbOptions, RawEventStore, StorageKey},
+    storage::{
+        APPEND_UNIQUE_MAX_PROBES, Database, DbOptions, RawEventStore, StorageKey, rocksdb_options,
+    },
     tls_reload::{TlsMaterial, TlsWatch},
 };
 
@@ -308,8 +310,13 @@ impl TestHarness {
     }
 
     async fn with_ack_transmission(ack_transmission_cnt: u16) -> Self {
-        init_crypto();
         let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+        Self::with_db_dir(db_dir, ack_transmission_cnt).await
+    }
+
+    /// Starts the harness over the database already in `db_dir`.
+    async fn with_db_dir(db_dir: TempDir, ack_transmission_cnt: u16) -> Self {
+        init_crypto();
         let db = Database::open(db_dir.path(), &DbOptions::default())
             .expect("open ingest test database");
         let server = spawn_server_with(
@@ -2008,6 +2015,86 @@ async fn colliding_statistics_of_one_core_are_both_kept() {
     );
 
     send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+/// A lookup that fails is handled like a failed write: the stream ends
+/// without acknowledging the batch, and the events after the failing one are
+/// not stored.
+#[tokio::test]
+async fn a_failed_lookup_ends_the_stream_without_an_ack() {
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let timestamp = next_timestamp();
+    {
+        // A raw handle, because `Database` flushes only the default column
+        // family. The other column families are added when the harness opens
+        // the database.
+        let (db_opts, cf_opts) = rocksdb_options(&DbOptions::default());
+        let db = rocksdb::DB::open_cf_descriptors(
+            &db_opts,
+            db_dir.path(),
+            [rocksdb::ColumnFamilyDescriptor::new("http", cf_opts)],
+        )
+        .unwrap();
+        let cf = db.cf_handle("http").unwrap();
+        let key = StorageKey::builder()
+            .start_key(&test_sensor_name())
+            .end_key(timestamp)
+            .build()
+            .key();
+        db.put_cf(cf, key, http_event("/stored")).unwrap();
+        db.flush_cf(cf).unwrap();
+    }
+    // The stored event is now the only data block, at the start of the only
+    // table file. Damaging it fails the checksum of the next read of that key,
+    // which is the lookup of an event colliding with it.
+    let mut tables = 0;
+    for entry in std::fs::read_dir(db_dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "sst") {
+            let mut bytes = std::fs::read(&path).unwrap();
+            for byte in &mut bytes[..8] {
+                *byte ^= 0xff;
+            }
+            std::fs::write(&path, bytes).unwrap();
+            tables += 1;
+        }
+    }
+    assert_eq!(tables, 1, "the stored event is flushed to one table file");
+
+    let harness = TestHarness::with_db_dir(db_dir, 1).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Http)
+        .await
+        .unwrap();
+    let after = timestamp + 1_000;
+    let batch = vec![
+        (timestamp, http_event("/colliding")),
+        (after, http_event("/after")),
+    ];
+    send_raw(
+        &mut send,
+        &bincode::serialize(&batch).expect("serialize batch"),
+    )
+    .await
+    .expect("send batch");
+    let ack = with_timeout(
+        "receive_ack_timestamp",
+        std::time::Duration::from_secs(2),
+        receive_ack_timestamp(&mut recv),
+    )
+    .await;
+    assert!(ack.is_err(), "the batch is not acknowledged: {ack:?}");
+
+    let stored_after = harness.db.http_store().unwrap().batched_multi_get_from_ts(
+        &test_sensor_name(),
+        &[DateTime::from_timestamp_nanos(after)],
+    );
+    assert!(
+        stored_after.is_empty(),
+        "nothing after the failure is stored"
+    );
+
     harness.shutdown(b"done").await;
 }
 
