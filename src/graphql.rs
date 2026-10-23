@@ -208,7 +208,7 @@ pub struct TerminateNotify(Arc<Notify>); // stop
 pub struct PcapReaperTracker(pub TaskTracker);
 
 #[allow(clippy::too_many_arguments)]
-pub fn schema(
+pub(crate) fn schema(
     node_name: NodeName,
     database: Database,
     pcap_sensors: PcapSensors,
@@ -222,6 +222,7 @@ pub fn schema(
     config_update_tx: Sender<ConfigVisible>,
     notify_terminate: Arc<Notify>,
     settings: Settings,
+    rocksdb_limits: crate::settings::RocksDbLimits,
     // The generation's top-level tracker, plumbed into the GraphQL context so a
     // detached export task can register itself in the same registry the
     // shutdown drain waits on. Registering it there is what makes an accepted
@@ -252,6 +253,7 @@ pub fn schema(
         .data(config_update_tx)
         .data(TerminateNotify(notify_terminate))
         .data(settings)
+        .data(rocksdb_limits)
         .data(top_level_tracker)
         .data(PcapReaperTracker(pcap_reaper_tracker))
         .data(deletion_coordination)
@@ -1240,6 +1242,7 @@ pub(crate) mod tests {
                 config_update_tx.clone(),
                 notify_terminate,
                 settings,
+                crate::settings::RocksDbLimits::new(Some(8000)),
                 top_level_tracker.clone(),
                 crate::cancellation::TaskTracker::new(),
                 Arc::clone(&deletion_coordination),

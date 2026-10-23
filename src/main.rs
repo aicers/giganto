@@ -21,7 +21,7 @@ use comm::{
     publish,
 };
 use rustls::pki_types::CertificateDer;
-use settings::{ConfigVisible, Settings};
+use settings::{ConfigVisible, RocksDbLimits, Settings};
 use storage::{db_path_and_option, repair_db};
 use tokio::{
     select,
@@ -132,7 +132,10 @@ async fn main() -> ExitCode {
         Err(error) => return refuse_command_line(&error, journal, guard),
     };
 
-    let result = run(args).await;
+    let soft_limit = nix::sys::resource::getrlimit(nix::sys::resource::Resource::RLIMIT_NOFILE)
+        .ok()
+        .map(|(soft, _)| soft);
+    let result = run(args, RocksDbLimits::new(soft_limit)).await;
     if let Err(error) = &result {
         // Under the journal, the plain `Error: …` text on stderr would be
         // stored as several entries at priority 6.
@@ -186,14 +189,12 @@ fn refuse_command_line(error: &clap::Error, journal: bool, guard: WorkerGuard) -
 ///
 /// Returns an error if the command line names the removed `--log-path`, if
 /// the configuration cannot be read or is invalid, or if the lifecycle fails.
-async fn run(args: Args) -> Result<()> {
+async fn run(args: Args, limits: RocksDbLimits) -> Result<()> {
     if args.log_path.is_some() {
         bail!(logging::LOG_PATH_REMOVED);
     }
 
-    let mut settings = Settings::load_or_restore(&args.config)?;
-
-    settings.config.validate()?;
+    let mut settings = Settings::load_startup(&args.config, limits)?;
 
     if args.repair {
         repair_db(
@@ -218,6 +219,7 @@ async fn run(args: Args) -> Result<()> {
         cert_paths,
         Arc::clone(&notify_terminate),
         Arc::clone(&notify_tls_reload),
+        limits,
     )?;
 
     #[cfg(unix)]
@@ -280,6 +282,11 @@ trait LifecycleEffects: Send + Sync {
     /// Returns an error if the store could not be flushed. That is the one
     /// outcome the lifecycle refuses to follow with a new generation.
     fn shutdown_database(&self, database: &storage::Database) -> Result<()>;
+
+    /// Restores the previous file without changing its backup.
+    fn restore_config(&self, settings: &Settings) -> Result<()> {
+        settings.write_config(&settings.config)
+    }
 }
 
 /// The production seam for shutting down the real store.
@@ -316,10 +323,30 @@ async fn run_lifecycle(
     process: &ProcessContext,
     effects: &dyn LifecycleEffects,
 ) -> Result<()> {
+    let mut previous = None;
     loop {
-        let outcome = run_generation(settings, process, effects).await?;
+        let before = settings.config.clone();
+        let outcome = match run_generation(settings, process, effects).await {
+            Ok(outcome) => outcome,
+            Err(GenerationError::StoreOpen(cause)) if previous.is_some() => {
+                error!(
+                    "configuration update failed during store opening: {cause:#}; restoring previous configuration"
+                );
+                settings.config = previous
+                    .take()
+                    .expect("recovery requires a previous configuration");
+                if let Err(error) = effects.restore_config(settings) {
+                    error!(
+                        "failed to restore configuration file {}: {error:#}; the file needs to be checked",
+                        settings.cfg_path
+                    );
+                }
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         match act_on_generation_end(outcome)? {
-            ControlFlow::Continue(()) => {}
+            ControlFlow::Continue(()) => previous = Some(before),
             ControlFlow::Break(()) => return Ok(()),
         }
     }
@@ -387,6 +414,7 @@ fn act_on_generation_end(outcome: GenerationOutcome) -> Result<ControlFlow<()>> 
 /// piece a generation can rewrite, so it is lent separately as `&mut
 /// Settings`.
 struct ProcessContext {
+    rocksdb_limits: RocksDbLimits,
     /// The node's own certificate chain, which the node name is derived from.
     cert: Vec<CertificateDer<'static>>,
     /// Trigger that re-reads the TLS material from disk.
@@ -421,6 +449,7 @@ impl ProcessContext {
         cert_paths: CertPaths,
         notify_terminate: Arc<Notify>,
         notify_tls_reload: Arc<Notify>,
+        rocksdb_limits: RocksDbLimits,
     ) -> Result<Self> {
         let loaded =
             load_tls_material(&cert_paths).context("failed to load initial TLS material")?;
@@ -430,6 +459,7 @@ impl ProcessContext {
         let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)?;
 
         Ok(Self {
+            rocksdb_limits,
             cert,
             reload_handle,
             tls_watch,
@@ -675,6 +705,15 @@ async fn recover_inprogress_deletions(
     Ok(())
 }
 
+/// Startup errors are recoverable only before any store clone or listener escapes.
+#[derive(Debug, thiserror::Error)]
+enum GenerationError {
+    #[error("store opening failed: {0:#}")]
+    StoreOpen(#[source] anyhow::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// Runs one generation and reports why it ended.
 ///
 /// A generation is one turn of the process lifecycle: it opens the database,
@@ -701,7 +740,7 @@ async fn run_generation(
     settings: &mut Settings,
     process: &ProcessContext,
     effects: &dyn LifecycleEffects,
-) -> Result<GenerationOutcome> {
+) -> std::result::Result<GenerationOutcome, GenerationError> {
     info!("Data store started");
     let (db_path, db_options) = db_path_and_option(
         &settings.config.visible.data_dir,
@@ -712,21 +751,20 @@ async fn run_generation(
         settings.config.compression,
     );
 
-    // Validate compression metadata before migration
-    if let Err(e) = validate_compression_metadata(
+    validate_compression_metadata(
         &settings.config.visible.data_dir,
         settings.config.compression,
-    ) {
-        error!("Compression validation failed: {e}");
-        bail!("compression validation failed")
-    }
-
-    if let Err(e) = migrate_data_dir(&settings.config.visible.data_dir, &db_options) {
-        error!("Migration failed: {e}");
-        bail!("migration failed")
-    }
-
-    let database = storage::Database::open(&db_path, &db_options)?;
+    )
+    .inspect_err(|error| error!("Compression validation failed: {error:#}"))
+    .context("compression validation failed")
+    .map_err(GenerationError::StoreOpen)?;
+    migrate_data_dir(&settings.config.visible.data_dir, &db_options)
+        .inspect_err(|error| error!("Migration failed: {error:#}"))
+        .context("migration failed")
+        .map_err(GenerationError::StoreOpen)?;
+    let database = storage::Database::open(&db_path, &db_options)
+        .context("opening database")
+        .map_err(GenerationError::StoreOpen)?;
 
     let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
 
@@ -810,6 +848,7 @@ async fn run_generation(
         config_update_tx,
         process.notify_terminate.clone(),
         settings.clone(),
+        process.rocksdb_limits,
         top_level_tracker.clone(),
         web_reaper_tracker.clone(),
         Arc::clone(&deletion_coordination),
@@ -3502,12 +3541,63 @@ mod tests {
             notify_terminate: Arc<Notify>,
         ) -> ProcessContext {
             install_crypto_provider();
-            ProcessContext::new(cert_paths, notify_terminate, Arc::new(Notify::new()))
-                .expect("the generated PKI should build a process context")
+            ProcessContext::new(
+                cert_paths,
+                notify_terminate,
+                Arc::new(Notify::new()),
+                RocksDbLimits::new(Some(8000)),
+            )
+            .expect("the generated PKI should build a process context")
         }
 
         fn test_process_context(dir: &Path, notify_terminate: Arc<Notify>) -> ProcessContext {
             process_context_from(write_node_pki(dir), notify_terminate)
+        }
+
+        #[test]
+        fn startup_clamps_after_tracing_and_keeps_toml() {
+            let dir = tempdir().unwrap();
+            let mut settings = test_settings(dir.path());
+            for out_of_range in [true, false] {
+                if out_of_range {
+                    settings.config.visible.max_open_files = 8000;
+                    settings.config.visible.max_mb_of_level_base = 0;
+                    settings.config.visible.num_of_thread = 0;
+                    settings.config.visible.max_subcompactions = 9;
+                } else {
+                    settings.config.visible.max_open_files = 1024;
+                    settings.config.visible.max_mb_of_level_base = 1;
+                    settings.config.visible.num_of_thread = 1;
+                    settings.config.visible.max_subcompactions = 8;
+                }
+                write_config_file(&settings);
+                let original = fs::read(&settings.cfg_path).unwrap();
+                let (logs, _guard) = capture_logs();
+                let loaded =
+                    Settings::load_startup(&settings.cfg_path, RocksDbLimits::new(Some(1024)))
+                        .unwrap();
+                assert_eq!(loaded.config.visible.max_open_files, 1024);
+                assert_eq!(loaded.config.visible.max_mb_of_level_base, 1);
+                assert_eq!(loaded.config.visible.num_of_thread, 1);
+                assert_eq!(loaded.config.visible.max_subcompactions, 8);
+                assert_eq!(fs::read(&settings.cfg_path).unwrap(), original);
+                let output = captured(&logs);
+                assert_eq!(
+                    output.matches("WARN").count(),
+                    if out_of_range { 4 } else { 0 },
+                    "{output}"
+                );
+                if out_of_range {
+                    for message in [
+                        "max_open_files: file value 8000, selected value 1024, valid range 20..=1024",
+                        "max_mb_of_level_base: file value 0, selected value 1, valid range 1..=262144",
+                        "num_of_thread: file value 0, selected value 1, valid range 1..=128",
+                        "max_subcompactions: file value 9, selected value 8, valid range 1..=8",
+                    ] {
+                        assert_eq!(output.matches(message).count(), 1, "{output}");
+                    }
+                }
+            }
         }
 
         fn test_database(data_dir: &Path) -> storage::Database {
@@ -6301,6 +6391,17 @@ mod tests {
             addr: SocketAddr,
             current: &ConfigVisible,
         ) {
+            let mut updated = current.clone();
+            updated.ack_transmission += 1;
+            send_config_change(process, addr, current, &updated).await;
+        }
+
+        async fn send_config_change(
+            process: &ProcessContext,
+            addr: SocketAddr,
+            current: &ConfigVisible,
+            updated: &ConfigVisible,
+        ) {
             let tls = tls_reload::get_current_tls_material(&process.tls_watch);
             let client = super::reload_https_server_tests::build_mtls_client(
                 &tls.cert_pem,
@@ -6309,11 +6410,7 @@ mod tests {
             );
 
             let old = toml::to_string(current).expect("serialize the current config");
-            let mut updated = current.clone();
-            // One harmless field, so nothing about the next generation changes
-            // but the value that proves the rewrite happened.
-            updated.ack_transmission = current.ack_transmission + 1;
-            let new = toml::to_string(&updated).expect("serialize the new config");
+            let new = toml::to_string(updated).expect("serialize the new config");
 
             let body = serde_json::json!({
                 "query": "mutation($old: String!, $new: String!) \
@@ -6333,6 +6430,207 @@ mod tests {
                 !response.contains("\"errors\""),
                 "the updateConfig mutation should have been accepted, got: {response}"
             );
+        }
+
+        async fn assert_config_query(
+            process: &ProcessContext,
+            addr: SocketAddr,
+            expected: &ConfigVisible,
+        ) {
+            let tls = tls_reload::get_current_tls_material(&process.tls_watch);
+            let client = super::reload_https_server_tests::build_mtls_client(
+                &tls.cert_pem,
+                &tls.key_pem,
+                &tls.ca_pem,
+            );
+            let response: serde_json::Value = client.post(format!("https://{addr}/graphql"))
+                .json(&serde_json::json!({"query": "{ config { dataDir ackTransmission maxOpenFiles numOfThread } }"}))
+                .send().await.unwrap().json().await.unwrap();
+            assert!(response.get("errors").is_none(), "{response}");
+            let config = &response["data"]["config"];
+            assert_eq!(config["dataDir"], expected.data_dir.to_str().unwrap());
+            assert_eq!(config["ackTransmission"], expected.ack_transmission);
+            assert_eq!(config["maxOpenFiles"], expected.max_open_files);
+            assert_eq!(config["numOfThread"], expected.num_of_thread);
+        }
+
+        #[tokio::test]
+        async fn store_open_failures_restore_last_successful_update_repeatedly() {
+            let dir = tempdir().unwrap();
+            let mut fixture = config_update_fixture(dir.path());
+            let first = fixture.settings.config.visible.clone();
+            let mut previous = first.clone();
+            previous.ack_transmission += 1;
+            let cfg_path = fixture.settings.cfg_path.clone();
+            let backup_path = Path::new(&cfg_path).with_extension("toml.bak");
+            let bad_compression = dir.path().join("bad-compression");
+            let bad_version = dir.path().join("bad-version");
+            let locked = dir.path().join("locked");
+            for path in [&bad_compression, &bad_version, &locked] {
+                fs::create_dir(path).unwrap();
+            }
+            fs::write(bad_compression.join("COMPRESSION"), "enabled").unwrap();
+            fs::write(bad_version.join("VERSION"), "0.1.0").unwrap();
+            fs::write(locked.join("VERSION"), env!("CARGO_PKG_VERSION")).unwrap();
+            let _lock = test_database(&locked);
+            let (logs, _guard) = capture_logs();
+            let (outcome, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut fixture.settings, &fixture.process, &HostEffects)
+                ),
+                async {
+                    wait_for_logs(&logs, &READINESS_LINES).await;
+                    send_config_change(&fixture.process, fixture.graphql_addr, &first, &previous)
+                        .await;
+                    for line in READINESS_LINES {
+                        wait_for_occurrences(&logs, line, 2).await;
+                    }
+                    for (index, path) in [bad_compression, bad_version, locked]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let before = fs::read(&cfg_path).unwrap();
+                        let mut changed = previous.clone();
+                        changed.data_dir = path;
+                        send_config_change(
+                            &fixture.process,
+                            fixture.graphql_addr,
+                            &previous,
+                            &changed,
+                        )
+                        .await;
+                        for line in READINESS_LINES {
+                            wait_for_occurrences(&logs, line, index + 3).await;
+                        }
+                        assert_eq!(Settings::load(&cfg_path).unwrap().config.visible, previous);
+                        assert_eq!(fs::read(&backup_path).unwrap(), before);
+                        assert_config_query(&fixture.process, fixture.graphql_addr, &previous)
+                            .await;
+                    }
+                    fixture.notify_terminate.notify_one();
+                }
+            );
+            outcome.unwrap().unwrap();
+            assert_eq!(fixture.settings.config.visible, previous);
+            let output = captured(&logs);
+            assert_eq!(
+                output.matches("restoring previous configuration").count(),
+                3,
+                "{output}"
+            );
+            for cause in [
+                "compression validation failed",
+                "migration failed",
+                "opening database",
+            ] {
+                assert!(output.contains(cause), "{output}");
+            }
+        }
+
+        struct RestoreFailure;
+
+        impl LifecycleEffects for RestoreFailure {
+            fn shutdown_database(&self, database: &storage::Database) -> Result<()> {
+                database.shutdown()
+            }
+            fn restore_config(&self, _settings: &Settings) -> Result<()> {
+                bail!("injected restore write failure")
+            }
+        }
+
+        #[tokio::test]
+        async fn failed_restore_write_keeps_previous_memory_and_requires_file_check() {
+            let dir = tempdir().unwrap();
+            let mut fixture = config_update_fixture(dir.path());
+            let previous = fixture.settings.config.visible.clone();
+            let bad = dir.path().join("bad");
+            fs::create_dir(&bad).unwrap();
+            fs::write(bad.join("COMPRESSION"), "enabled").unwrap();
+            let mut changed = previous.clone();
+            changed.data_dir = bad;
+            let cfg_path = fixture.settings.cfg_path.clone();
+            let (logs, _guard) = capture_logs();
+            let (result, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut fixture.settings, &fixture.process, &RestoreFailure)
+                ),
+                async {
+                    wait_for_logs(&logs, &READINESS_LINES).await;
+                    send_config_change(&fixture.process, fixture.graphql_addr, &previous, &changed)
+                        .await;
+                    for line in READINESS_LINES {
+                        wait_for_occurrences(&logs, line, 2).await;
+                    }
+                    assert_config_query(&fixture.process, fixture.graphql_addr, &previous).await;
+                    fixture.notify_terminate.notify_one();
+                }
+            );
+            result.unwrap().unwrap();
+            assert_eq!(fixture.settings.config.visible, previous);
+            assert_eq!(Settings::load(&cfg_path).unwrap().config.visible, changed);
+            let output = captured(&logs);
+            assert!(
+                output.contains("ERROR failed to restore configuration file"),
+                "{output}"
+            );
+            assert!(output.contains("the file needs to be checked"), "{output}");
+        }
+
+        #[tokio::test]
+        async fn failed_restored_generation_exits_without_second_recovery() {
+            let dir = tempdir().unwrap();
+            let mut fixture = config_update_fixture(dir.path());
+            let previous = fixture.settings.config.visible.clone();
+            let bad = dir.path().join("bad");
+            fs::create_dir(&bad).unwrap();
+            fs::write(bad.join("COMPRESSION"), "enabled").unwrap();
+            let mut changed = previous.clone();
+            changed.data_dir = bad;
+            let (logs, _guard) = capture_logs();
+            let (result, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut fixture.settings, &fixture.process, &HostEffects)
+                ),
+                async {
+                    wait_for_logs(&logs, &READINESS_LINES).await;
+                    fs::write(previous.data_dir.join("COMPRESSION"), "enabled").unwrap();
+                    send_config_change(&fixture.process, fixture.graphql_addr, &previous, &changed)
+                        .await;
+                }
+            );
+            let error = result.unwrap().unwrap_err();
+            assert!(error.to_string().contains("compression validation failed"));
+            assert_eq!(fixture.settings.config.visible, previous);
+            assert_eq!(occurrences(&logs, "restoring previous configuration"), 1);
+            assert_eq!(occurrences(&logs, READINESS_LINES[0]), 1);
+        }
+
+        #[tokio::test]
+        async fn update_listener_bind_failure_after_store_open_is_not_recovered() {
+            let dir = tempdir().unwrap();
+            let mut fixture = config_update_fixture(dir.path());
+            let previous = fixture.settings.config.visible.clone();
+            let occupied = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let mut changed = previous.clone();
+            changed.ingest_srv_addr = occupied.local_addr().unwrap();
+            let (logs, _guard) = capture_logs();
+            let (result, ()) = tokio::join!(
+                tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_lifecycle(&mut fixture.settings, &fixture.process, &HostEffects)
+                ),
+                async {
+                    wait_for_logs(&logs, &READINESS_LINES).await;
+                    send_config_change(&fixture.process, fixture.graphql_addr, &previous, &changed)
+                        .await;
+                }
+            );
+            assert!(result.unwrap().is_err());
+            assert_eq!(fixture.settings.config.visible, changed);
+            assert_eq!(occurrences(&logs, "restoring previous configuration"), 0);
         }
 
         /// The lifecycle loops on a configuration update, and the next generation reopens the
