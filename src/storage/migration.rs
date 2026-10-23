@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0,<0.33.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0,<0.34.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -724,7 +724,7 @@ mod tests {
         let breaking = {
             let mut breaking = current.clone();
             if breaking.major == 0 {
-                breaking.minor -= 6;
+                breaking.minor -= 7;
             } else {
                 breaking.major -= 1;
             }
