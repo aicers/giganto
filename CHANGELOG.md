@@ -13,6 +13,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   time since 1970 made the first retention pass delete most stored data, and
   one above about 292 years stopped Giganto.
 
+### Fixed
+
+- GraphQL event connections now return empty edges for `first: 0` and `last: 0`,
+  with the corresponding page-info flag reflecting matching records within the
+  cursor and filter bounds.
+
 ## [0.33.0] - 2026-10-23
 
 ### Added
