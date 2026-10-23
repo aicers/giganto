@@ -38,6 +38,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - `--repair` writes all of its log lines before it exits; the last ones could
   be lost.
+- A raw event that arrives with the same sensor and timestamp as a different
+  stored event of the same kind no longer overwrites it. It is stored at the
+  next free nanosecond. A byte-identical resend is stored once. This applies to
+  network, sysmon, netflow, log, security-log and statistics events.
 
 ## [0.32.0] - 2026-10-23
 
