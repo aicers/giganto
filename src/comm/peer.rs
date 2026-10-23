@@ -102,7 +102,7 @@ fn current_applied_generation(slot: &SharedClientConfig) -> u64 {
 //   within the cluster.
 // - Updates of event protocol structures: Any changes to giganto-client's event protocols require
 //   all Gigantos in the cluster to use the same protocol version for compatibility.
-const PEER_VERSION_REQ: &str = ">=0.32.0,<0.33.0";
+const PEER_VERSION_REQ: &str = ">=0.33.0,<0.34.0";
 const PEER_RETRY_INTERVAL: u64 = 5;
 /// Names the peer subsystem tracker in the drain progress log.
 const PEER_DRAIN_LABEL: &str = "peer";

@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.33.0] - 2026-10-23
 
 ### Added
 
@@ -27,6 +27,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   unchanged, except that colour codes are written only to a terminal. The
   messages about reading the configuration file and restoring it from its
   backup are now log events on standard output.
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<0.34.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<0.34.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.27.0,<0.34.0".
+- Updated `PEER_VERSION_REQ` to ">=0.33.0,<0.34.0".
 
 ### Removed
 
@@ -1356,7 +1360,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.32.0...main
+[0.33.0]: https://github.com/aicers/giganto/compare/0.32.0...0.33.0
 [0.32.0]: https://github.com/aicers/giganto/compare/0.31.0...0.32.0
 [0.31.0]: https://github.com/aicers/giganto/compare/0.30.1...0.31.0
 [0.30.1]: https://github.com/aicers/giganto/compare/0.30.0...0.30.1
