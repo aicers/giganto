@@ -2098,6 +2098,22 @@ async fn a_failed_lookup_ends_the_stream_without_an_ack() {
     harness.shutdown(b"done").await;
 }
 
+/// Returns the timestamp and event of every payload forwarded to
+/// `subscription` so far.
+fn drain_forwarded(subscription: &mut mpsc::UnboundedReceiver<Vec<u8>>) -> Vec<(i64, Vec<u8>)> {
+    let mut forwarded = Vec::new();
+    while let Ok(payload) = subscription.try_recv() {
+        let (time, rest) = payload.split_at(8);
+        let (len, event) = rest.split_at(4);
+        assert_eq!(
+            usize::try_from(u32::from_le_bytes(len.try_into().unwrap())).unwrap(),
+            event.len()
+        );
+        forwarded.push((i64::from_le_bytes(time.try_into().unwrap()), event.to_vec()));
+    }
+    forwarded
+}
+
 #[tokio::test]
 async fn direct_stream_subscribers_receive_the_stored_timestamps() {
     let harness = TestHarness::with_ack_transmission(1).await;
@@ -2130,25 +2146,65 @@ async fn direct_stream_subscribers_receive_the_stored_timestamps() {
     .await;
     assert_eq!(ack, timestamp);
 
-    let mut forwarded = Vec::new();
-    while let Ok(payload) = subscription.try_recv() {
-        let (time, rest) = payload.split_at(8);
-        let (len, event) = rest.split_at(4);
-        assert_eq!(
-            usize::try_from(u32::from_le_bytes(len.try_into().unwrap())).unwrap(),
-            event.len()
-        );
-        forwarded.push((i64::from_le_bytes(time.try_into().unwrap()), event.to_vec()));
-    }
-    // The resend of the first event is forwarded with the time it is stored
-    // under.
+    // The second event is forwarded with the time it is stored under, and the
+    // resend of the first is not forwarded again.
     assert_eq!(
-        forwarded,
-        vec![
-            (timestamp, first.clone()),
-            (timestamp + 1, second),
-            (timestamp, first),
-        ]
+        drain_forwarded(&mut subscription),
+        vec![(timestamp, first), (timestamp + 1, second)]
+    );
+
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn a_resent_batch_is_stored_and_forwarded_once() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (subscriber, mut subscription) = mpsc::unbounded_channel();
+    harness.server.stream_direct_channels.write().await.insert(
+        StreamChannelKey::TimeSeriesGenerator {
+            id: "resend-test".to_string(),
+            target_sensor: test_sensor_name(),
+            record_type: RequestStreamRecord::Http,
+        },
+        subscriber,
+    );
+
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Http)
+        .await
+        .unwrap();
+    let timestamp = next_timestamp();
+    let first = http_event("/first");
+    let second = http_event("/second");
+    let third = http_event("/third");
+    let batch = [
+        (timestamp, first.clone()),
+        (timestamp, second.clone()),
+        (timestamp + 5, third.clone()),
+    ];
+    let expected = vec![
+        (timestamp, first),
+        (timestamp + 1, second),
+        (timestamp + 5, third),
+    ];
+
+    let ack = send_batch_and_receive_ack(&mut send, &mut recv, &batch).await;
+    assert_eq!(ack, timestamp + 5);
+    assert_eq!(drain_forwarded(&mut subscription), expected);
+
+    // A sensor that reconnects before receiving the ACK resends the batch.
+    // It is still acknowledged, so the sensor does not resend it again.
+    let ack = send_batch_and_receive_ack(&mut send, &mut recv, &batch).await;
+    assert_eq!(ack, timestamp + 5);
+    assert_eq!(
+        drain_forwarded(&mut subscription),
+        Vec::new(),
+        "a resent event is not forwarded again"
+    );
+    assert_eq!(
+        stored_timestamps_and_values(&harness.db.http_store().unwrap()),
+        expected
     );
 
     send.finish().expect("failed to shutdown stream");
