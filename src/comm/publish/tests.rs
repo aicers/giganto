@@ -5170,6 +5170,44 @@ async fn a_malformed_stream_request_is_logged_as_an_error() {
     .await;
 }
 
+/// Only a finished stream and an application or local close of the
+/// connection, whether reported directly or through a read, end the control
+/// stream normally; every other failure is still one.
+#[test]
+fn only_a_finished_stream_or_closed_connection_is_a_normal_stream_close() {
+    use giganto_client::publish::PublishError;
+    use quinn::{ApplicationClose, ConnectionError, ReadError};
+
+    let application_closed = || {
+        ConnectionError::ApplicationClosed(ApplicationClose {
+            error_code: 0_u32.into(),
+            reason: (&b""[..]).into(),
+        })
+    };
+
+    for normal in [
+        PublishError::ConnectionClosed,
+        PublishError::ConnectionLost(application_closed()),
+        PublishError::ConnectionLost(ConnectionError::LocallyClosed),
+        PublishError::ReadError(ReadError::ConnectionLost(application_closed())),
+        PublishError::ReadError(ReadError::ConnectionLost(ConnectionError::LocallyClosed)),
+    ] {
+        assert!(super::is_normal_stream_close(&normal), "{normal:?}");
+    }
+
+    for failure in [
+        PublishError::ConnectionLost(ConnectionError::TimedOut),
+        PublishError::ConnectionLost(ConnectionError::Reset),
+        PublishError::ReadError(ReadError::ConnectionLost(ConnectionError::TimedOut)),
+        PublishError::ReadError(ReadError::Reset(0_u32.into())),
+        PublishError::ReadError(ReadError::ClosedStream),
+        PublishError::MessageTooLarge,
+        PublishError::InvalidMessageData,
+    ] {
+        assert!(!super::is_normal_stream_close(&failure), "{failure:?}");
+    }
+}
+
 /// A request that fails is reported under the name of the task that ran it.
 ///
 /// One connection can have many request handlers in flight at once, and a
