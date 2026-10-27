@@ -656,6 +656,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_config_validation_error_precedence() {
+        let mut schema = TestSchema::new();
+        let dir = tempfile::tempdir().unwrap();
+        let old = old_config();
+        let base: crate::settings::ConfigVisible = toml::from_str(&old).unwrap();
+        for (open_files, level_base, threads, subcompactions, field) in [
+            (19, 512, 8, 2, "max_open_files"),
+            (8000, 0, 8, 2, "max_mb_of_level_base"),
+            (8000, 512, 0, 2, "num_of_thread"),
+            (8000, 512, 8, 0, "max_subcompactions"),
+        ] {
+            for (oplog_retention, oplog_error) in [
+                (Duration::ZERO, "oplog_retention must be at least one day"),
+                (
+                    Duration::from_hours(3651 * 24),
+                    "oplog_retention must be at most 3650 days",
+                ),
+            ] {
+                let mut new = crate::settings::ConfigVisible {
+                    data_dir: dir.path().join("missing"),
+                    retention: Duration::from_hours(3651 * 24),
+                    oplog_retention,
+                    max_open_files: open_files,
+                    max_mb_of_level_base: level_base,
+                    num_of_thread: threads,
+                    max_subcompactions: subcompactions,
+                    ..base.clone()
+                };
+                for expected in [
+                    "data directory is invalid",
+                    "retention must be at most 3650 days",
+                    oplog_error,
+                    field,
+                ] {
+                    let res = schema
+                        .execute(&update_config_query(&old, &toml::to_string(&new).unwrap()))
+                        .await;
+                    assert_eq!(res.errors.len(), 1, "{:?}", res.errors);
+                    let message = &res.errors.first().unwrap().message;
+                    assert!(message.starts_with(expected), "{message}");
+                    assert!(schema.config_update_rx.try_recv().is_err());
+
+                    match expected {
+                        "data directory is invalid" => new.data_dir = base.data_dir.clone(),
+                        "retention must be at most 3650 days" => new.retention = base.retention,
+                        _ => new.oplog_retention = base.oplog_retention,
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_update_config_accepts_retention_of_3650_days() {
         let mut schema = TestSchema::new();
         let new_config = old_config().replace("retention = \"100d\"", "retention = \"3650d\"");

@@ -370,6 +370,18 @@ impl ConfigVisible {
     }
 
     pub(crate) fn validate(&self, limits: RocksDbLimits) -> anyhow::Result<()> {
+        if !self.data_dir.exists() || !self.data_dir.is_dir() {
+            bail!("data directory is invalid");
+        }
+        if self.retention > MAX_RETENTION {
+            bail!("retention must be at most 3650 days");
+        }
+        if self.oplog_retention < Duration::from_hours(24) {
+            bail!("oplog_retention must be at least one day");
+        }
+        if self.oplog_retention > MAX_RETENTION {
+            bail!("oplog_retention must be at most 3650 days");
+        }
         macro_rules! check {
             ($field:ident, $range:expr, $suffix:expr) => {{
                 let range = $range;
@@ -393,18 +405,6 @@ impl ConfigVisible {
         check!(max_mb_of_level_base, RocksDbLimits::LEVEL_BASE, "");
         check!(num_of_thread, RocksDbLimits::THREADS, "");
         check!(max_subcompactions, RocksDbLimits::SUBCOMPACTIONS, "");
-        if !self.data_dir.exists() || !self.data_dir.is_dir() {
-            bail!("data directory is invalid");
-        }
-        if self.retention > MAX_RETENTION {
-            bail!("retention must be at most 3650 days");
-        }
-        if self.oplog_retention < Duration::from_hours(24) {
-            bail!("oplog_retention must be at least one day");
-        }
-        if self.oplog_retention > MAX_RETENTION {
-            bail!("oplog_retention must be at most 3650 days");
-        }
         Ok(())
     }
 }
