@@ -69,10 +69,7 @@ use crate::server::{
 use crate::storage::{Database, Direction, RawEventStore, StorageKey};
 use crate::tls_reload::{self, TlsWatch};
 
-// A prerelease version matches only a comparator that names its own
-// major.minor.patch with a prerelease, so the upper bound is this alpha itself:
-// `<0.35.0` would refuse it.
-const PUBLISH_VERSION_REQ: &str = ">=0.28.0,<=0.34.0-alpha.1";
+const PUBLISH_VERSION_REQ: &str = ">=0.28.0,<0.35.0";
 /// Names the publish subsystem tracker in the drain progress log.
 const PUBLISH_DRAIN_LABEL: &str = "publish";
 

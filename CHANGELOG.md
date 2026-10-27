@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.34.0] - 2026-10-28
 
 ### Added
 
@@ -24,10 +24,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   series of one of them takes part in the deletion even if it ingests none of
   the service FQDNs, and a retry of a failed deletion must name every ID of the
   failed one. Stored deletion jobs are migrated to the new format at startup.
-- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<=0.34.0-alpha.1".
-- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<=0.34.0-alpha.1".
-- Updated `COMPATIBLE_VERSION_REQ` to ">=0.34.0-alpha.1,<0.35.0".
-- Updated `PEER_VERSION_REQ` to ">=0.34.0-alpha.1,<0.35.0".
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<0.35.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<0.35.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.34.0,<0.35.0".
+- Updated `PEER_VERSION_REQ` to ">=0.34.0,<0.35.0".
 
 ### Fixed
 
@@ -1398,7 +1398,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.33.0...main
+[0.34.0]: https://github.com/aicers/giganto/compare/0.33.0...0.34.0
 [0.33.0]: https://github.com/aicers/giganto/compare/0.32.0...0.33.0
 [0.32.0]: https://github.com/aicers/giganto/compare/0.31.0...0.32.0
 [0.31.0]: https://github.com/aicers/giganto/compare/0.30.1...0.31.0
