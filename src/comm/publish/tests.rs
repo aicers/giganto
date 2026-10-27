@@ -522,6 +522,32 @@ mod fixtures {
         (capture, guard)
     }
 
+    /// Starts a capture that keeps each line's level and lets debug lines
+    /// through, for tests that assert which level a message was logged at.
+    ///
+    /// Use in tests running on `current_thread`; the subscriber is
+    /// thread-local.
+    pub(super) fn start_leveled_log_capture() -> (LogCapture, tracing::dispatcher::DefaultGuard) {
+        let capture = LogCapture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        (capture, guard)
+    }
+
+    /// Returns the captured lines a leveled capture logged at `level`.
+    pub(super) fn captured_lines_at(capture: &LogCapture, level: &str) -> Vec<String> {
+        String::from_utf8_lossy(&capture.buffer.lock().expect("log capture lock poisoned"))
+            .lines()
+            .filter(|line| line.split_whitespace().nth(1) == Some(level))
+            .map(str::to_string)
+            .collect()
+    }
+
     pub(super) async fn assert_log_contains(capture: &LogCapture, expected: &str) {
         let deadline = Instant::now() + StdDuration::from_secs(1);
         let expected_bytes = expected.as_bytes();
@@ -5045,6 +5071,141 @@ async fn request_stream_semi_supervised_missing_sensor_logs_error() {
         .await;
     })
     .await;
+}
+
+/// The prefix of the line the request-stream task logs when it stops reading
+/// a connection's control stream, whichever level it is logged at.
+const REQUEST_STREAM_END_LOG: &str = "Publish stream request from ";
+
+/// Asserts that a client ending its control stream left no error line behind,
+/// and that the request-stream task logged the end at debug level.
+fn assert_request_stream_ended_quietly(log_capture: &LogCapture) {
+    let errors = captured_lines_at(log_capture, "ERROR");
+    assert!(
+        errors.is_empty(),
+        "a client ending its reads is not an error, got: {errors:#?}"
+    );
+    assert!(
+        captured_lines_at(log_capture, "DEBUG")
+            .iter()
+            .any(|line| line.contains(REQUEST_STREAM_END_LOG)),
+        "the end of the control stream should be logged at debug level"
+    );
+}
+
+/// A client that sends its request and then finishes its send side has ended
+/// the control stream the normal way, and is not reported as a failure.
+#[tokio::test(flavor = "current_thread")]
+async fn a_finished_control_stream_is_not_logged_as_an_error() {
+    let (log_capture, _guard) = start_leveled_log_capture();
+    with_test_harness(|harness| {
+        let log_capture = log_capture.clone();
+        Box::pin(async move {
+            let _subscription = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+            harness
+                .publish
+                .send
+                .finish()
+                .expect("finish the control stream");
+            assert_log_contains(&log_capture, REQUEST_STREAM_END_LOG).await;
+        })
+    })
+    .await;
+
+    assert_request_stream_ended_quietly(&log_capture);
+}
+
+/// A client that closes its connection with an application close has ended
+/// the control stream the normal way, and is not reported as a failure.
+#[tokio::test(flavor = "current_thread")]
+async fn a_closed_connection_is_not_logged_as_an_error() {
+    let (log_capture, _guard) = start_leveled_log_capture();
+    with_test_harness(|harness| {
+        let log_capture = log_capture.clone();
+        Box::pin(async move {
+            let _subscription = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[SENSOR_SEMI_SUPERVISED_ONE],
+            )
+            .await;
+            harness.publish.conn.close(0_u32.into(), b"");
+            assert_log_contains(&log_capture, REQUEST_STREAM_END_LOG).await;
+        })
+    })
+    .await;
+
+    assert_request_stream_ended_quietly(&log_capture);
+}
+
+/// A request the server cannot decode is still a failure, and is logged as an
+/// error rather than as the end of the control stream.
+#[tokio::test(flavor = "current_thread")]
+async fn a_malformed_stream_request_is_logged_as_an_error() {
+    let (log_capture, _guard) = start_leveled_log_capture();
+    with_test_harness(|harness| {
+        let log_capture = log_capture.clone();
+        Box::pin(async move {
+            // No `StreamRequestPayload` variant has this index, so the frame
+            // arrives whole and fails to deserialize.
+            giganto_client::frame::send_raw(&mut harness.publish.send, &[0xff; 4])
+                .await
+                .expect("send a malformed stream request");
+            assert_log_contains(&log_capture, REQUEST_STREAM_END_LOG).await;
+
+            let errors = captured_lines_at(&log_capture, "ERROR");
+            assert!(
+                errors
+                    .iter()
+                    .any(|line| line.contains(REQUEST_STREAM_END_LOG) && line.contains("failed: ")),
+                "a malformed request should be logged as an error, got: {errors:#?}"
+            );
+        })
+    })
+    .await;
+}
+
+/// Only a finished stream and an application or local close of the
+/// connection, whether reported directly or through a read, end the control
+/// stream normally; every other failure is still one.
+#[test]
+fn only_a_finished_stream_or_closed_connection_is_a_normal_stream_close() {
+    use giganto_client::publish::PublishError;
+    use quinn::{ApplicationClose, ConnectionError, ReadError};
+
+    let application_closed = || {
+        ConnectionError::ApplicationClosed(ApplicationClose {
+            error_code: 0_u32.into(),
+            reason: (&b""[..]).into(),
+        })
+    };
+
+    for normal in [
+        PublishError::ConnectionClosed,
+        PublishError::ConnectionLost(application_closed()),
+        PublishError::ConnectionLost(ConnectionError::LocallyClosed),
+        PublishError::ReadError(ReadError::ConnectionLost(application_closed())),
+        PublishError::ReadError(ReadError::ConnectionLost(ConnectionError::LocallyClosed)),
+    ] {
+        assert!(super::is_normal_stream_close(&normal), "{normal:?}");
+    }
+
+    for failure in [
+        PublishError::ConnectionLost(ConnectionError::TimedOut),
+        PublishError::ConnectionLost(ConnectionError::Reset),
+        PublishError::ReadError(ReadError::ConnectionLost(ConnectionError::TimedOut)),
+        PublishError::ReadError(ReadError::Reset(0_u32.into())),
+        PublishError::ReadError(ReadError::ClosedStream),
+        PublishError::MessageTooLarge,
+        PublishError::InvalidMessageData,
+    ] {
+        assert!(!super::is_normal_stream_close(&failure), "{failure:?}");
+    }
 }
 
 /// A request that fails is reported under the name of the task that ran it.

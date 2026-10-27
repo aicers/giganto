@@ -38,7 +38,9 @@ use giganto_client::{
         stream::{RequestStreamRecord, StreamRequestPayload},
     },
 };
-use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig, VarInt};
+use quinn::{
+    Connection, ConnectionError, Endpoint, ReadError, RecvStream, SendStream, ServerConfig, VarInt,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
     select,
@@ -642,13 +644,37 @@ async fn request_stream(
                 }
             }
             Err(e) => {
-                error!("Publish stream request from {conn_sensor} failed: {e:#}");
+                if is_normal_stream_close(&e) {
+                    debug!("Publish stream request from {conn_sensor} ended: {e:#}");
+                } else {
+                    error!("Publish stream request from {conn_sensor} failed: {e:#}");
+                }
                 let _ = recv.stop(VarInt::from_u32(0));
                 break;
             }
         }
     }
     Ok(())
+}
+
+/// Returns whether a failure to read the next stream request is the client
+/// ending its control stream rather than something going wrong.
+///
+/// A client closes a read by finishing its send side, which surfaces as
+/// `ConnectionClosed`, or by closing the connection, which surfaces as a loss
+/// of the connection to an application or local close. Either way the request
+/// loop has nothing left to read, and neither is worth an error line.
+fn is_normal_stream_close(e: &PublishError) -> bool {
+    matches!(
+        e,
+        PublishError::ConnectionClosed
+            | PublishError::ConnectionLost(
+                ConnectionError::ApplicationClosed { .. } | ConnectionError::LocallyClosed
+            )
+            | PublishError::ReadError(ReadError::ConnectionLost(
+                ConnectionError::ApplicationClosed { .. } | ConnectionError::LocallyClosed
+            ))
+    )
 }
 
 /// Names one subscription task after the sensor it serves and, for a time

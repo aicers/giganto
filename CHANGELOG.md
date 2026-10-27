@@ -15,6 +15,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- A publish client that ends its stream requests, by finishing its control
+  stream or closing the connection, is no longer logged as an error. Giganto
+  logs it at debug level instead of reporting `Publish stream request from
+  <sensor> failed: Connection closed by peer` every time a read ends.
 - A byte-identical resend of a stored network event or log is no longer
   forwarded to realtime subscribers a second time, so a live time series no
   longer counts it twice. It is still acknowledged, so the sensor does not
