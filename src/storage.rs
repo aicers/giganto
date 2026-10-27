@@ -3727,47 +3727,26 @@ mod tests {
     /// next pass, with a flag of its own, warns again.
     #[test]
     fn malformed_series_keys_warn_once_per_pass() {
-        use std::io::{self, Write};
         use std::sync::Mutex;
-
-        use tracing_subscriber::fmt::MakeWriter;
 
         const WARNING: &str = "Skipping periodic time series keys without a policy ID separator";
 
-        #[derive(Clone, Default)]
-        struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
-        impl Write for CaptureBuf {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> MakeWriter<'a> for CaptureBuf {
-            type Writer = CaptureBuf;
-            fn make_writer(&'a self) -> Self::Writer {
-                self.clone()
-            }
-        }
-
-        let (_dir, db) = setup_db();
+        let (dir, db) = setup_db();
         let cutoff = PRESSURE_CUTOFFS.data;
         let store = db.periodic_time_series_store().unwrap();
         store.append(b"abc", b"malformed").unwrap();
         store.append(b"abd", b"malformed").unwrap();
 
         crate::cancellation::hold_callsite_interest_open();
-        let logs = CaptureBuf::default();
+        let log_path = dir.path().join("retention.log");
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
             .without_time()
-            .with_writer(logs.clone())
+            .with_writer(Mutex::new(std::fs::File::create(&log_path).unwrap()))
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
         let warnings = || {
-            String::from_utf8(logs.0.lock().unwrap().clone())
+            std::fs::read_to_string(&log_path)
                 .unwrap()
                 .matches(WARNING)
                 .count()
