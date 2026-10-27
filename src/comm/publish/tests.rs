@@ -9788,4 +9788,16 @@ mod shutdown {
     }
 }
 
+#[test]
+fn publish_version_req_admits_earlier_clients_and_this_version() {
+    let req = semver::VersionReq::parse(super::PUBLISH_VERSION_REQ).unwrap();
+    for admitted in ["0.28.0", "0.33.0", PROTOCOL_VERSION] {
+        assert!(
+            req.matches(&semver::Version::parse(admitted).unwrap()),
+            "{admitted} must be admitted"
+        );
+    }
+    assert!(!req.matches(&semver::Version::parse("0.27.0").unwrap()));
+}
+
 mod multi_source;

@@ -2070,7 +2070,7 @@ type Mutation {
 	"""
 	Starts asynchronous deletion of customer-owned data across the Giganto cluster.
 	"""
-	deleteCustomerData(serviceFqdnList: [String!]!, customerId: StringNumberU32!, requestFromPeer: Boolean): CustomerDataDeletionRequestStatus!
+	deleteCustomerData(serviceFqdnList: [String!]!, customerId: StringNumberU32!, requestFromPeer: Boolean, periodicTimeSeriesIds: [String!]): CustomerDataDeletionRequestStatus!
 }
 
 type Netflow5RawEvent {

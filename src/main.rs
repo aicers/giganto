@@ -618,6 +618,7 @@ async fn recover_inprogress_deletions(
         info!(
             customer_id,
             target_count = job.service_fqdn_list.len(),
+            periodic_time_series_count = job.periodic_time_series_ids.len(),
             requested_at = job.requested_at,
             "Starting recovered customer data deletion"
         );
@@ -2591,6 +2592,7 @@ mod tests {
             status: storage::CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: Vec::new(),
         }
     }
 
@@ -2691,6 +2693,74 @@ mod tests {
                 .expect("read customer event"),
             None,
             "recovery must delete data for the persisted target"
+        );
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn recovery_deletes_stored_periodic_time_series_ids() {
+        const CUSTOMER_ID: u32 = 44;
+        let target = "piglet.series-recovery.example.test";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let series_key = |id: &str| {
+            let mut key = id.as_bytes().to_vec();
+            key.push(0);
+            key.extend_from_slice(&1_i64.to_be_bytes());
+            key
+        };
+        for id in ["3", "30"] {
+            database
+                .put_cf_for_test("periodic time series", &series_key(id), b"series")
+                .expect("seed periodic time series");
+        }
+        database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .create(
+                CUSTOMER_ID,
+                &storage::CustomerDataDeletion {
+                    periodic_time_series_ids: vec!["3".to_string()],
+                    ..in_progress_job(target, 123)
+                },
+            )
+            .expect("seed interrupted job");
+
+        let tracker = TaskTracker::new();
+        recover_with_state(
+            &database,
+            &tracker,
+            &Arc::new(CustomerDeletionCoordinator::new()),
+            &recovery_state(&database),
+            None,
+        )
+        .await
+        .expect("recover interrupted deletion");
+
+        let recovered = database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .get(CUSTOMER_ID)
+            .expect("read recovered job")
+            .expect("job remains recorded");
+        assert_eq!(
+            recovered.status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        assert_eq!(recovered.periodic_time_series_ids, ["3"]);
+        assert_eq!(
+            database
+                .get_cf_for_test("periodic time series", &series_key("3"))
+                .expect("read periodic time series"),
+            None,
+            "recovery must delete the series of the persisted ID"
+        );
+        assert!(
+            database
+                .get_cf_for_test("periodic time series", &series_key("30"))
+                .expect("read periodic time series")
+                .is_some()
         );
         assert_eq!(tracker.pending_count(), 0);
     }

@@ -6,11 +6,12 @@ use serde::{Deserialize, Serialize};
 use crate::{
     comm::ingest::implement::EventFilter,
     storage::{
-        Bootp as BootpFromV26, Dns as DnsFromV26, Ftp as FtpFromV26, Kerberos as KerberosFromV26,
-        Ldap as LdapFromV26, Mqtt as MqttFromV26, Netflow5 as Netflow5FromV23,
-        Netflow9 as Netflow9FromV23, Nfs as NfsFromV26, Ntlm as NtlmFromV26, OpLog as OpLogFromV24,
-        Rdp as RdpFromV26, SecuLog as SecuLogFromV23, Smb as SmbFromV26, Smtp as SmtpFromV26,
-        Ssh as SshFromV26, Tls as TlsFromV26,
+        Bootp as BootpFromV26, CustomerDataDeletion as CustomerDataDeletionFromV34,
+        CustomerDataDeletionStatus, Dns as DnsFromV26, Ftp as FtpFromV26,
+        Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
+        Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
+        Ntlm as NtlmFromV26, OpLog as OpLogFromV24, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
+        Smb as SmbFromV26, Smtp as SmtpFromV26, Ssh as SshFromV26, Tls as TlsFromV26,
     },
 };
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -1033,6 +1034,30 @@ impl MigrationNew<DhcpBeforeV26> for DhcpFromV26 {
             class_id: old_data.class_id,
             client_id_type: old_data.client_id_type,
             client_id: old_data.client_id,
+        }
+    }
+}
+
+/// A customer data deletion job as stored before `periodic_time_series_ids`
+/// was added.
+#[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct CustomerDataDeletionBeforeV34 {
+    pub service_fqdn_list: Vec<String>,
+    pub requested_at: i64,
+    pub status: CustomerDataDeletionStatus,
+    pub completed_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+impl From<CustomerDataDeletionBeforeV34> for CustomerDataDeletionFromV34 {
+    fn from(old: CustomerDataDeletionBeforeV34) -> Self {
+        Self {
+            service_fqdn_list: old.service_fqdn_list,
+            requested_at: old.requested_at,
+            status: old.status,
+            completed_at: old.completed_at,
+            error: old.error,
+            periodic_time_series_ids: Vec::new(),
         }
     }
 }
