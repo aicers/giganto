@@ -103,7 +103,7 @@ const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 const CUSTOMER_DELETION_JOBS_CF: &str = "customer deletion jobs";
 /// The column family holding periodic time series, keyed by sampling-policy
 /// ID and window start rather than by sensor.
-const PERIODIC_TIME_SERIES_CF: &str = "periodic time series";
+pub(crate) const PERIODIC_TIME_SERIES_CF: &str = "periodic time series";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CustomerDataDeletionStatus {
@@ -119,6 +119,24 @@ pub struct CustomerDataDeletion {
     pub status: CustomerDataDeletionStatus,
     pub completed_at: Option<i64>,
     pub error: Option<String>,
+    /// The sampling-policy IDs whose periodic time series the job deletes.
+    ///
+    /// Kept last, so that a job already migrated to this format still reads
+    /// as the previous one if the migration step runs over it again, and is
+    /// written back unchanged.
+    pub periodic_time_series_ids: Vec<String>,
+}
+
+/// Returns the key range `[prefix 0x00, prefix 0x01)`, which holds every key
+/// whose first component, before the `0x00` separator, is exactly `prefix`.
+fn key_prefix_range(prefix: &str) -> (Vec<u8>, Vec<u8>) {
+    let mut from = Vec::with_capacity(prefix.len() + 1);
+    from.extend_from_slice(prefix.as_bytes());
+    from.push(0x00);
+    let mut to = Vec::with_capacity(prefix.len() + 1);
+    to.extend_from_slice(prefix.as_bytes());
+    to.push(0x01);
+    (from, to)
 }
 
 // Not a `sensor`+`time` event.
@@ -440,12 +458,7 @@ impl Database {
         service_fqdn: &str,
         cf_names: &[&str],
     ) -> Result<()> {
-        let mut from = Vec::with_capacity(service_fqdn.len() + 1);
-        from.extend_from_slice(service_fqdn.as_bytes());
-        from.push(0x00);
-        let mut to = Vec::with_capacity(service_fqdn.len() + 1);
-        to.extend_from_slice(service_fqdn.as_bytes());
-        to.push(0x01);
+        let (from, to) = key_prefix_range(service_fqdn);
 
         let mut batch = WriteBatch::default();
         for cf_name in cf_names {
@@ -454,6 +467,31 @@ impl Database {
         }
         self.db.write(batch)?;
         Ok(())
+    }
+
+    /// Returns whether the periodic time series column family holds at least
+    /// one window of the sampling policy `id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be accessed or read.
+    pub(crate) fn has_periodic_time_series(&self, id: &str) -> Result<bool> {
+        let (from, to) = key_prefix_range(id);
+
+        let cf = self.get_cf_handle(PERIODIC_TIME_SERIES_CF)?;
+        let mut read_options = ReadOptions::default();
+        read_options.set_iterate_upper_bound(to);
+        let first = self
+            .db
+            .iterator_cf_opt(
+                cf,
+                read_options,
+                rocksdb::IteratorMode::From(&from, Direction::Forward),
+            )
+            .next()
+            .transpose()
+            .with_context(|| format!("cannot read periodic time series of policy {id}"))?;
+        Ok(first.is_some())
     }
 
     #[cfg(test)]
@@ -2020,6 +2058,7 @@ mod tests {
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: vec!["3".to_string(), "10".to_string()],
         };
 
         store.create(customer_id, &job).unwrap();
@@ -2049,6 +2088,10 @@ mod tests {
         let stored: CustomerDataDeletion = bincode::deserialize(&entries[0].1).unwrap();
         assert_eq!(stored.service_fqdn_list, job.service_fqdn_list);
         assert_eq!(stored.requested_at, requested_at);
+        assert_eq!(
+            stored.periodic_time_series_ids,
+            job.periodic_time_series_ids
+        );
 
         let completed_at = DateTime::now().timestamp_nanos_opt().unwrap();
         let failed = CustomerDataDeletion {
@@ -2062,6 +2105,29 @@ mod tests {
 
         store.delete(customer_id).unwrap();
         assert!(store.get(customer_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn periodic_time_series_probe_matches_only_the_exact_policy_id() {
+        let (_dir, db) = setup_db();
+        for id in ["3", "30", "03"] {
+            let mut key = id.as_bytes().to_vec();
+            key.push(0x00);
+            key.extend_from_slice(&1_i64.to_be_bytes());
+            db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, &key, b"series")
+                .unwrap();
+        }
+        // A key that starts with the ID but is not followed by the separator
+        // belongs to no window of that ID.
+        db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, b"7", b"bare")
+            .unwrap();
+
+        assert!(db.has_periodic_time_series("3").unwrap());
+        assert!(db.has_periodic_time_series("30").unwrap());
+        assert!(db.has_periodic_time_series("03").unwrap());
+        assert!(!db.has_periodic_time_series("1").unwrap());
+        assert!(!db.has_periodic_time_series("300").unwrap());
+        assert!(!db.has_periodic_time_series("7").unwrap());
     }
 
     fn insert_conn(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64, value: &[u8]) {

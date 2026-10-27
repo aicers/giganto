@@ -16,16 +16,17 @@ use tracing::info;
 
 use super::{Database, data_dir_to_db_path};
 use crate::storage::migration::migration_structures::{
-    BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DceRpcFromV26, DhcpBeforeV26,
-    DhcpFromV26, DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26,
-    LdapBeforeV26, MigrationNew, MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26,
-    NtlmBeforeV26, OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26,
-    SshBeforeV26, TlsBeforeV26,
+    BootpBeforeV26, ConnFromV21BeforeV26, CustomerDataDeletionBeforeV34, DceRpcBeforeV26,
+    DceRpcFromV26, DhcpBeforeV26, DhcpFromV26, DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26,
+    KerberosBeforeV26, LdapBeforeV26, MigrationNew, MqttBeforeV26, Netflow5BeforeV23,
+    Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26, OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23,
+    SmbBeforeV26, SmtpBeforeV26, SshBeforeV26, TlsBeforeV26,
 };
 use crate::{
     graphql::TIMESTAMP_SIZE,
     storage::{
-        Bootp as BootpFromV26, Conn as ConnFromV26, DbOptions, DceRpc as DceRpcFromV27,
+        Bootp as BootpFromV26, CUSTOMER_DELETION_JOBS_CF, Conn as ConnFromV26,
+        CustomerDataDeletion as CustomerDataDeletionFromV34, DbOptions, DceRpc as DceRpcFromV27,
         Dhcp as DhcpFromV27, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
         Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
         Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
@@ -35,7 +36,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.27.0,<0.34.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.34.0-alpha.1,<0.35.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -71,6 +72,11 @@ pub fn migrate_data_dir(data_dir: &Path, db_opts: &DbOptions) -> Result<()> {
             VersionReq::parse(">=0.26.0,<0.27.0").expect("valid version requirement"),
             Version::parse("0.27.0").expect("valid version"),
             migrate_0_26_to_0_27,
+        ),
+        (
+            VersionReq::parse(">=0.27.0,<0.34.0").expect("valid version requirement"),
+            Version::parse("0.34.0-alpha.1").expect("valid version"),
+            migrate_0_27_to_0_34,
         ),
     ];
 
@@ -157,6 +163,34 @@ fn migrate_0_26_to_0_27(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
     let db = Database::open(db_path, db_opts)?;
     migrate_dce_rpc_0_26_to_0_27(&db)?;
     migrate_dhcp_0_26_to_0_27(&db)?;
+    Ok(())
+}
+
+fn migrate_0_27_to_0_34(db_path: &Path, db_opts: &DbOptions) -> Result<()> {
+    let db = Database::open(db_path, db_opts)?;
+    migrate_customer_deletion_jobs_0_27_to_0_34(&db)?;
+    Ok(())
+}
+
+/// Rewrites every stored customer data deletion job with an empty
+/// `periodic_time_series_ids`.
+///
+/// The jobs are rewritten in one batch, so a failure leaves every one of them
+/// in the format it was read in.
+fn migrate_customer_deletion_jobs_0_27_to_0_34(db: &Database) -> Result<()> {
+    let cf = db.get_cf_handle(CUSTOMER_DELETION_JOBS_CF)?;
+    let mut batch = WriteBatch::default();
+    for entry in db.db.iterator_cf(cf, rocksdb::IteratorMode::Start) {
+        let (key, val) = entry.context("cannot iterate customer deletion jobs")?;
+        let old = bincode::deserialize::<CustomerDataDeletionBeforeV34>(&val)
+            .context("invalid customer deletion job")?;
+        let new: CustomerDataDeletionFromV34 = old.into();
+        batch.put_cf(cf, &key, bincode::serialize(&new)?);
+    }
+    db.db
+        .write(batch)
+        .context("cannot write migrated customer deletion jobs")?;
+    info!("Completed migration for customer deletion jobs");
     Ok(())
 }
 
@@ -549,19 +583,22 @@ mod tests {
     use super::COMPATIBLE_VERSION_REQ;
     use crate::datetime::DateTime;
     use crate::storage::{
-        Bootp as BootpFromV26, Conn as ConnFromV26, Database, DbOptions, DceRpc as DceRpcFromV27,
-        Dhcp as DhcpFromV27, Dns as DnsFromV26, Ftp as FtpFromV26, Http as HttpFromV26,
-        Kerberos as KerberosFromV26, Ldap as LdapFromV26, Mqtt as MqttFromV26,
-        Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23, Nfs as NfsFromV26,
-        Ntlm as NtlmFromV26, OpLog as OpLogFromV24, RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore,
-        Rdp as RdpFromV26, SecuLog as SecuLogFromV23, Smb as SmbFromV26, Smtp as SmtpFromV26,
-        Ssh as SshFromV26, StorageKey, Tls as TlsFromV26, data_dir_to_db_path, migrate_data_dir,
+        Bootp as BootpFromV26, CUSTOMER_DELETION_JOBS_CF, Conn as ConnFromV26,
+        CustomerDataDeletion as CustomerDataDeletionFromV34, CustomerDataDeletionStatus, Database,
+        DbOptions, DceRpc as DceRpcFromV27, Dhcp as DhcpFromV27, Dns as DnsFromV26,
+        Ftp as FtpFromV26, Http as HttpFromV26, Kerberos as KerberosFromV26, Ldap as LdapFromV26,
+        Mqtt as MqttFromV26, Netflow5 as Netflow5FromV23, Netflow9 as Netflow9FromV23,
+        Nfs as NfsFromV26, Ntlm as NtlmFromV26, OpLog as OpLogFromV24,
+        RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore, Rdp as RdpFromV26, SecuLog as SecuLogFromV23,
+        Smb as SmbFromV26, Smtp as SmtpFromV26, Ssh as SshFromV26, StorageKey, Tls as TlsFromV26,
+        data_dir_to_db_path, migrate_data_dir,
         migration::migration_structures::{
-            BootpBeforeV26, ConnFromV21BeforeV26, DceRpcBeforeV26, DceRpcFromV26, DhcpBeforeV26,
-            DhcpFromV26, DnsBeforeV26, FtpBeforeV26, HttpFromV21BeforeV26, KerberosBeforeV26,
-            LdapBeforeV26, MigrationNew, MqttBeforeV26, Netflow5BeforeV23, Netflow9BeforeV23,
-            NfsBeforeV26, NtlmBeforeV26, OpLogBeforeV24, RdpBeforeV26, SecuLogBeforeV23,
-            SmbBeforeV26, SmtpBeforeV26, SshBeforeV26, TlsBeforeV26,
+            BootpBeforeV26, ConnFromV21BeforeV26, CustomerDataDeletionBeforeV34, DceRpcBeforeV26,
+            DceRpcFromV26, DhcpBeforeV26, DhcpFromV26, DnsBeforeV26, FtpBeforeV26,
+            HttpFromV21BeforeV26, KerberosBeforeV26, LdapBeforeV26, MigrationNew, MqttBeforeV26,
+            Netflow5BeforeV23, Netflow9BeforeV23, NfsBeforeV26, NtlmBeforeV26, OpLogBeforeV24,
+            RdpBeforeV26, SecuLogBeforeV23, SmbBeforeV26, SmtpBeforeV26, SshBeforeV26,
+            TlsBeforeV26,
         },
         rocksdb_options,
     };
@@ -2577,5 +2614,118 @@ mod tests {
             options: Vec::new(),
         };
         assert_eq!(expected, migrated);
+    }
+
+    fn put_old_customer_deletion_job(
+        db: &Database,
+        customer_id: u32,
+        job: &CustomerDataDeletionBeforeV34,
+    ) {
+        let cf = db.get_cf_handle(CUSTOMER_DELETION_JOBS_CF).unwrap();
+        db.db
+            .put_cf(
+                cf,
+                customer_id.to_be_bytes(),
+                bincode::serialize(job).unwrap(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn migrate_0_27_to_0_34_customer_deletion_jobs() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+        let in_progress = CustomerDataDeletionBeforeV34 {
+            service_fqdn_list: vec!["piglet.node1.example.test".to_string()],
+            requested_at: 10,
+            status: CustomerDataDeletionStatus::InProgress,
+            completed_at: None,
+            error: None,
+        };
+        let failed = CustomerDataDeletionBeforeV34 {
+            service_fqdn_list: vec![
+                "piglet.node2.example.test".to_string(),
+                "reproduce.node2.example.test".to_string(),
+            ],
+            requested_at: 20,
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(30),
+            error: Some("disk failure".to_string()),
+        };
+        put_old_customer_deletion_job(&db, 1, &in_progress);
+        put_old_customer_deletion_job(&db, 2, &failed);
+        assert!(
+            db.customer_deletion_job_store().unwrap().get(1).is_err(),
+            "a job of the previous format must not read as the current one"
+        );
+
+        super::migrate_customer_deletion_jobs_0_27_to_0_34(&db).unwrap();
+
+        let expected = vec![
+            (
+                1,
+                CustomerDataDeletionFromV34 {
+                    service_fqdn_list: in_progress.service_fqdn_list.clone(),
+                    requested_at: in_progress.requested_at,
+                    status: in_progress.status,
+                    completed_at: in_progress.completed_at,
+                    error: in_progress.error.clone(),
+                    periodic_time_series_ids: Vec::new(),
+                },
+            ),
+            (
+                2,
+                CustomerDataDeletionFromV34 {
+                    service_fqdn_list: failed.service_fqdn_list.clone(),
+                    requested_at: failed.requested_at,
+                    status: failed.status,
+                    completed_at: failed.completed_at,
+                    error: failed.error.clone(),
+                    periodic_time_series_ids: Vec::new(),
+                },
+            ),
+        ];
+        let store = db.customer_deletion_job_store().unwrap();
+        assert_eq!(store.list_all().unwrap(), expected);
+
+        // A step that runs again over jobs it already migrated leaves them
+        // as they are.
+        super::migrate_customer_deletion_jobs_0_27_to_0_34(&db).unwrap();
+        assert_eq!(store.list_all().unwrap(), expected);
+    }
+
+    #[test]
+    fn migrate_data_dir_from_0_33_reads_stored_job_with_empty_series_ids() {
+        let data_dir = tempfile::tempdir().unwrap();
+        mock_version_file(&data_dir, "0.33.0");
+        let db_path = data_dir_to_db_path(data_dir.path());
+        let old = CustomerDataDeletionBeforeV34 {
+            service_fqdn_list: vec!["reproduce.node1.example.test".to_string()],
+            requested_at: 40,
+            status: CustomerDataDeletionStatus::Succeeded,
+            completed_at: Some(50),
+            error: None,
+        };
+        {
+            let db = Database::open(&db_path, &DbOptions::default()).unwrap();
+            put_old_customer_deletion_job(&db, 7, &old);
+        }
+
+        migrate_data_dir(data_dir.path(), &DbOptions::default()).unwrap();
+
+        let version = fs::read_to_string(data_dir.path().join("VERSION")).unwrap();
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        let db = Database::open(&db_path, &DbOptions::default()).unwrap();
+        assert_eq!(
+            db.customer_deletion_job_store().unwrap().get(7).unwrap(),
+            Some(CustomerDataDeletionFromV34 {
+                service_fqdn_list: old.service_fqdn_list,
+                requested_at: old.requested_at,
+                status: old.status,
+                completed_at: old.completed_at,
+                error: old.error,
+                periodic_time_series_ids: Vec::new(),
+            })
+        );
     }
 }

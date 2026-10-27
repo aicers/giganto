@@ -3960,3 +3960,15 @@ fn ingest_run_ends_in_the_shutdown_tail() {
         "`run` should end in one unconditional call to `shutdown_ingest`"
     );
 }
+
+#[test]
+fn ingest_version_req_admits_earlier_sensors_and_this_version() {
+    let req = semver::VersionReq::parse(super::INGEST_VERSION_REQ).unwrap();
+    for admitted in ["0.27.0", "0.33.0", PROTOCOL_VERSION] {
+        assert!(
+            req.matches(&semver::Version::parse(admitted).unwrap()),
+            "{admitted} must be admitted"
+        );
+    }
+    assert!(!req.matches(&semver::Version::parse("0.26.0").unwrap()));
+}

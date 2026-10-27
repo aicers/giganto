@@ -6,12 +6,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `deleteCustomerData` takes an optional `periodicTimeSeriesIds`, the
+  sampling-policy IDs of the customer's periodic time series. Each ID must be
+  one or more ASCII decimal digits. `serviceFqdnList` may be empty when it is
+  given, for a customer with sampling policies but no Sensor.
+
 ### Changed
 
 - **Breaking.** `retention` must be at most 3650 days; Giganto refuses a larger
   value at startup and in `updateConfig`. Previously a period longer than the
   time since 1970 made the first retention pass delete most stored data, and
   one above about 292 years stopped Giganto.
+- Customer data deletion now also deletes the periodic time series of the
+  sampling-policy IDs given in `periodicTimeSeriesIds`. A node that holds a
+  series of one of them takes part in the deletion even if it ingests none of
+  the service FQDNs, and a retry of a failed deletion must name every ID of the
+  failed one. Stored deletion jobs are migrated to the new format at startup.
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<=0.34.0-alpha.1".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<=0.34.0-alpha.1".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.34.0-alpha.1,<0.35.0".
+- Updated `PEER_VERSION_REQ` to ">=0.34.0-alpha.1,<0.35.0".
 
 ### Fixed
 

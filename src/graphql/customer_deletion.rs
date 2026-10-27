@@ -33,6 +33,7 @@ use crate::{
     datetime::DateTime,
     storage::{
         CustomerDataDeletion, CustomerDataDeletionStatus, CustomerDeletionJobStore, Database,
+        PERIODIC_TIME_SERIES_CF,
         deletion_coordination::{CustomerDeletionCoordinator, DeletionBlocked, DeletionGuard},
     },
 };
@@ -45,11 +46,13 @@ const PEER_DELETE_CUSTOMER_DATA_MUTATION: &str = r"
         $serviceFqdnList: [String!]!
         $customerId: StringNumberU32!
         $requestFromPeer: Boolean
+        $periodicTimeSeriesIds: [String!]
     ) {
         deleteCustomerData(
             serviceFqdnList: $serviceFqdnList
             customerId: $customerId
             requestFromPeer: $requestFromPeer
+            periodicTimeSeriesIds: $periodicTimeSeriesIds
         )
     }
 ";
@@ -419,6 +422,7 @@ struct PeerDeletionMutationVariables {
     service_fqdn_list: Vec<String>,
     customer_id: String,
     request_from_peer: bool,
+    periodic_time_series_ids: Vec<String>,
 }
 
 #[cfg(feature = "cluster")]
@@ -478,6 +482,7 @@ async fn request_delete_customer_data_from_peer(
     ctx: &Context<'_>,
     endpoint: SocketAddr,
     service_fqdn_list: Vec<String>,
+    periodic_time_series_ids: Vec<String>,
     customer_id: u32,
 ) -> Result<CustomerDataDeletionRequestStatus> {
     let body = graphql_client::QueryBody {
@@ -485,6 +490,7 @@ async fn request_delete_customer_data_from_peer(
             service_fqdn_list,
             customer_id: customer_id.to_string(),
             request_from_peer: true,
+            periodic_time_series_ids,
         },
         query: PEER_DELETE_CUSTOMER_DATA_MUTATION,
         operation_name: "DeleteCustomerDataForPeer",
@@ -655,19 +661,29 @@ impl CustomerDeletionMutation {
     // store exactly as it found it.
     //
     // None of the three is reached by a node that holds neither a job for this
-    // customer nor a sensor named in the request. Such a node would have
-    // nothing to do even with the store to itself, so #1675 has it answer
+    // customer, nor a sensor named in the request, nor a periodic time series
+    // of a sampling policy named in it. Such a node would have nothing to do
+    // even with the store to itself, so #1675 has it answer
     // `NO_LOCAL_TARGET_ON_THIS_NODE` ahead of the maintenance state: telling a
     // caller to retry after shutdown or after retention would send it back for
     // an answer that can never change.
+    //
+    // Periodic time series carry no sensor or customer, so they are deleted by
+    // the sampling-policy IDs in `periodicTimeSeriesIds`, which only the
+    // Central Manager can map to a customer. The Time Series Generators that
+    // produce those IDs must have stopped producing them before the request is
+    // made: a window written after the deletion is not deleted by it, and is
+    // left for retention to remove.
     async fn delete_customer_data(
         &self,
         ctx: &Context<'_>,
         service_fqdn_list: Vec<String>,
         customer_id: StringNumberU32,
         request_from_peer: Option<bool>,
+        periodic_time_series_ids: Option<Vec<String>>,
     ) -> Result<CustomerDataDeletionRequestStatus> {
-        let provided_targets = validate_service_fqdn_list(service_fqdn_list)?;
+        let (provided_targets, provided_series_ids) =
+            validate_deletion_targets(service_fqdn_list, periodic_time_series_ids)?;
         #[cfg(not(feature = "cluster"))]
         let _ = request_from_peer;
 
@@ -675,16 +691,18 @@ impl CustomerDeletionMutation {
         if !request_from_peer.unwrap_or_default() {
             let endpoints = peer_graphql_endpoints(ctx).await?;
             let local_targets = provided_targets.clone();
+            let local_series_ids = provided_series_ids.clone();
             let peer_requests = endpoints.iter().map(|(_, endpoint)| {
                 request_delete_customer_data_from_peer(
                     ctx,
                     *endpoint,
                     provided_targets.clone(),
+                    provided_series_ids.clone(),
                     customer_id.0,
                 )
             });
             let (local_response, peer_responses) = futures_util::future::join(
-                delete_customer_data_locally(ctx, local_targets, customer_id.0),
+                delete_customer_data_locally(ctx, local_targets, local_series_ids, customer_id.0),
                 join_all(peer_requests),
             )
             .await;
@@ -698,13 +716,15 @@ impl CustomerDeletionMutation {
             return aggregate_deletion_request_statuses(node_responses);
         }
 
-        delete_customer_data_locally(ctx, provided_targets, customer_id.0).await
+        delete_customer_data_locally(ctx, provided_targets, provided_series_ids, customer_id.0)
+            .await
     }
 }
 
 async fn delete_customer_data_locally(
     ctx: &Context<'_>,
     provided_targets: Vec<String>,
+    provided_series_ids: Vec<String>,
     customer_id: u32,
 ) -> Result<CustomerDataDeletionRequestStatus> {
     let db = ctx.data::<Database>()?;
@@ -725,6 +745,7 @@ async fn delete_customer_data_locally(
         && local_targets(&provided_targets, &ingest_sensors)
             .await
             .is_empty()
+        && !holds_any_periodic_time_series(db, &provided_series_ids)?
     {
         return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
     }
@@ -766,7 +787,7 @@ async fn delete_customer_data_locally(
     // its decision off and what the job store is put back to if the
     // registration below loses a race with shutdown.
     let previous_job = store.get(customer_id)?;
-    let local_targets = if let Some(job) = &previous_job {
+    let (local_targets, periodic_time_series_ids) = if let Some(job) = &previous_job {
         match job.status {
             // This is the persisted job's answer rather than the
             // coordinator's: an `InProgress` job can outlive the
@@ -780,25 +801,17 @@ async fn delete_customer_data_locally(
                 return Ok(CustomerDataDeletionRequestStatus::AlreadyCompleted);
             }
             CustomerDataDeletionStatus::Failed => {
-                let provided: HashSet<&str> = provided_targets.iter().map(String::as_str).collect();
-                if !job
-                    .service_fqdn_list
-                    .iter()
-                    .all(|target| provided.contains(target.as_str()))
-                {
-                    return Err(
-                        "Retry request must include every service FQDN from the failed job".into(),
-                    );
-                }
-                job.service_fqdn_list.clone()
+                retry_targets(job, &provided_targets, &provided_series_ids)?
             }
         }
     } else {
         let targets = local_targets(&provided_targets, &ingest_sensors).await;
-        if targets.is_empty() {
+        if targets.is_empty() && !holds_any_periodic_time_series(db, &provided_series_ids)? {
             return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
         }
-        targets
+        // Every given ID is stored, not only those with a window here:
+        // deleting the range of an ID with none is a no-op.
+        (targets, provided_series_ids)
     };
 
     let in_progress = CustomerDataDeletion {
@@ -807,6 +820,7 @@ async fn delete_customer_data_locally(
         status: CustomerDataDeletionStatus::InProgress,
         completed_at: None,
         error: None,
+        periodic_time_series_ids,
     };
     if previous_job.is_some() {
         store.update(customer_id, &in_progress)?;
@@ -820,6 +834,7 @@ async fn delete_customer_data_locally(
         db.clone(),
         customer_id,
         in_progress.service_fqdn_list,
+        in_progress.periodic_time_series_ids,
         ingest_sensors,
         runtime_ingest_sensors,
         pcap_sensors,
@@ -831,6 +846,38 @@ async fn delete_customer_data_locally(
         });
     }
     Ok(CustomerDataDeletionRequestStatus::Accepted)
+}
+
+/// The targets a `Failed` retry deletes: those stored with the failed job.
+///
+/// The retry must name every one of them, and whatever else it names is
+/// ignored.
+///
+/// # Errors
+///
+/// Returns an error if the request leaves out a service FQDN or a periodic
+/// time series ID of the failed job.
+fn retry_targets(
+    job: &CustomerDataDeletion,
+    provided_targets: &[String],
+    provided_series_ids: &[String],
+) -> Result<(Vec<String>, Vec<String>)> {
+    let names_all = |stored: &[String], provided: &[String]| {
+        let provided: HashSet<&str> = provided.iter().map(String::as_str).collect();
+        stored.iter().all(|value| provided.contains(value.as_str()))
+    };
+    if !names_all(&job.service_fqdn_list, provided_targets) {
+        return Err("Retry request must include every service FQDN from the failed job".into());
+    }
+    if !names_all(&job.periodic_time_series_ids, provided_series_ids) {
+        return Err(
+            "Retry request must include every periodic time series ID from the failed job".into(),
+        );
+    }
+    Ok((
+        job.service_fqdn_list.clone(),
+        job.periodic_time_series_ids.clone(),
+    ))
 }
 
 /// The service FQDNs of `provided` this node ingests, in the order given.
@@ -845,6 +892,21 @@ async fn local_targets(provided: &[String], ingest_sensors: &IngestSensors) -> V
         .filter(|target| local_sensors.contains(*target))
         .cloned()
         .collect()
+}
+
+/// Returns whether this node holds a periodic time series window of any of
+/// `ids`.
+///
+/// # Errors
+///
+/// Returns an error if the periodic time series column family cannot be read.
+fn holds_any_periodic_time_series(db: &Database, ids: &[String]) -> AnyhowResult<bool> {
+    for id in ids {
+        if db.has_periodic_time_series(id)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Answers a request whose registration the tracker refused.
@@ -930,11 +992,49 @@ fn restore_previous_job(
     }
 }
 
-fn validate_service_fqdn_list(service_fqdn_list: Vec<String>) -> Result<Vec<String>> {
-    if service_fqdn_list.is_empty() {
-        return Err("serviceFqdnList must not be empty".into());
+/// Validates the two target lists of a deletion request, deduplicating each.
+///
+/// `serviceFqdnList` may be empty only when `periodicTimeSeriesIds` is not: a
+/// customer with sampling policies but no Sensor has no event service name.
+fn validate_deletion_targets(
+    service_fqdn_list: Vec<String>,
+    periodic_time_series_ids: Option<Vec<String>>,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let periodic_time_series_ids =
+        validate_periodic_time_series_ids(periodic_time_series_ids.unwrap_or_default())?;
+    if service_fqdn_list.is_empty() && periodic_time_series_ids.is_empty() {
+        return Err(
+            "serviceFqdnList must not be empty unless periodicTimeSeriesIds is given".into(),
+        );
     }
+    let service_fqdn_list = validate_service_fqdn_list(service_fqdn_list)?;
+    Ok((service_fqdn_list, periodic_time_series_ids))
+}
 
+/// Validates the Central Manager's sampling-policy IDs, keeping the first of
+/// each duplicate.
+///
+/// An ID is one or more ASCII decimal digits, so it can contain neither the
+/// key separator `0x00` nor anything that would make its key range reach
+/// another ID's. Leading zeros are kept: `"03"` and `"3"` are distinct IDs.
+fn validate_periodic_time_series_ids(ids: Vec<String>) -> Result<Vec<String>> {
+    let mut seen = HashSet::new();
+    let mut validated = Vec::with_capacity(ids.len());
+    for id in ids {
+        if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(format!(
+                "Invalid periodic time series ID {id:?}: must be one or more ASCII decimal digits"
+            )
+            .into());
+        }
+        if seen.insert(id.clone()) {
+            validated.push(id);
+        }
+    }
+    Ok(validated)
+}
+
+fn validate_service_fqdn_list(service_fqdn_list: Vec<String>) -> Result<Vec<String>> {
     let mut seen = HashSet::new();
     let mut validated = Vec::with_capacity(service_fqdn_list.len());
     for service_fqdn in service_fqdn_list {
@@ -955,22 +1055,31 @@ fn validate_service_fqdn_list(service_fqdn_list: Vec<String>) -> Result<Vec<Stri
             validated.push(service_fqdn);
         }
     }
-    if validated.is_empty() {
-        return Err("serviceFqdnList must contain at least one service FQDN".into());
-    }
     Ok(validated)
 }
 
-fn delete_customer_data_from_db(db: &Database, service_fqdn_list: &[String]) -> AnyhowResult<()> {
+fn delete_customer_data_from_db(
+    db: &Database,
+    service_fqdn_list: &[String],
+    periodic_time_series_ids: &[String],
+) -> AnyhowResult<()> {
     delete_customer_data_with(
         service_fqdn_list,
-        |service_fqdn, cf_names| db.delete_customer_event_ranges(service_fqdn, cf_names),
+        periodic_time_series_ids,
+        |key_prefix, cf_names| db.delete_customer_event_ranges(key_prefix, cf_names),
         |service_fqdn| db.sensors_store()?.delete(service_fqdn),
     )
 }
 
+/// Deletes the event ranges of every service FQDN and the periodic time series
+/// of every sampling-policy ID, then the sensors.
+///
+/// A series is keyed by its ID the way an event is keyed by its sensor, so
+/// `delete_event_ranges` removes `[id 0x00, id 0x01)` from the periodic time
+/// series column family just as it removes a sensor's range elsewhere.
 fn delete_customer_data_with(
     service_fqdn_list: &[String],
+    periodic_time_series_ids: &[String],
     mut delete_event_ranges: impl FnMut(&str, &[&str]) -> AnyhowResult<()>,
     mut delete_sensor: impl FnMut(&str) -> AnyhowResult<()>,
 ) -> AnyhowResult<()> {
@@ -982,6 +1091,11 @@ fn delete_customer_data_with(
         };
         delete_event_ranges(service_fqdn, column_families)
             .with_context(|| format!("cannot delete customer event ranges for {service_fqdn}"))?;
+    }
+
+    for id in periodic_time_series_ids {
+        delete_event_ranges(id, &[PERIODIC_TIME_SERIES_CF])
+            .with_context(|| format!("cannot delete periodic time series of policy {id}"))?;
     }
 
     for service_fqdn in service_fqdn_list {
@@ -1020,6 +1134,7 @@ fn start_customer_deletion_worker(
     db: Database,
     customer_id: u32,
     service_fqdn_list: Vec<String>,
+    periodic_time_series_ids: Vec<String>,
     ingest_sensors: IngestSensors,
     runtime_ingest_sensors: RunTimeIngestSensors,
     pcap_sensors: PcapSensors,
@@ -1032,6 +1147,7 @@ fn start_customer_deletion_worker(
         db,
         customer_id,
         service_fqdn_list,
+        periodic_time_series_ids,
         ingest_sensors,
         runtime_ingest_sensors,
         pcap_sensors,
@@ -1067,6 +1183,7 @@ pub(crate) fn start_customer_deletion_worker_from_stored_job(
         db,
         customer_id,
         job.service_fqdn_list,
+        job.periodic_time_series_ids,
         ingest_sensors,
         runtime_ingest_sensors,
         pcap_sensors,
@@ -1082,6 +1199,7 @@ fn register_customer_deletion_worker(
     db: Database,
     customer_id: u32,
     service_fqdn_list: Vec<String>,
+    periodic_time_series_ids: Vec<String>,
     ingest_sensors: IngestSensors,
     runtime_ingest_sensors: RunTimeIngestSensors,
     pcap_sensors: PcapSensors,
@@ -1097,7 +1215,7 @@ fn register_customer_deletion_worker(
         let worker = tokio::task::spawn_blocking({
             let db = db.clone();
             let targets = service_fqdn_list.clone();
-            move || delete_customer_data_from_db(&db, &targets)
+            move || delete_customer_data_from_db(&db, &targets, &periodic_time_series_ids)
         });
 
         supervise_worker(
@@ -1308,7 +1426,7 @@ mod tests {
         REPRODUCE_COLUMN_FAMILIES, WorkerOutcome, cleanup_runtime_for_targets,
         delete_customer_data_from_db, delete_customer_data_with, refuse_registration,
         restore_previous_job, start_customer_deletion_worker, supervise_worker,
-        validate_service_fqdn_list,
+        validate_deletion_targets, validate_service_fqdn_list,
     };
     #[cfg(feature = "cluster")]
     use super::{
@@ -1330,7 +1448,7 @@ mod tests {
         graphql::tests::TestSchema,
         storage::{
             CustomerDataDeletion, CustomerDataDeletionStatus, Database, DbOptions,
-            deletion_coordination::CustomerDeletionCoordinator,
+            PERIODIC_TIME_SERIES_CF, deletion_coordination::CustomerDeletionCoordinator,
         },
     };
 
@@ -1345,6 +1463,50 @@ mod tests {
                 deleteCustomerData(serviceFqdnList: [{targets}] customerId: "{customer_id}")
             }}"#
         )
+    }
+
+    fn delete_customer_data_with_series_mutation(
+        targets: &[&str],
+        series_ids: &[&str],
+        customer_id: u32,
+    ) -> String {
+        // JSON string escapes are valid GraphQL string escapes, so an ID with
+        // a control character reaches the resolver instead of the parser.
+        let quoted = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| serde_json::to_string(value).unwrap())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let targets = quoted(targets);
+        let series_ids = quoted(series_ids);
+        format!(
+            r#"mutation {{
+                deleteCustomerData(
+                    serviceFqdnList: [{targets}]
+                    customerId: "{customer_id}"
+                    periodicTimeSeriesIds: [{series_ids}]
+                )
+            }}"#
+        )
+    }
+
+    fn series_key(id: &str) -> Vec<u8> {
+        event_key(id, &1_i64.to_be_bytes())
+    }
+
+    fn put_series(db: &Database, ids: &[&str]) {
+        for id in ids {
+            db.put_cf_for_test(PERIODIC_TIME_SERIES_CF, &series_key(id), b"series")
+                .unwrap();
+        }
+    }
+
+    fn series_present(db: &Database, id: &str) -> bool {
+        db.get_cf_for_test(PERIODIC_TIME_SERIES_CF, &series_key(id))
+            .unwrap()
+            .is_some()
     }
 
     async fn customer_data_deletion_result(
@@ -1492,7 +1654,6 @@ mod tests {
     #[test]
     fn rejects_invalid_service_fqdns() {
         let invalid_lists = [
-            vec![],
             vec![""],
             vec!["piglet.node1"],
             vec!["piglet..example.test"],
@@ -1506,6 +1667,52 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn validates_and_deduplicates_periodic_time_series_ids() {
+        let ids = |ids: &[&str]| Some(ids.iter().map(ToString::to_string).collect::<Vec<_>>());
+        let (fqdns, series_ids) = validate_deletion_targets(
+            vec!["piglet.node1.example.test".to_string()],
+            ids(&["3", "10", "3", "03", "0"]),
+        )
+        .unwrap();
+        assert_eq!(fqdns, ["piglet.node1.example.test"]);
+        assert_eq!(series_ids, ["3", "10", "03", "0"]);
+
+        let (fqdns, series_ids) = validate_deletion_targets(Vec::new(), ids(&["7"])).unwrap();
+        assert_eq!(fqdns, Vec::<String>::new());
+        assert_eq!(series_ids, ["7"]);
+
+        let (_, series_ids) =
+            validate_deletion_targets(vec!["piglet.node1.example.test".to_string()], None).unwrap();
+        assert_eq!(series_ids, Vec::<String>::new());
+    }
+
+    #[test]
+    fn rejects_invalid_periodic_time_series_ids_and_empty_targets() {
+        for invalid in ["", "3a", " 3", "3 ", "-3", "+3", "\0", "3\x003", "１"] {
+            let message = validate_deletion_targets(
+                vec!["piglet.node1.example.test".to_string()],
+                Some(vec!["1".to_string(), invalid.to_string()]),
+            )
+            .unwrap_err()
+            .message;
+            assert!(
+                message.contains(&format!("{invalid:?}")),
+                "the refusal must name {invalid:?}: {message}"
+            );
+        }
+
+        assert!(validate_deletion_targets(Vec::new(), None).is_err());
+        assert!(validate_deletion_targets(Vec::new(), Some(Vec::new())).is_err());
+        assert!(
+            validate_deletion_targets(
+                vec!["piglet.node1".to_string()],
+                Some(vec!["7".to_string()])
+            )
+            .is_err()
+        );
     }
 
     #[cfg(feature = "cluster")]
@@ -1708,6 +1915,7 @@ mod tests {
                 "serviceFqdnList": [target],
                 "customerId": customer_id.to_string(),
                 "requestFromPeer": true,
+                "periodicTimeSeriesIds": [],
             },
             "query": PEER_DELETE_CUSTOMER_DATA_MUTATION,
             "operationName": "DeleteCustomerDataForPeer",
@@ -1732,6 +1940,84 @@ mod tests {
 
     #[cfg(feature = "cluster")]
     #[tokio::test]
+    async fn mutation_relays_validated_periodic_time_series_ids_to_peers() {
+        let customer_id = 97;
+        let mut server = Server::new_async().await;
+        let expected_body = serde_json::json!({
+            "variables": {
+                "serviceFqdnList": [],
+                "customerId": customer_id.to_string(),
+                "requestFromPeer": true,
+                "periodicTimeSeriesIds": ["3", "10"],
+            },
+            "query": PEER_DELETE_CUSTOMER_DATA_MUTATION,
+            "operationName": "DeleteCustomerDataForPeer",
+        });
+        let peer = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Json(expected_body))
+            .with_status(200)
+            .with_body(r#"{"data":{"deleteCustomerData":"ACCEPTED"}}"#)
+            .create_async()
+            .await;
+        let schema = TestSchema::new_with_graphql_peer(server.socket_address().port());
+
+        let response = schema
+            .execute(&delete_customer_data_with_series_mutation(
+                &[],
+                &["3", "10", "3"],
+                customer_id,
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        peer.assert_async().await;
+    }
+
+    /// A peer reached through a real GraphQL endpoint parses the relayed
+    /// mutation, IDs included, and deletes the series it holds.
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn peer_receives_periodic_time_series_ids_and_deletes_its_series() {
+        let customer_id = 98;
+        let peer = TestSchema::new_with_ingest_sensors(&[]);
+        put_series(&peer.db, &["3", "30"]);
+
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let acceptor = TcpAcceptor::from_std(listener).unwrap();
+        let app = Route::new().at("/graphql", GraphQL::new(peer.schema.clone()));
+        let server = tokio::spawn(PoemServer::new_with_acceptor(acceptor).run(app));
+        let initiating_node = TestSchema::new_with_graphql_peer(port);
+
+        let response = initiating_node
+            .execute(&delete_customer_data_with_series_mutation(
+                &[],
+                &["3"],
+                customer_id,
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+
+        let completed = wait_for_terminal_job(&peer.db, customer_id).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert_eq!(completed.periodic_time_series_ids, ["3"]);
+        assert!(!series_present(&peer.db, "3"));
+        assert!(series_present(&peer.db, "30"));
+        assert_eq!(
+            job_status(&initiating_node.db, customer_id),
+            None,
+            "the initiating node holds no series of the ID"
+        );
+
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
     async fn relay_retries_failed_job_after_sensor_ownership_removal() {
         let target = "piglet.peer.example.test";
         let customer_id = 96;
@@ -1742,6 +2028,7 @@ mod tests {
             status: CustomerDataDeletionStatus::Failed,
             completed_at: Some(2),
             error: Some("old failure".to_string()),
+            periodic_time_series_ids: Vec::new(),
         };
         peer.db
             .customer_deletion_job_store()
@@ -1916,6 +2203,7 @@ mod tests {
                     status: CustomerDataDeletionStatus::Succeeded,
                     completed_at: Some(local_completed),
                     error: None,
+                    periodic_time_series_ids: Vec::new(),
                 },
             )
             .unwrap();
@@ -1986,6 +2274,7 @@ mod tests {
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: Vec::new(),
         };
         schema
             .db
@@ -2031,6 +2320,7 @@ mod tests {
                     status: CustomerDataDeletionStatus::Succeeded,
                     completed_at: Some(2),
                     error: None,
+                    periodic_time_series_ids: Vec::new(),
                 },
             )
             .unwrap();
@@ -2053,6 +2343,7 @@ mod tests {
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: Vec::new(),
         };
         let succeeded = CustomerDataDeletion {
             service_fqdn_list: vec!["reproduce.succeeded.example.test".to_string()],
@@ -2060,6 +2351,7 @@ mod tests {
             status: CustomerDataDeletionStatus::Succeeded,
             completed_at: Some(1_700_000_001_000_000_002),
             error: None,
+            periodic_time_series_ids: Vec::new(),
         };
         let failed = CustomerDataDeletion {
             service_fqdn_list: vec![
@@ -2070,6 +2362,7 @@ mod tests {
             status: CustomerDataDeletionStatus::Failed,
             completed_at: Some(1_700_000_001_000_000_003),
             error: Some("persisted deletion failure".to_string()),
+            periodic_time_series_ids: Vec::new(),
         };
         let store = schema.db.customer_deletion_job_store().unwrap();
         store.create(IN_PROGRESS, &in_progress).unwrap();
@@ -2175,6 +2468,7 @@ mod tests {
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: Vec::new(),
         };
         schema
             .db
@@ -2206,6 +2500,7 @@ mod tests {
             status: CustomerDataDeletionStatus::Failed,
             completed_at: Some(2),
             error: Some("old failure".to_string()),
+            periodic_time_series_ids: Vec::new(),
         };
         schema
             .db
@@ -2275,6 +2570,218 @@ mod tests {
                 .get(5)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn mutation_deletes_periodic_time_series_of_given_ids() {
+        let target = "piglet.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[target]);
+        put_series(&schema.db, &["3", "10", "1", "30"]);
+        let conn_key = event_key(target, &[1]);
+        schema
+            .db
+            .put_cf_for_test("conn", &conn_key, b"event")
+            .unwrap();
+
+        let response = schema
+            .execute(&delete_customer_data_with_series_mutation(
+                &[target],
+                &["3", "10", "3"],
+                110,
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+
+        let completed = wait_for_terminal_job(&schema.db, 110).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert_eq!(completed.service_fqdn_list, [target]);
+        assert_eq!(completed.periodic_time_series_ids, ["3", "10"]);
+        assert!(!series_present(&schema.db, "3"));
+        assert!(!series_present(&schema.db, "10"));
+        assert!(series_present(&schema.db, "1"));
+        assert!(series_present(&schema.db, "30"));
+        assert!(
+            schema
+                .db
+                .get_cf_for_test("conn", &conn_key)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn mutation_without_series_ids_stores_and_deletes_none() {
+        let target = "piglet.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[target]);
+        put_series(&schema.db, &["3"]);
+
+        let response = schema
+            .execute(&delete_customer_data_mutation(&[target], 111))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+
+        let completed = wait_for_terminal_job(&schema.db, 111).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert_eq!(completed.periodic_time_series_ids, Vec::<String>::new());
+        assert!(series_present(&schema.db, "3"));
+    }
+
+    /// A node that ingests none of the service FQDNs still has a local target
+    /// when it holds a series of one of the IDs, and every given ID is stored.
+    #[tokio::test]
+    async fn series_alone_is_a_local_target() {
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        put_series(&schema.db, &["7", "70"]);
+
+        let response = schema
+            .execute(&delete_customer_data_with_series_mutation(
+                &["piglet.elsewhere.example.test"],
+                &["404", "7"],
+                112,
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        let completed = wait_for_terminal_job(&schema.db, 112).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert_eq!(completed.service_fqdn_list, Vec::<String>::new());
+        assert_eq!(completed.periodic_time_series_ids, ["404", "7"]);
+        assert!(!series_present(&schema.db, "7"));
+        assert!(series_present(&schema.db, "70"));
+
+        put_series(&schema.db, &["8"]);
+        let response = schema
+            .execute(&delete_customer_data_with_series_mutation(&[], &["8"], 113))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        let completed = wait_for_terminal_job(&schema.db, 113).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert_eq!(completed.service_fqdn_list, Vec::<String>::new());
+        assert_eq!(completed.periodic_time_series_ids, ["8"]);
+        assert!(!series_present(&schema.db, "8"));
+        assert!(series_present(&schema.db, "70"));
+    }
+
+    #[tokio::test]
+    async fn neither_sensor_nor_series_is_no_local_target() {
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        put_series(&schema.db, &["70"]);
+
+        for (targets, customer_id) in [(&["piglet.node1.example.test"][..], 114), (&[][..], 115)] {
+            let response = schema
+                .execute(&delete_customer_data_with_series_mutation(
+                    targets,
+                    &["7"],
+                    customer_id,
+                ))
+                .await;
+            assert!(response.errors.is_empty(), "{:?}", response.errors);
+            assert_eq!(
+                response.data.to_string(),
+                "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
+            );
+            assert_eq!(job_status(&schema.db, customer_id), None);
+        }
+        assert!(series_present(&schema.db, "70"));
+    }
+
+    #[tokio::test]
+    async fn invalid_series_ids_and_empty_targets_are_refused_and_write_nothing() {
+        let target = "piglet.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[target]);
+        put_series(&schema.db, &["3"]);
+
+        for invalid in ["", "3a", " 3", "3\0"] {
+            let response = schema
+                .execute(&delete_customer_data_with_series_mutation(
+                    &[target],
+                    &["3", invalid],
+                    116,
+                ))
+                .await;
+            assert_eq!(response.data.to_string(), "null");
+            assert!(
+                response.errors[0].message.contains(&format!("{invalid:?}")),
+                "{:?}",
+                response.errors
+            );
+        }
+        let response = schema
+            .execute(&delete_customer_data_with_series_mutation(&[], &[], 116))
+            .await;
+        assert_eq!(response.data.to_string(), "null");
+        assert_ne!(response.errors.as_slice(), []);
+        let response = schema
+            .execute(
+                r#"mutation {
+                    deleteCustomerData(serviceFqdnList: [] customerId: "116")
+                }"#,
+            )
+            .await;
+        assert_eq!(response.data.to_string(), "null");
+        assert_ne!(response.errors.as_slice(), []);
+
+        assert_eq!(job_status(&schema.db, 116), None);
+        assert!(series_present(&schema.db, "3"));
+        assert!(schema.ingest_sensors.read().await.contains(target));
+    }
+
+    #[tokio::test]
+    async fn failed_retry_must_name_every_stored_series_id() {
+        let target = "reproduce.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        put_series(&schema.db, &["3", "10", "30"]);
+        let failed = CustomerDataDeletion {
+            service_fqdn_list: vec![target.to_string()],
+            requested_at: 1,
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(2),
+            error: Some("old failure".to_string()),
+            periodic_time_series_ids: vec!["3".to_string(), "10".to_string()],
+        };
+        let store = schema.db.customer_deletion_job_store().unwrap();
+        store.create(117, &failed).unwrap();
+
+        for series_ids in [&[][..], &["3"][..], &["03", "10"][..]] {
+            let response = schema
+                .execute(&delete_customer_data_with_series_mutation(
+                    &[target],
+                    series_ids,
+                    117,
+                ))
+                .await;
+            assert_eq!(response.data.to_string(), "null");
+            assert_eq!(
+                response.errors[0].message,
+                "Retry request must include every periodic time series ID from the failed job"
+            );
+            assert_eq!(store.get(117).unwrap().as_ref(), Some(&failed));
+        }
+        assert!(series_present(&schema.db, "3"));
+        assert!(series_present(&schema.db, "10"));
+
+        let response = schema
+            .execute(&delete_customer_data_with_series_mutation(
+                &[target],
+                &["30", "10", "3"],
+                117,
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        let completed = wait_for_terminal_job(&schema.db, 117).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert_eq!(completed.service_fqdn_list, [target]);
+        assert_eq!(completed.periodic_time_series_ids, ["3", "10"]);
+        assert!(!series_present(&schema.db, "3"));
+        assert!(!series_present(&schema.db, "10"));
+        assert!(
+            series_present(&schema.db, "30"),
+            "an ID the retry names beyond the stored ones is ignored"
         );
     }
 
@@ -2584,9 +3091,16 @@ mod tests {
             db.put_cf_for_test(cf, &reproduce_key, b"target").unwrap();
             db.put_cf_for_test(cf, &other_key, b"other").unwrap();
         }
-        for cf in ["periodic time series", "statistics", "oplog"] {
+        for cf in [PERIODIC_TIME_SERIES_CF, "statistics", "oplog"] {
             db.put_cf_for_test(cf, &piglet_key, b"excluded").unwrap();
             db.put_cf_for_test(cf, &reproduce_key, b"excluded").unwrap();
+        }
+        let timestamp = 1_i64.to_be_bytes();
+        let owned_series = ["3", "10"].map(|id| event_key(id, &timestamp));
+        let other_series = ["1", "30", "03"].map(|id| event_key(id, &timestamp));
+        for key in owned_series.iter().chain(&other_series) {
+            db.put_cf_for_test(PERIODIC_TIME_SERIES_CF, key, b"series")
+                .unwrap();
         }
         let sensors = db.sensors_store().unwrap();
         let now = DateTime::now();
@@ -2594,7 +3108,12 @@ mod tests {
             sensors.insert(sensor, now).unwrap();
         }
 
-        delete_customer_data_from_db(&db, &[piglet.to_string(), reproduce.to_string()]).unwrap();
+        delete_customer_data_from_db(
+            &db,
+            &[piglet.to_string(), reproduce.to_string()],
+            &["3".to_string(), "10".to_string()],
+        )
+        .unwrap();
 
         for cf in PIGLET_COLUMN_FAMILIES {
             assert!(db.get_cf_for_test(cf, &piglet_key).unwrap().is_none());
@@ -2605,9 +3124,23 @@ mod tests {
             assert!(db.get_cf_for_test(cf, &reproduce_key).unwrap().is_none());
             assert!(db.get_cf_for_test(cf, &other_key).unwrap().is_some());
         }
-        for cf in ["periodic time series", "statistics", "oplog"] {
+        for cf in [PERIODIC_TIME_SERIES_CF, "statistics", "oplog"] {
             assert!(db.get_cf_for_test(cf, &piglet_key).unwrap().is_some());
             assert!(db.get_cf_for_test(cf, &reproduce_key).unwrap().is_some());
+        }
+        for key in &owned_series {
+            assert!(
+                db.get_cf_for_test(PERIODIC_TIME_SERIES_CF, key)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        for key in &other_series {
+            assert!(
+                db.get_cf_for_test(PERIODIC_TIME_SERIES_CF, key)
+                    .unwrap()
+                    .is_some()
+            );
         }
         let remaining_sensors = db.sensors_store().unwrap().sensor_list();
         assert!(!remaining_sensors.contains(piglet));
@@ -2626,6 +3159,7 @@ mod tests {
                 "piglet.missing.example.test".to_string(),
                 "reproduce.missing.example.test".to_string(),
             ],
+            &["404".to_string()],
         )
         .unwrap();
     }
@@ -2636,10 +3170,30 @@ mod tests {
         let count = Arc::clone(&sensor_delete_count);
         let result = delete_customer_data_with(
             &["piglet.node1.example.test".to_string()],
+            &[],
             |service_fqdn, cf_names| {
                 assert_eq!(service_fqdn, "piglet.node1.example.test");
                 assert_eq!(cf_names, PIGLET_COLUMN_FAMILIES);
                 anyhow::bail!("injected event deletion failure");
+            },
+            move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(sensor_delete_count.load(Ordering::SeqCst), 0);
+
+        let count = Arc::clone(&sensor_delete_count);
+        let result = delete_customer_data_with(
+            &["piglet.node1.example.test".to_string()],
+            &["3".to_string()],
+            |key_prefix, cf_names| {
+                if key_prefix == "3" {
+                    assert_eq!(cf_names, [PERIODIC_TIME_SERIES_CF]);
+                    anyhow::bail!("injected series deletion failure");
+                }
+                Ok(())
             },
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -2661,6 +3215,7 @@ mod tests {
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: Vec::new(),
         };
         let store = db.customer_deletion_job_store().unwrap();
         store.create(1, &make_job()).unwrap();
@@ -2708,6 +3263,7 @@ mod tests {
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: Vec::new(),
         };
         let store = db.customer_deletion_job_store().unwrap();
         store.create(2, &job).unwrap();
@@ -2796,6 +3352,7 @@ mod tests {
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: Vec::new(),
         };
         let store = db.customer_deletion_job_store().unwrap();
 
@@ -2834,6 +3391,7 @@ mod tests {
             status: CustomerDataDeletionStatus::Failed,
             completed_at: Some(2),
             error: Some("old failure".to_string()),
+            periodic_time_series_ids: Vec::new(),
         };
         let store = schema.db.customer_deletion_job_store().unwrap();
         store.create(201, &failed).unwrap();
@@ -2988,6 +3546,7 @@ mod tests {
             schema.db.clone(),
             305,
             vec!["piglet.node1.example.test".to_string()],
+            Vec::new(),
             schema.ingest_sensors.clone(),
             schema.runtime_ingest_sensors.clone(),
             schema.pcap_sensors.clone(),
@@ -3111,6 +3670,7 @@ mod tests {
             db.clone(),
             500,
             vec![target.to_string()],
+            Vec::new(),
             runtime_state.0.clone(),
             runtime_state.1.clone(),
             runtime_state.2.clone(),
@@ -3166,6 +3726,7 @@ mod tests {
             db.clone(),
             FAILING,
             vec![target.to_string()],
+            Vec::new(),
             runtime_state.0.clone(),
             runtime_state.1.clone(),
             runtime_state.2.clone(),
@@ -3277,6 +3838,7 @@ mod tests {
             status: CustomerDataDeletionStatus::Failed,
             completed_at: Some(2),
             error: Some("old failure".to_string()),
+            periodic_time_series_ids: Vec::new(),
         };
         schema
             .db
@@ -3434,6 +3996,7 @@ mod tests {
             status: CustomerDataDeletionStatus::InProgress,
             completed_at: None,
             error: None,
+            periodic_time_series_ids: Vec::new(),
         };
 
         store.create(600, &in_progress).unwrap();
@@ -3450,6 +4013,7 @@ mod tests {
             status: CustomerDataDeletionStatus::Failed,
             completed_at: Some(2),
             error: Some("old failure".to_string()),
+            periodic_time_series_ids: Vec::new(),
         };
         store.create(601, &failed).unwrap();
         store.update(601, &in_progress).unwrap();
