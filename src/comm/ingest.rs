@@ -1435,9 +1435,12 @@ async fn handle_data<T>(
                             .map(|()| UniqueAppend::Stored(timestamp))
                     };
                     let stored_timestamp = match appended {
-                        Ok(UniqueAppend::Stored(stored) | UniqueAppend::Duplicate(stored)) => {
-                            stored
-                        }
+                        Ok(UniqueAppend::Stored(stored)) => stored,
+                        // A resend of a stored event still counts as received,
+                        // so the sensor does not resend it again, but it is
+                        // not forwarded: subscribers already received it when
+                        // it was stored.
+                        Ok(UniqueAppend::Duplicate(_)) => continue,
                         // A dropped event still counts as received, so the
                         // sensor does not resend what cannot be stored.
                         Ok(UniqueAppend::Overflow) => {

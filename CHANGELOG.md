@@ -13,6 +13,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   time since 1970 made the first retention pass delete most stored data, and
   one above about 292 years stopped Giganto.
 
+### Fixed
+
+- A byte-identical resend of a stored network event or log is no longer
+  forwarded to realtime subscribers a second time, so a live time series no
+  longer counts it twice. It is still acknowledged, so the sensor does not
+  resend it again.
+
 ## [0.33.0] - 2026-10-23
 
 ### Added
