@@ -21,8 +21,11 @@ before generating code.
 - Do NOT rely on literal `\n` escapes for a commit body — they land in
   the subject line as characters, and git reports success. Use a real
   multiline string, or `git commit -F` with a file or heredoc.
-- Reference issues in the body, not the title: `Closes #N` to close an
-  issue, or `Part of #N` when the commit addresses part of one.
+- Reference issues in the body, not the title, and only the issue the
+  commit delivers: `Closes #N` to close it, or `Part of #N` when the
+  commit addresses part of it. Every new version of the commit you
+  push, after an amend or a rebase, posts another entry on the timeline
+  of each issue it names.
 
 ## Branching and pushing
 
@@ -54,6 +57,53 @@ before generating code.
   on the issue or pull request. Restore the one you want with
   `--body-file`. Do NOT retype it from memory — a body that reads like
   the original and is not is worse than the empty one it replaced.
+
+## Referring to other issues and PRs
+
+- Any reference GitHub recognizes as an issue or PR posts an entry on
+  that issue's or PR's timeline: a bare `#N`, `GH-N`, `owner/repo#N`,
+  its URL (a link to one of its comments or a URL with a query
+  included), and a Markdown or HTML link to that URL alike. Editing the
+  text or deleting the comment afterwards does not remove the entry, so
+  choose the form before you post.
+- Ask one question of every reference: once the other side sees it,
+  does it give them something to do or something to avoid?
+  - **Yes: link it.** Use `#N` within the repository and `owner/repo#N`
+    across repositories. This covers closes, part of, depends on or
+    blocks, follow-up of, taking over part of its work, parent or
+    child, and supersedes or duplicates. On a pull request, the
+    narrower bullet below applies. An issue that takes over part of
+    another's work links it: when AgentCoop's verification finds
+    work missing from an issue, it looks for an owner only among that
+    issue's open siblings and the issues of its repository that
+    mention it.
+  - **No: use a form that posts no entry.** A PR as its
+    `https://github.com/owner/repo/pull/N/files` URL; a commit as its
+    SHA and title; a range of commits as one
+    `https://github.com/owner/repo/compare/A...B` URL; an issue as its
+    full URL in a code span,
+    `` `https://github.com/owner/repo/issues/N` ``. Never a bare
+    `` `#N` `` in a code span: it names no repository. Describe what
+    must be left alone by what it is ("every other open PR based on
+    `main`"), not by listing numbers. If you find yourself returning to
+    the target as you work, your work relies on it, and the answer is
+    yes.
+- Quoting text with `>` posts entries again for every reference in it,
+  and a `<details>` block does not stop them. Put pasted logs and
+  command output in a fenced code block, where references post none.
+- Anywhere on a pull request (its body, a comment, a review, an inline
+  review comment), link an issue of the same repository only if the
+  pull request delivers it, and then as `Closes #N` or `Part of #N` in
+  the body, never in a code span. AgentCoop's verification takes every
+  merged pull request that mentions an issue anywhere as a candidate,
+  and an agent judges from its title and body whether it delivered that
+  issue; a `Part of #N` link is the only trace a partial delivery
+  leaves. State any other relationship in the issue.
+- Leave the references in the sections AgentCoop writes as they are:
+  `## Children`, `## Dependencies` and `## Execution order` in the
+  issues it files, and `## Implementation deviations`, between its HTML
+  comment markers, in any issue it implements. It reads some of them
+  back, and its verification walks the entries they post.
 
 ## Markdown lint configuration
 
