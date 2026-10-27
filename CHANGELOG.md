@@ -23,6 +23,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   forwarded to realtime subscribers a second time, so a live time series no
   longer counts it twice. It is still acknowledged, so the sensor does not
   resend it again.
+- Retention now deletes periodic time series windows whose start is older than
+  `retention`, as it does other records. They used to be kept forever.
 
 ## [0.33.0] - 2026-10-23
 
