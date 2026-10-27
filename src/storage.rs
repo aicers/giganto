@@ -3665,17 +3665,17 @@ mod tests {
     }
 
     /// A key with no `0x00` byte is left alone, and the walk still reaches
-    /// the IDs after it.
+    /// the IDs after it, including when two such keys sit side by side.
     #[test]
     fn retention_skips_a_series_key_without_a_policy_id() {
         let (_dir, db) = setup_db();
         let cutoff = PRESSURE_CUTOFFS.data;
 
         let malformed = b"abc".to_vec();
-        db.periodic_time_series_store()
-            .unwrap()
-            .append(&malformed, b"malformed")
-            .unwrap();
+        let next_malformed = b"abd".to_vec();
+        let store = db.periodic_time_series_store().unwrap();
+        store.append(&malformed, b"malformed").unwrap();
+        store.append(&next_malformed, b"malformed").unwrap();
         let before = insert_series(&db, "a", cutoff - 1);
         let after = insert_series(&db, "b", cutoff - 1);
         let after_kept = insert_series(&db, "b", cutoff + 1);
@@ -3684,6 +3684,7 @@ mod tests {
             vec![
                 before.clone(),
                 malformed.clone(),
+                next_malformed.clone(),
                 after.clone(),
                 after_kept.clone()
             ]
@@ -3699,7 +3700,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(series_keys(&db), vec![malformed, after_kept]);
+        assert_eq!(
+            series_keys(&db),
+            vec![malformed, next_malformed, after_kept]
+        );
     }
 
     /// A pass opened under disk pressure deletes the windows older than the
