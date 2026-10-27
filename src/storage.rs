@@ -10,7 +10,10 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
     ptr,
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -98,6 +101,9 @@ pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 const CUSTOMER_DELETION_JOBS_CF: &str = "customer deletion jobs";
+/// The column family holding periodic time series, keyed by sampling-policy
+/// ID and window start rather than by sensor.
+const PERIODIC_TIME_SERIES_CF: &str = "periodic time series";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CustomerDataDeletionStatus {
@@ -118,7 +124,6 @@ pub struct CustomerDataDeletion {
 // Not a `sensor`+`time` event.
 const NON_STANDARD_CFS: [&str; 6] = [
     "log",
-    // "periodic time series", // Temporarily excluded until the retention logic for time series is clearly defined.
     "statistics",
     "packet",
     "seculog",
@@ -146,6 +151,7 @@ static APPEND_UNIQUE_LOCK_HASHER: LazyLock<RandomState> = LazyLock::new(RandomSt
 pub struct RetentionStores<'db, T> {
     pub standard_cfs: Vec<RawEventStore<'db, T>>,
     pub non_standard_cfs: Vec<RawEventStore<'db, T>>,
+    pub periodic_time_series: RawEventStore<'db, ()>,
     pub op_log_cf: RawEventStore<'db, OpLog>,
 }
 
@@ -154,6 +160,10 @@ impl<'db, T> RetentionStores<'db, T> {
         Ok(RetentionStores {
             standard_cfs: Vec::new(),
             non_standard_cfs: Vec::new(),
+            periodic_time_series: RawEventStore::new(
+                &db.db,
+                db.get_cf_handle(PERIODIC_TIME_SERIES_CF)?,
+            ),
             op_log_cf: db.op_log_store()?,
         })
     }
@@ -279,6 +289,10 @@ impl Database {
         let mut stores = RetentionStores::new(self)?;
 
         for store in RAW_DATA_COLUMN_FAMILY_NAMES {
+            if store == PERIODIC_TIME_SERIES_CF {
+                // Already in its own slot, set by `RetentionStores::new`.
+                continue;
+            }
             if NON_STANDARD_CFS.contains(&store) {
                 let cf = self.get_cf_handle(store)?;
                 stores
@@ -358,7 +372,7 @@ impl Database {
 
     /// Returns the raw event store for periodic time series.
     pub fn periodic_time_series_store(&self) -> Result<RawEventStore<'_, PeriodicTimeSeries>> {
-        let cf = self.get_cf_handle("periodic time series")?;
+        let cf = self.get_cf_handle(PERIODIC_TIME_SERIES_CF)?;
         Ok(RawEventStore::new(&self.db, cf))
     }
 
@@ -1286,10 +1300,16 @@ struct RetentionCutoffs {
 }
 
 /// Performs one iteration of synchronous RocksDB retention cleanup.
+///
+/// `warned_malformed_series` belongs to the pass, not the iteration: every
+/// iteration of one pass gets the same flag, so a periodic time series key
+/// without a policy ID, which survives every iteration, is warned about once
+/// per pass rather than once per iteration.
 fn retain_cleanup_iteration(
     db: &Database,
     cutoffs: RetentionCutoffs,
     from_timestamp: [u8; 8],
+    warned_malformed_series: &AtomicBool,
 ) -> Result<()> {
     let retention_timestamp = cutoffs.data;
     let retention_timestamp_vec = retention_timestamp.to_be_bytes();
@@ -1344,6 +1364,13 @@ fn retain_cleanup_iteration(
         }
     }
 
+    retain_periodic_time_series(
+        &all_store.periodic_time_series,
+        from_timestamp,
+        retention_timestamp,
+        warned_malformed_series,
+    )?;
+
     // Handle oplog deletion with timestamp-based range deletion
     let mut from: Vec<u8> = from_timestamp.to_vec();
     from.push(0x00);
@@ -1367,6 +1394,81 @@ fn retain_cleanup_iteration(
         warn!("Failed to delete file in range for operation log");
     }
 
+    Ok(())
+}
+
+/// Deletes the periodic time series windows that start in
+/// `[from_timestamp, cutoff)`.
+///
+/// Series are keyed by sampling-policy ID, then window start, so the
+/// sensor-prefixed range deletes the other column families get match none of
+/// them; walking the names in the `sensors` store would leave every window in
+/// place forever, including those of deleted policies. The IDs are not
+/// recorded anywhere else, so the walk reads them from the keys themselves:
+/// it range-deletes the expired windows of one ID, seeks past every key of
+/// that ID, and repeats until the column family runs out.
+///
+/// A key with no `0x00` byte carries no ID this walk can tell apart from its
+/// timestamp, so it is left alone and skipped. The first such key warns and
+/// sets `warned_malformed`; the rest of the pass stays quiet about them.
+fn retain_periodic_time_series(
+    store: &RawEventStore<'_, ()>,
+    from_timestamp: [u8; TIMESTAMP_SIZE],
+    cutoff: i64,
+    warned_malformed: &AtomicBool,
+) -> Result<()> {
+    let cutoff = cutoff.to_be_bytes();
+    let mut iter = store.db.raw_iterator_cf(store.cf);
+    iter.seek_to_first();
+    while let Some(key) = iter.key() {
+        let id = key
+            .iter()
+            .position(|&b| b == 0x00)
+            .and_then(|id_len| key.get(..id_len));
+        let next = if let Some(id) = id {
+            let mut from = Vec::with_capacity(id.len() + 1 + TIMESTAMP_SIZE);
+            from.extend_from_slice(id);
+            from.push(0x00);
+            let mut to = from.clone();
+            from.extend_from_slice(&from_timestamp);
+            to.extend_from_slice(&cutoff);
+
+            if store
+                .db
+                .delete_file_in_range_cf(store.cf, &from, &to)
+                .is_ok()
+            {
+                if store.db.delete_range_cf(store.cf, &from, &to).is_err() {
+                    warn!("Failed to delete range for periodic time series");
+                }
+            } else {
+                warn!("Failed to delete file in range for periodic time series");
+            }
+
+            // `id 0x01` sorts after every `id 0x00 ...` key and before the key
+            // of any other ID.
+            let mut next = id.to_vec();
+            next.push(0x01);
+            next
+        } else {
+            if !warned_malformed.swap(true, Ordering::Relaxed) {
+                warn!("Skipping periodic time series keys without a policy ID separator");
+            }
+            let mut next = key.to_vec();
+            next.push(0x00);
+            next
+        };
+        iter.seek(&next);
+    }
+    iter.status()
+        .context("failed to walk the periodic time series column family")?;
+    // Released first so the files it pins do not outlive the compaction.
+    drop(iter);
+
+    store.flush()?;
+    store
+        .db
+        .compact_range_cf(store.cf, None::<&[u8]>, None::<&[u8]>);
     Ok(())
 }
 
@@ -1633,6 +1735,9 @@ pub async fn retain_periodically(
             open_under_disk_pressure(cutoffs, !cfg!(test) && check_db_usage(db.path()).0);
 
         let now_timestamp = now.timestamp_nanos_opt().unwrap_or(0);
+        // One per pass, so that each pass warns about malformed series keys
+        // once however many iterations disk pressure makes it run.
+        let warned_malformed_series = Arc::new(AtomicBool::new(false));
         let outcome = retain_cleanup_pass(
             &cancel,
             db.path(),
@@ -1641,8 +1746,9 @@ pub async fn retain_periodically(
             usage_flag,
             |cutoffs| {
                 let db = db.clone();
+                let warned_malformed_series = Arc::clone(&warned_malformed_series);
                 tokio::task::spawn_blocking(move || {
-                    retain_cleanup_iteration(&db, cutoffs, from_timestamp)
+                    retain_cleanup_iteration(&db, cutoffs, from_timestamp, &warned_malformed_series)
                 })
             },
         )
@@ -2761,8 +2867,19 @@ mod tests {
             .retain_period_store()
             .expect("Failed to get retain stores");
 
-        let total_count = stores.standard_cfs.len() + stores.non_standard_cfs.len();
+        let total_count = stores.standard_cfs.len() + stores.non_standard_cfs.len() + 1;
         assert_eq!(total_count, RAW_DATA_COLUMN_FAMILY_NAMES.len());
+
+        let series_cf = db.get_cf_handle(super::PERIODIC_TIME_SERIES_CF).unwrap();
+        assert!(std::ptr::eq(stores.periodic_time_series.cf, series_cf));
+        assert!(
+            stores
+                .standard_cfs
+                .iter()
+                .chain(&stores.non_standard_cfs)
+                .all(|store| !std::ptr::eq(store.cf, series_cf)),
+            "periodic time series should get no per-sensor retention"
+        );
     }
 
     #[tokio::test]
@@ -3492,6 +3609,244 @@ mod tests {
         cancel.cancel();
         let result = task.await.unwrap();
         assert!(result.is_ok());
+    }
+
+    /// The timestamp `retain_periodically` starts its range deletes from.
+    const RETENTION_FROM_TIMESTAMP: [u8; 8] = 61_000_000_000_i64.to_be_bytes();
+
+    /// Writes a periodic time series window under the key ingest writes, and
+    /// returns that key.
+    fn insert_series(db: &Database, id: &str, window_start: i64) -> Vec<u8> {
+        let key = StorageKey::builder()
+            .start_key(id)
+            .end_key(window_start)
+            .build()
+            .key();
+        db.periodic_time_series_store()
+            .unwrap()
+            .append(&key, b"series")
+            .unwrap();
+        key
+    }
+
+    /// Returns every key in the periodic time series column family, in order.
+    fn series_keys(db: &Database) -> Vec<Vec<u8>> {
+        let cf = db.get_cf_handle(super::PERIODIC_TIME_SERIES_CF).unwrap();
+        db.db
+            .iterator_cf(cf, rocksdb::IteratorMode::Start)
+            .map(|item| item.unwrap().0.to_vec())
+            .collect()
+    }
+
+    fn series_key_is_gone(db: &Database, key: &[u8]) -> bool {
+        let cf = db.get_cf_handle(super::PERIODIC_TIME_SERIES_CF).unwrap();
+        db.db.get_cf(cf, key).unwrap().is_none()
+    }
+
+    /// One iteration deletes the windows of every policy ID that start before
+    /// the data cutoff, and only those.
+    ///
+    /// `"1"` and `"10"` share a leading byte, so a range delete over one that
+    /// spilled into the other would show up here as a missing newer window.
+    #[test]
+    fn retention_deletes_expired_windows_of_every_policy_id() {
+        let (_dir, db) = setup_db();
+        let cutoff = PRESSURE_CUTOFFS.data;
+        let an_hour = 3_600_000_000_000;
+
+        let mut kept = Vec::new();
+        let mut expired = Vec::new();
+        for id in ["1", "3", "10"] {
+            expired.push(insert_series(&db, id, cutoff - 2 * an_hour));
+            expired.push(insert_series(&db, id, cutoff - 1));
+            kept.push(insert_series(&db, id, cutoff));
+            kept.push(insert_series(&db, id, cutoff + an_hour));
+        }
+
+        super::retain_cleanup_iteration(
+            &db,
+            super::RetentionCutoffs {
+                data: cutoff,
+                oplog: 0,
+            },
+            RETENTION_FROM_TIMESTAMP,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+
+        kept.sort_unstable();
+        assert_eq!(series_keys(&db), kept);
+        assert!(expired.iter().all(|key| series_key_is_gone(&db, key)));
+    }
+
+    /// A key with no `0x00` byte is left alone, and the walk still reaches
+    /// the IDs after it, including when two such keys sit side by side.
+    #[test]
+    fn retention_skips_a_series_key_without_a_policy_id() {
+        let (_dir, db) = setup_db();
+        let cutoff = PRESSURE_CUTOFFS.data;
+
+        let malformed = b"abc".to_vec();
+        let next_malformed = b"abd".to_vec();
+        let store = db.periodic_time_series_store().unwrap();
+        store.append(&malformed, b"malformed").unwrap();
+        store.append(&next_malformed, b"malformed").unwrap();
+        let before = insert_series(&db, "a", cutoff - 1);
+        let after = insert_series(&db, "b", cutoff - 1);
+        let after_kept = insert_series(&db, "b", cutoff + 1);
+        assert_eq!(
+            series_keys(&db),
+            vec![
+                before.clone(),
+                malformed.clone(),
+                next_malformed.clone(),
+                after.clone(),
+                after_kept.clone()
+            ]
+        );
+
+        super::retain_cleanup_iteration(
+            &db,
+            super::RetentionCutoffs {
+                data: cutoff,
+                oplog: 0,
+            },
+            RETENTION_FROM_TIMESTAMP,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+
+        assert_eq!(
+            series_keys(&db),
+            vec![malformed, next_malformed, after_kept]
+        );
+    }
+
+    /// A malformed series key survives every iteration of a pass, so the
+    /// iterations of one pass, which share a flag, warn about it once, and the
+    /// next pass, with a flag of its own, warns again.
+    #[test]
+    fn malformed_series_keys_warn_once_per_pass() {
+        use std::sync::Mutex;
+
+        const WARNING: &str = "Skipping periodic time series keys without a policy ID separator";
+
+        let (dir, db) = setup_db();
+        let cutoff = PRESSURE_CUTOFFS.data;
+        let store = db.periodic_time_series_store().unwrap();
+        store.append(b"abc", b"malformed").unwrap();
+        store.append(b"abd", b"malformed").unwrap();
+
+        crate::cancellation::hold_callsite_interest_open();
+        let log_path = dir.path().join("retention.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(Mutex::new(std::fs::File::create(&log_path).unwrap()))
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let warnings = || {
+            std::fs::read_to_string(&log_path)
+                .unwrap()
+                .matches(WARNING)
+                .count()
+        };
+        let iterate = |warned: &AtomicBool| {
+            super::retain_cleanup_iteration(
+                &db,
+                super::RetentionCutoffs {
+                    data: cutoff,
+                    oplog: 0,
+                },
+                RETENTION_FROM_TIMESTAMP,
+                warned,
+            )
+            .unwrap();
+        };
+
+        let first_pass = AtomicBool::new(false);
+        iterate(&first_pass);
+        iterate(&first_pass);
+        assert_eq!(warnings(), 1, "one pass should warn once");
+
+        iterate(&AtomicBool::new(false));
+        assert_eq!(warnings(), 2, "the next pass should warn again");
+        assert_eq!(series_keys(&db), vec![b"abc".to_vec(), b"abd".to_vec()]);
+    }
+
+    /// A pass opened under disk pressure deletes the windows older than the
+    /// cutoff it tightened, not only those older than `retention`.
+    #[tokio::test]
+    async fn disk_pressure_deletes_series_windows_older_than_the_tightened_cutoff() {
+        let (dir, db) = setup_db();
+        let an_hour = 3_600_000_000_000;
+        let (cutoffs, usage_flag) = super::open_under_disk_pressure(PRESSURE_CUTOFFS, true);
+        assert!(usage_flag);
+
+        let expired = insert_series(&db, "7", PRESSURE_CUTOFFS.data - an_hour);
+        let expired_under_pressure = insert_series(&db, "7", PRESSURE_CUTOFFS.data + an_hour);
+        let kept = insert_series(&db, "7", cutoffs.data + an_hour);
+
+        let warned_malformed_series = Arc::new(AtomicBool::new(false));
+        let outcome = super::retain_cleanup_pass(
+            &CancellationToken::new(),
+            dir.path(),
+            cutoffs,
+            cutoffs.data + 2 * super::ONE_DAY_TIMESTAMP_NANOS,
+            usage_flag,
+            |cutoffs| {
+                let db = db.clone();
+                let warned_malformed_series = Arc::clone(&warned_malformed_series);
+                tokio::task::spawn_blocking(move || {
+                    super::retain_cleanup_iteration(
+                        &db,
+                        cutoffs,
+                        RETENTION_FROM_TIMESTAMP,
+                        &warned_malformed_series,
+                    )
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, super::PassOutcome::Completed);
+        assert!(series_key_is_gone(&db, &expired));
+        assert!(
+            series_key_is_gone(&db, &expired_under_pressure),
+            "a window older than the tightened cutoff should be deleted"
+        );
+        assert!(!series_key_is_gone(&db, &kept));
+    }
+
+    /// `retain_periodically` deletes expired windows end to end and keeps
+    /// those inside the retention window.
+    #[tokio::test]
+    async fn test_retain_periodically_deletes_expired_series_windows() {
+        let (_dir, db) = setup_db();
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let expired = insert_series(&db, "1", now_nanos - 10_000_000_000);
+        let other_expired = insert_series(&db, "10", now_nanos - 10_000_000_000);
+        let recent = insert_series(&db, "1", now_nanos - 1_000_000_000);
+
+        let (cancel, task) = spawn_retention(
+            &db,
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(2),
+        );
+
+        wait_until(
+            || series_key_is_gone(&db, &expired) && series_key_is_gone(&db, &other_expired),
+            "retention did not delete the expired time series windows",
+        )
+        .await;
+        assert!(
+            !series_key_is_gone(&db, &recent),
+            "a window inside the retention window should be kept"
+        );
+
+        cancel.cancel();
+        assert!(task.await.unwrap().is_ok());
     }
 
     #[tokio::test]
