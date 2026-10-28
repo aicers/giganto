@@ -40,6 +40,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - An accepted configuration update that prevents the database from opening no
   longer stops Giganto. It restores the previous configuration and restarts
   once; failures after store opening retain their existing behavior.
+- GraphQL queries, searches, and exports now reject malformed IP range bounds
+  before processing or forwarding requests, including when no records exist.
 
 ### Security
 
