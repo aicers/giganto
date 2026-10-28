@@ -1210,6 +1210,7 @@ pub(crate) mod tests {
             node_name: &str,
             peer_notify: Option<Arc<Notify>>,
         ) -> Self {
+            crate::test_bootroot::init_crypto();
             let db_dir = tempfile::tempdir().unwrap();
             let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
             let pcap_sensors = new_pcap_sensors();

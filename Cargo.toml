@@ -24,7 +24,7 @@ clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
 darling = "0.24"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.29.0" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "7c0baab56f8226e9cd43e110e028c12330be3d6d" }
 graphql_client = "0.16"
 humantime-serde = "1"
 libc = "0.2"
@@ -33,10 +33,16 @@ num_enum = "0.7"
 num-traits = "0.2"
 pcap = "2"
 proc-macro2 = "1"
-quinn = { version = "0.11", features = ["ring"] }
+quinn = { version = "0.11", default-features = false, features = [
+    "log",
+    "platform-verifier",
+    "runtime-tokio",
+    "rustls-aws-lc-rs",
+    "bloom",
+] }
 quote = "1"
 reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
+    "rustls-tls-webpki-roots-no-provider",
     "json",
 ] }
 rocksdb = "0.25"
@@ -70,7 +76,7 @@ jiff = { version = "0.2", features = ["serde"] }
 [dev-dependencies]
 mockito = "1"
 pretty_assertions = "1"
-rcgen = "0.14"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 regex = "1"
 serial_test = "4"
 # `test-util` gives tests the paused clock (`#[tokio::test(start_paused =

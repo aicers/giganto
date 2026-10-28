@@ -1419,6 +1419,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_peer_success() {
+        crate::test_bootroot::init_crypto();
         let mut server = Server::new_async().await;
         let _m = server
             .mock("POST", "/graphql")
@@ -1445,6 +1446,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_peer_failure() {
+        crate::test_bootroot::init_crypto();
         let mut server = Server::new_async().await;
         let _m = server
             .mock("POST", "/graphql")
@@ -1477,6 +1479,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_peer_graphql_error() {
+        crate::test_bootroot::init_crypto();
         let mut server = Server::new_async().await;
         let _m = server
             .mock("POST", "/graphql")
