@@ -5602,6 +5602,40 @@ fn insert_conn_raw_event_with_addr_port(
 }
 
 #[tokio::test]
+async fn ip_range_preserves_query_results_for_valid_and_optional_bounds() {
+    let schema = TestSchema::new();
+    let store = schema.db.conn_store().unwrap();
+    for (timestamp, address) in [(1, "192.0.2.2"), (2, "2001:db8::2")] {
+        let address = Some(address.parse().unwrap());
+        insert_conn_raw_event_with_addr_port(
+            &store, "src1", timestamp, address, None, address, None,
+        );
+    }
+    for address in ["origAddr", "respAddr"] {
+        for (bounds, expected_count) in [
+            ("{ start: \"192.0.2.1\", end: \"192.0.2.3\" }", 1),
+            ("{ start: \"2001:db8::1\", end: \"2001:db8::3\" }", 1),
+            ("{}", 2),
+            ("{ start: null, end: null }", 2),
+            ("null", 2),
+        ] {
+            let query = format!(
+                "{{ connRawEvents(filter: {{ sensor: \"src1\", {address}: {bounds} }}) \
+                 {{ edges {{ node {{ origAddr }} }} }} }}"
+            );
+            let response = schema.execute(&query).await;
+            assert!(response.errors.is_empty(), "{query}: {response:?}");
+            let data = response.data.into_json().unwrap();
+            assert_eq!(
+                data["connRawEvents"]["edges"].as_array().unwrap().len(),
+                expected_count,
+                "{query}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn union() {
     let schema = TestSchema::new();
