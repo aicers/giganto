@@ -320,6 +320,18 @@ mod tests {
         }
     }
 
+    /// `main` installs this provider as the process default, which
+    /// `config_client` and the GraphQL client from `create_graphql_client`
+    /// both use.
+    #[test]
+    fn client_provider_offers_hybrid_post_quantum_key_exchange_first() {
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        assert_eq!(
+            provider.kx_groups.first().map(|group| group.name()),
+            Some(rustls::NamedGroup::X25519MLKEM768),
+        );
+    }
+
     mod bootroot_tests {
         use super::*;
 
