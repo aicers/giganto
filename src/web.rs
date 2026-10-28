@@ -772,6 +772,41 @@ mod tests {
             .expect("graceful shutdown");
     }
 
+    /// A client built from the process default provider, as the GraphQL
+    /// client from `create_graphql_client` is, and the GraphQL listener agree
+    /// on the hybrid post-quantum key exchange without restricting either
+    /// side's groups.
+    #[tokio::test]
+    async fn graphql_listener_negotiates_hybrid_post_quantum_key_exchange() {
+        install_crypto_provider();
+        let dir = tempdir().expect("tempdir");
+        let (cert, key, ca) = write_pki(dir.path());
+        let addr = free_addr();
+
+        let controller = serve(
+            test_schema(),
+            addr,
+            cert.clone(),
+            key.clone(),
+            ca.clone(),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("serve should start");
+
+        let conn = raw_mtls_connection(addr, &cert, &key, &ca).await;
+        assert_eq!(
+            conn.get_ref()
+                .1
+                .negotiated_key_exchange_group()
+                .map(rustls::crypto::SupportedKxGroup::name),
+            Some(rustls::NamedGroup::X25519MLKEM768),
+        );
+
+        drop(conn);
+        controller.shutdown().await.expect("graceful shutdown");
+    }
+
     /// The web graceful-shutdown timeout the server runs with must be the one the
     /// configuration resolves — including the 30s default when the field is
     /// omitted — not just a value the deserializer produces. This starts the web

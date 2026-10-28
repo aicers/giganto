@@ -4,6 +4,15 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Giganto now prefers the hybrid post-quantum key exchange X25519MLKEM768 on
+  the QUIC and GraphQL connections it opens to other Giganto nodes, so they use
+  it instead of X25519. A node that does not support it is still reached with
+  X25519, without an extra round trip.
+
 ## [0.34.0] - 2026-10-28
 
 ### Added
@@ -1398,6 +1407,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.34.0...main
 [0.34.0]: https://github.com/aicers/giganto/compare/0.33.0...0.34.0
 [0.33.0]: https://github.com/aicers/giganto/compare/0.32.0...0.33.0
 [0.32.0]: https://github.com/aicers/giganto/compare/0.31.0...0.32.0
