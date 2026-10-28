@@ -1973,6 +1973,7 @@ mod tests {
 
     #[test]
     fn test_create_graphql_client_with_invalid_cert() {
+        crate::test_bootroot::init_crypto();
         let invalid_cert = b"invalid cert";
         let invalid_key = b"invalid key";
 
@@ -1982,6 +1983,7 @@ mod tests {
 
     #[test]
     fn test_create_graphql_client_with_valid_cert() {
+        crate::test_bootroot::init_crypto();
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
             .expect("failed to generate self-signed certificate");
         let cert_pem = cert.cert.pem();
