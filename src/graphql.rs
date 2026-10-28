@@ -108,10 +108,23 @@ pub struct TimeRange {
 /// - `end` is exclusive.
 /// - Omitting `start` means the range is unbounded below.
 /// - Omitting `end` means the range is unbounded above.
-#[derive(InputObject, Serialize, Clone)]
+#[derive(InputObject, Serialize, Clone, Debug)]
 pub struct IpRange {
+    #[graphql(validator(custom = "IpAddressValidator"))]
     pub start: Option<String>,
+    #[graphql(validator(custom = "IpAddressValidator"))]
     pub end: Option<String>,
+}
+
+struct IpAddressValidator;
+
+impl async_graphql::CustomValidator<String> for IpAddressValidator {
+    fn check(&self, value: &String) -> Result<(), InputValueError<String>> {
+        value
+            .parse::<IpAddr>()
+            .map(|_| ())
+            .map_err(|_| InputValueError::custom("Invalid IP address"))
+    }
 }
 
 /// Port range filter.
@@ -1146,11 +1159,13 @@ impl_string_number!(StringNumberI64, i64);
 // is proved where the teardown lives, against the real resolver.
 #[cfg(test)]
 pub(crate) mod tests {
+    mod ip_range;
     use std::collections::{BTreeSet, HashMap, HashSet};
     use std::net::IpAddr;
     use std::sync::Arc;
 
     use async_graphql::EmptySubscription;
+    pub(crate) use ip_range::assert_invalid_ip_ranges;
     use serde::{Deserialize, Serialize};
     use tokio::sync::{Notify, mpsc};
 
