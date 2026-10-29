@@ -58,8 +58,10 @@ use tracing::{error, info, warn};
 use x509_parser::nom::AsBytes;
 
 use crate::cancellation::{TaskTracker, drain_with_report};
-use crate::comm::publish::send_direct_stream;
-use crate::comm::{IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels};
+use crate::comm::publish::notify_direct_stream;
+use crate::comm::{
+    IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannelMap, StreamDirectChannels,
+};
 use crate::datetime::DateTime;
 use crate::server::{
     Certs, config_server, connected_client_display_from_cert, extract_cert_from_conn,
@@ -1197,6 +1199,35 @@ async fn recv_frame(
     (recv, buf, result)
 }
 
+/// Stores an event and notifies subscribers only at its actual stored timestamp.
+/// The caller holds the channel read guard across this entire operation.
+/// Storage failures are returned separately from notification failures so the
+/// ingest handler can report which operation failed.
+pub(super) async fn store_and_notify<T>(
+    store: &RawEventStore<'_, T>,
+    key: &[u8],
+    raw_event: &[u8],
+    timestamp: i64,
+    keeps_colliding_events: bool,
+    network: Option<(&NetworkKey, &StreamDirectChannelMap)>,
+    sensor: &str,
+) -> Result<(UniqueAppend, Result<()>)> {
+    let appended = if keeps_colliding_events {
+        store.append_unique(key, raw_event).await?
+    } else {
+        store.append(key, raw_event)?;
+        UniqueAppend::Stored(timestamp)
+    };
+    let notified = if let UniqueAppend::Stored(stored) = appended
+        && let Some((network_key, channels)) = network
+    {
+        notify_direct_stream(network_key, raw_event, stored, sensor, channels)
+    } else {
+        Ok(())
+    };
+    Ok((appended, notified))
+}
+
 /// Receives one stream's raw events, appends them, and acknowledges them.
 ///
 /// The handler owns the send stream, the ACK counter, and the ACK timestamp
@@ -1427,30 +1458,41 @@ async fn handle_data<T>(
                     // reason as the ACK below: the flush on the way out is what
                     // everything appended before this event depends on, and
                     // returning here would skip it.
-                    let appended = if keeps_colliding_events {
-                        store.append_unique(&storage_key.key(), &raw_event).await
+                    let channels = if network_key.is_some() {
+                        Some(stream_direct_channels.read().await)
                     } else {
-                        store
-                            .append(&storage_key.key(), &raw_event)
-                            .map(|()| UniqueAppend::Stored(timestamp))
+                        None
                     };
-                    let stored_timestamp = match appended {
-                        Ok(UniqueAppend::Stored(stored)) => stored,
+                    let appended = store_and_notify(
+                        &store, &storage_key.key(), &raw_event, timestamp,
+                        keeps_colliding_events,
+                        network_key.as_ref().zip(channels.as_deref()), &sensor,
+                    ).await;
+                    drop(channels);
+                    let (appended, notified) = match appended {
+                        Ok(result) => result,
+                        Err(e) => {
+                            err_msg = Some(format!("Failed to append {raw_event_kind:?} event: {e}"));
+                            break;
+                        }
+                    };
+                    match appended {
+                        UniqueAppend::Stored(_) => {}
                         // A resend of a stored event still counts as received,
                         // so the sensor does not resend it again, but it is
                         // not forwarded: subscribers already received it when
                         // it was stored.
-                        Ok(UniqueAppend::Duplicate(_)) => continue,
+                        UniqueAppend::Duplicate(_) => continue,
                         // A dropped event still counts as received, so the
                         // sensor does not resend what cannot be stored.
-                        Ok(UniqueAppend::Overflow) => {
+                        UniqueAppend::Overflow => {
                             error!(
                                 "Dropped {raw_event_kind:?} event from {sensor} at {timestamp}: \
                                  every later timestamp up to i64::MAX holds a different event"
                             );
                             continue;
                         }
-                        Ok(UniqueAppend::ProbeLimit) => {
+                        UniqueAppend::ProbeLimit => {
                             error!(
                                 "Dropped {raw_event_kind:?} event from {sensor} at {timestamp}: \
                                  the {APPEND_UNIQUE_MAX_PROBES} timestamps from it on all hold \
@@ -1458,22 +1500,8 @@ async fn handle_data<T>(
                             );
                             continue;
                         }
-                        Err(e) => {
-                            err_msg =
-                                Some(format!("Failed to append {raw_event_kind:?} event: {e}"));
-                            break;
-                        }
-                    };
-                    if let Some(network_key) = network_key.as_ref()
-                        && let Err(e) = send_direct_stream(
-                            network_key,
-                            &raw_event,
-                            stored_timestamp,
-                            &sensor,
-                            stream_direct_channels.clone(),
-                        )
-                        .await
-                    {
+                    }
+                    if let Err(e) = notified {
                         err_msg = Some(format!("Failed to send stream events: {e}"));
                         break;
                     }

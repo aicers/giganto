@@ -55,7 +55,7 @@ use self::multi_source::{
 };
 use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::{
-    IngestSensors, PcapSensors, StreamDirectChannels,
+    IngestSensors, PcapSensors, StreamDirectChannelMap, StreamDirectChannels,
     ingest::{NetworkKey, implement::EventFilter},
     peer::{PeerIdents, Peers},
     stream_channel_key::StreamChannelKey,
@@ -66,7 +66,7 @@ use crate::server::{
     Certs, config_client, config_server, connected_client_display_from_cert,
     extract_cert_from_conn, service_fqdn_from_cert,
 };
-use crate::storage::{Database, Direction, RawEventStore, StorageKey};
+use crate::storage::{BoundaryIter, Database, Direction, RawEventStore, StorageKey};
 use crate::tls_reload::{self, TlsWatch};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.28.0,<0.35.0";
@@ -941,14 +941,18 @@ where
     Ok(())
 }
 
-pub async fn send_direct_stream(
+/// Notifies matching subscribers using a map protected by the caller's read guard.
+///
+/// # Errors
+/// Returns an error if framing fails or a matching channel is closed.
+pub(super) fn notify_direct_stream(
     network_key: &NetworkKey,
     raw_event: &[u8],
     timestamp: i64,
     sensor: &str,
-    stream_direct_channels: StreamDirectChannels,
+    channels: &StreamDirectChannelMap,
 ) -> Result<()> {
-    for (req_key, sender) in &*stream_direct_channels.read().await {
+    for (req_key, sender) in channels {
         if !req_key.matches_network_key(network_key) {
             continue;
         }
@@ -1004,37 +1008,35 @@ where
     let channel_keys = msg.channel_keys(sensor.as_deref(), record_type)?;
 
     let (send, mut recv) = unbounded_channel::<Vec<u8>>();
-    {
-        let mut channels = stream_direct_channels.write().await;
-        for c_key in &channel_keys {
-            channels.insert(c_key.clone(), send.clone());
-        }
-    }
+    let iter = snapshot_and_register(
+        &store,
+        &msg,
+        kind,
+        &stream_direct_channels,
+        &channel_keys,
+        &send,
+    )
+    .await?;
 
     // The entries just registered belong to this task from here on, so every
     // exit path below has to run through `remove_owned_channel_keys`. The
     // removal cannot be left to a `Drop` implementation because it needs the
     // async write guard, and it is why this task is never cancelled by drop.
     let result: Result<()> = async {
+        #[cfg(test)]
+        tests::pause_before_start_message(&stream_direct_channels).await;
+
         // Cancellation branch. The start message and the records replayed
         // ahead of the realtime stream are QUIC writes a client that stopped
         // reading can stall; dropping them truncates a stream the client can
         // detect. The cleanup below still runs, because only this inner
         // future is dropped, not the task.
-        let last_ts = select! {
+        select! {
             biased;
             () = token.cancelled() => return Ok(()),
-            last_ts = start_stream(&mut sender, &store, &msg, record_type, kind) => last_ts?,
+            result = start_stream(&mut sender, iter, &msg, record_type) => result?,
         };
-        forward_realtime_records(
-            &mut sender,
-            &mut recv,
-            &conn,
-            &token,
-            last_ts,
-            &subscription,
-        )
-        .await;
+        forward_realtime_records(&mut sender, &mut recv, &conn, &token, &subscription).await;
         Ok(())
     }
     .await;
@@ -1043,24 +1045,52 @@ where
     result
 }
 
-/// Writes the subscription's stream start message and, for a time series
-/// generator, replays the stored records that precede the realtime stream.
-///
-/// Returns the timestamp of the last replayed record, or `0` when nothing was
-/// replayed.
+/// Creates the replay snapshot and registers realtime routing at one storage boundary.
+async fn snapshot_and_register<'db, T, N>(
+    store: &RawEventStore<'db, T>,
+    msg: &N,
+    kind: Option<String>,
+    stream_direct_channels: &StreamDirectChannels,
+    channel_keys: &[StreamChannelKey],
+    send: &UnboundedSender<Vec<u8>>,
+) -> Result<Option<BoundaryIter<'db, T>>>
+where
+    T: DeserializeOwned,
+    N: RequestStreamMessage,
+{
+    let mut channels = stream_direct_channels.write().await;
+    // Ingest holds a read guard from storage through notification. Creating
+    // the iterator here makes every stored record belong to exactly one path.
+    let iter = if msg.is_time_series_generator() {
+        let key_builder = StorageKey::builder()
+            .start_key(&msg.sensor()?)
+            .mid_key(kind.map(|s| s.as_bytes().to_vec()));
+        let from_key = key_builder
+            .clone()
+            .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(msg.start_time())))
+            .build();
+        let to_key = key_builder.upper_open_bound_end_key(None).build();
+        Some(store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward))
+    } else {
+        None
+    };
+    for c_key in channel_keys {
+        channels.insert(c_key.clone(), send.clone());
+    }
+    Ok(iter)
+}
+
+/// Writes the start message and replays the snapshot after releasing the write guard.
 async fn start_stream<T, N>(
     sender: &mut SendStream,
-    store: &RawEventStore<'_, T>,
+    iter: Option<BoundaryIter<'_, T>>,
     msg: &N,
     record_type: RequestStreamRecord,
-    kind: Option<String>,
-) -> Result<i64>
+) -> Result<()>
 where
     T: EventFilter + Serialize + DeserializeOwned + Display,
     N: RequestStreamMessage,
 {
-    let mut last_ts = 0_i64;
-
     // send stored record raw data
     if msg.is_semi_supervised() {
         send_semi_supervised_stream_start_message(sender, record_type)
@@ -1082,17 +1112,7 @@ where
             record_type
         );
 
-        let key_builder = StorageKey::builder()
-            .start_key(&msg.sensor()?)
-            .mid_key(kind.map(|s| s.as_bytes().to_vec()));
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(msg.start_time())))
-            .build();
-        let to_key = key_builder.upper_open_bound_end_key(None).build();
-        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-
-        for item in iter {
+        for item in iter.into_iter().flatten() {
             let (key, val) = item.context("Failed to read database")?;
             let (Some(orig_addr), Some(resp_addr)) = (val.orig_addr(), val.resp_addr()) else {
                 bail!("Failed to deserialize database data");
@@ -1100,12 +1120,11 @@ where
             if msg.filter_ip(orig_addr, resp_addr) {
                 let timestamp = i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
                 send_time_series_generator_data(sender, timestamp, val).await?;
-                last_ts = timestamp;
             }
         }
     }
 
-    Ok(last_ts)
+    Ok(())
 }
 
 /// Forwards realtime record raw data to the subscribing client until the
@@ -1126,7 +1145,6 @@ async fn forward_realtime_records(
     recv: &mut UnboundedReceiver<Vec<u8>>,
     conn: &Connection,
     token: &CancellationToken,
-    last_ts: i64,
     subscription: &str,
 ) {
     loop {
@@ -1143,15 +1161,9 @@ async fn forward_realtime_records(
             _ = conn.closed() => break,
         };
 
-        let ts = i64::from_le_bytes(
-            buf.get(..TIMESTAMP_SIZE)
-                .expect("timestamp_size")
-                .try_into()
-                .expect("timestamp"),
-        );
-        if last_ts > ts {
-            continue;
-        }
+        // Storage order defines eligibility, regardless of timestamp. This also
+        // delivers negative timestamps to semi-supervised subscriptions, which
+        // the previous default last_ts = 0 filter dropped.
 
         // Cancellation branch. The record being written is dropped
         // mid-frame; the client detects the truncated stream, and the
@@ -1176,7 +1188,7 @@ async fn forward_realtime_records(
 /// identifies the subscription that registered it, so a key may since have been
 /// taken over by a newer subscription. Such a key is left alone; removing it
 /// would silently stop the newer subscription's client while
-/// `send_direct_stream` kept reporting success.
+/// `notify_direct_stream` kept reporting success.
 async fn remove_owned_channel_keys(
     stream_direct_channels: &StreamDirectChannels,
     channel_keys: &[StreamChannelKey],

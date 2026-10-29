@@ -62,7 +62,7 @@ use crate::{
         ingest::NetworkKey,
         new_pcap_sensors, new_peers_data, new_stream_direct_channels,
         peer::{PeerIdentity, PeerIdents, PeerInfo, Peers},
-        publish::{implement::RequestStreamMessage, send_direct_stream},
+        publish::{implement::RequestStreamMessage, notify_direct_stream},
         stream_channel_key::StreamChannelKey,
     },
     datetime::DateTime,
@@ -455,15 +455,14 @@ mod fixtures {
     ) {
         let send_time = next_timestamp();
         let payload = gen_conn_raw_event();
-        send_direct_stream(
+        notify_direct_stream(
             &NetworkKey::new(sensor, record_type),
             &payload,
             send_time,
             sensor,
-            channels.clone(),
+            &*channels.read().await,
         )
-        .await
-        .expect("send_direct_stream failed");
+        .expect("notify_direct_stream failed");
 
         let recv_data = receive_semi_supervised_data(stream)
             .await
@@ -2220,14 +2219,13 @@ mod fixtures {
             let key = NetworkKey::new(sensor, record_type);
             let payload = payload_fn();
 
-            send_direct_stream(
+            notify_direct_stream(
                 &key,
                 &payload,
                 send_time,
                 sensor,
-                stream_direct_channels.clone(),
+                &*stream_direct_channels.read().await,
             )
-            .await
             .unwrap();
 
             let recv_data = receive_semi_supervised_data(&mut stream).await.unwrap();
@@ -2275,14 +2273,13 @@ mod fixtures {
         assert_eq!(db_payload, recv_data);
 
         let key = NetworkKey::new(sensor, record_type);
-        send_direct_stream(
+        notify_direct_stream(
             &key,
             &direct_payload,
             direct_timestamp,
             sensor,
-            stream_direct_channels.clone(),
+            &*stream_direct_channels.read().await,
         )
-        .await
         .unwrap();
 
         let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
@@ -5242,7 +5239,7 @@ async fn a_failed_request_is_reported_under_its_own_task_name() {
 }
 
 #[tokio::test]
-async fn send_direct_stream_time_series_generator_id_with_semi_supervised_substring() {
+async fn notify_direct_stream_time_series_generator_id_with_semi_supervised_substring() {
     let sensor = "src1";
     let network_key = NetworkKey::new(sensor, RequestStreamRecord::Conn);
 
@@ -5257,15 +5254,14 @@ async fn send_direct_stream_time_series_generator_id_with_semi_supervised_substr
 
     let timestamp: i64 = 99;
     let payload = b"time-series-raw-event".to_vec();
-    send_direct_stream(
+    notify_direct_stream(
         &network_key,
         &payload,
         timestamp,
         sensor,
-        stream_direct_channels,
+        &*stream_direct_channels.read().await,
     )
-    .await
-    .expect("send_direct_stream");
+    .expect("notify_direct_stream");
 
     let frame = rx.recv().await.expect("frame received");
     let (ts_bytes, rest) = frame.split_at(8);
@@ -5308,15 +5304,14 @@ async fn stream_direct_channels_cleared_after_client_disconnect() {
 
             let key = NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn);
             let payload = gen_conn_raw_event();
-            send_direct_stream(
+            notify_direct_stream(
                 &key,
                 &payload,
                 next_timestamp(),
                 SENSOR_SEMI_SUPERVISED_ONE,
-                harness.stream_direct_channels.clone(),
+                &*harness.stream_direct_channels.read().await,
             )
-            .await
-            .expect("send_direct_stream failed");
+            .expect("notify_direct_stream failed");
 
             let deadline = Instant::now() + StdDuration::from_secs(1);
             loop {
@@ -5368,15 +5363,14 @@ async fn stream_channels_cleared_after_client_disconnect_without_records() {
 
             // A dead sender left behind would tear down the ingest stream that
             // hit it, so publishing a matching record has to keep succeeding.
-            send_direct_stream(
+            notify_direct_stream(
                 &NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn),
                 &gen_conn_raw_event(),
                 next_timestamp(),
                 SENSOR_SEMI_SUPERVISED_ONE,
-                harness.stream_direct_channels.clone(),
+                &*harness.stream_direct_channels.read().await,
             )
-            .await
-            .expect("send_direct_stream after disconnect failed");
+            .expect("notify_direct_stream after disconnect failed");
         })
     })
     .await;
@@ -5408,15 +5402,14 @@ async fn stream_channels_cleared_after_cancellation() {
             )
             .await;
 
-            send_direct_stream(
+            notify_direct_stream(
                 &NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn),
                 &gen_conn_raw_event(),
                 next_timestamp(),
                 SENSOR_SEMI_SUPERVISED_ONE,
-                harness.stream_direct_channels.clone(),
+                &*harness.stream_direct_channels.read().await,
             )
-            .await
-            .expect("send_direct_stream after shutdown failed");
+            .expect("notify_direct_stream after shutdown failed");
         })
     })
     .await;
@@ -5513,15 +5506,14 @@ async fn subscription_cancellation_branch_clears_channels_with_the_connection_op
     );
 
     // A dead sender left behind would tear down the ingest stream that hit it.
-    send_direct_stream(
+    notify_direct_stream(
         &NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, RequestStreamRecord::Conn),
         &gen_conn_raw_event(),
         next_timestamp(),
         SENSOR_SEMI_SUPERVISED_TWO,
-        channels.clone(),
+        &*channels.read().await,
     )
-    .await
-    .expect("send_direct_stream after shutdown failed");
+    .expect("notify_direct_stream after shutdown failed");
 
     client_conn.close(0_u32.into(), b"shutdown_branch_done");
     client_endpoint.wait_idle().await;
@@ -5608,14 +5600,13 @@ async fn subscription_cancellation_releases_a_blocked_quic_send() {
     .await;
 
     for _ in 0..RECORDS {
-        send_direct_stream(
+        notify_direct_stream(
             &NetworkKey::new(SENSOR_SEMI_SUPERVISED_TWO, RequestStreamRecord::Conn),
             &gen_conn_raw_event(),
             next_timestamp(),
             SENSOR_SEMI_SUPERVISED_TWO,
-            channels.clone(),
+            &*channels.read().await,
         )
-        .await
         .expect("queue a realtime record");
     }
 
@@ -5697,15 +5688,14 @@ async fn stream_channels_cleared_after_quic_send_failure() {
                     "stream channels not cleared after a failed QUIC send; \
                      registered target sensors: {sensors:?}"
                 );
-                send_direct_stream(
+                notify_direct_stream(
                     &NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Conn),
                     &gen_conn_raw_event(),
                     next_timestamp(),
                     SENSOR_SEMI_SUPERVISED_ONE,
-                    harness.stream_direct_channels.clone(),
+                    &*harness.stream_direct_channels.read().await,
                 )
-                .await
-                .expect("send_direct_stream failed");
+                .expect("notify_direct_stream failed");
                 tokio::time::sleep(StdDuration::from_millis(10)).await;
             }
 
@@ -5784,91 +5774,255 @@ async fn stream_channels_cleared_when_time_series_replay_fails() {
     .await;
 }
 
+// Each hook belongs to one harness's channel map, so concurrent tests cannot
+// pause each other's subscriptions. Remove it before awaiting either signal.
+type StartMessageHook = (oneshot::Sender<()>, oneshot::Receiver<()>);
+static START_MESSAGE_HOOKS: OnceLock<StdMutex<HashMap<usize, StartMessageHook>>> = OnceLock::new();
+
+pub(super) async fn pause_before_start_message(channels: &StreamDirectChannels) {
+    let hook = START_MESSAGE_HOOKS
+        .get_or_init(StdMutex::default)
+        .lock()
+        .unwrap()
+        .remove(&(Arc::as_ptr(channels) as usize));
+    if let Some((paused, resume)) = hook {
+        paused.send(()).unwrap();
+        resume.await.unwrap();
+    }
+}
+
+async fn store_conn_and_notify(
+    db: &Database,
+    channels: &crate::comm::StreamDirectChannelMap,
+    timestamp: i64,
+    payload: &[u8],
+) {
+    let sensor = SENSOR_TIME_SERIES_GENERATOR_THREE;
+    let key = crate::storage::StorageKey::builder()
+        .start_key(sensor)
+        .end_key(timestamp)
+        .build();
+    let (stored, notified) = crate::comm::ingest::store_and_notify(
+        &db.conn_store().unwrap(),
+        &key.key(),
+        payload,
+        timestamp,
+        true,
+        Some((
+            &NetworkKey::new(sensor, RequestStreamRecord::Conn),
+            channels,
+        )),
+        sensor,
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored, crate::storage::UniqueAppend::Stored(timestamp));
+    notified.unwrap();
+}
+
+async fn request_conn_subscription(client: &mut TestClient) {
+    send_stream_request(
+        &mut client.send,
+        StreamRequestPayload::TimeSeriesGenerator {
+            record_type: RequestStreamRecord::Conn,
+            request: build_network_time_series_generator_request(),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn receive_conn_subscription(client: &TestClient) -> RecvStream {
+    let mut stream = client.conn.accept_uni().await.unwrap();
+    assert_eq!(
+        receive_time_series_generator_stream_start_message(&mut stream)
+            .await
+            .unwrap(),
+        POLICY_ID
+    );
+    stream
+}
+
+async fn assert_next_conn(stream: &mut RecvStream, timestamp: i64, payload: &[u8]) {
+    let (received, ts) = tokio::time::timeout(
+        StdDuration::from_secs(10),
+        receive_time_series_generator_data(stream),
+    )
+    .await
+    .expect("subscription must deliver the next record")
+    .unwrap();
+    assert_eq!(ts, timestamp);
+    assert_eq!(received, payload);
+}
+
 #[tokio::test]
-async fn time_series_generator_skips_realtime_record_older_than_replay() {
+async fn time_series_generator_delivers_late_realtime_records() {
     with_test_harness(|harness| {
         Box::pin(async move {
             let sensor = SENSOR_TIME_SERIES_GENERATOR_THREE;
-            let first_db_timestamp = next_timestamp();
-            let first_db_payload = insert_conn_stream(&harness.db, sensor, first_db_timestamp);
-            let db_timestamp = next_timestamp();
-            let db_payload = insert_conn_stream(&harness.db, sensor, db_timestamp);
+            let first = insert_conn_stream(&harness.db, sensor, 100);
+            let last = insert_conn_stream(&harness.db, sensor, 200);
+            request_conn_subscription(&mut harness.publish).await;
+            let mut stream = receive_conn_subscription(&harness.publish).await;
+            assert_next_conn(&mut stream, 100, &first).await;
+            assert_next_conn(&mut stream, 200, &last).await;
 
-            send_stream_request(
-                &mut harness.publish.send,
-                StreamRequestPayload::TimeSeriesGenerator {
-                    record_type: RequestStreamRecord::Conn,
-                    request: build_network_time_series_generator_request(),
-                },
+            // Stored after the snapshot, even though its timestamp precedes replay's end.
+            let late = gen_conn_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                150,
+                &late,
             )
-            .await
-            .expect("sending time series generator stream request failed");
-
-            let mut stream = harness
-                .publish
-                .conn
-                .accept_uni()
-                .await
-                .expect("accepting uni stream");
-            let start_msg = receive_time_series_generator_stream_start_message(&mut stream)
-                .await
-                .expect("receiving time series generator start message");
-            assert_eq!(start_msg, POLICY_ID);
-
-            // Stored records are replayed in timestamp order ahead of the
-            // realtime stream.
-            let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
-                .await
-                .expect("receiving first replayed record");
-            assert_eq!(
-                recv_timestamp, first_db_timestamp,
-                "first replay timestamp mismatch"
-            );
-            assert_eq!(recv_data, first_db_payload, "first replay payload mismatch");
-
-            let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
-                .await
-                .expect("receiving second replayed record");
-            assert_eq!(
-                recv_timestamp, db_timestamp,
-                "second replay timestamp mismatch"
-            );
-            assert_eq!(recv_data, db_payload, "second replay payload mismatch");
-
-            let key = NetworkKey::new(sensor, RequestStreamRecord::Conn);
-            let stale_payload = gen_conn_raw_event();
-            send_direct_stream(
-                &key,
-                &stale_payload,
-                db_timestamp - 1,
-                sensor,
-                harness.stream_direct_channels.clone(),
+            .await;
+            let marker = gen_dns_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                201,
+                &marker,
             )
-            .await
-            .expect("send_direct_stream with stale timestamp failed");
+            .await;
+            assert_next_conn(&mut stream, 150, &late).await;
+            assert_next_conn(&mut stream, 201, &marker).await;
 
-            let fresh_timestamp = db_timestamp + 1;
-            let fresh_payload = gen_dns_raw_event();
-            send_direct_stream(
-                &key,
-                &fresh_payload,
-                fresh_timestamp,
-                sensor,
-                harness.stream_direct_channels.clone(),
+            // Realtime eligibility also has no lower bound at the replay start_time.
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                -1,
+                &late,
             )
-            .await
-            .expect("send_direct_stream failed");
+            .await;
+            assert_next_conn(&mut stream, -1, &late).await;
+        })
+    })
+    .await;
+}
 
-            // The stale buffer predates the last replayed record, so the client
-            // sees the fresh one next.
-            let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
+#[tokio::test]
+async fn time_series_generator_does_not_duplicate_record_before_start_message() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let initial = insert_conn_stream(&harness.db, SENSOR_TIME_SERIES_GENERATOR_THREE, 100);
+            let (paused_tx, paused_rx) = oneshot::channel();
+            let (resume_tx, resume_rx) = oneshot::channel();
+            START_MESSAGE_HOOKS
+                .get_or_init(StdMutex::default)
+                .lock()
+                .unwrap()
+                .insert(
+                    Arc::as_ptr(&harness.stream_direct_channels) as usize,
+                    (paused_tx, resume_rx),
+                );
+            request_conn_subscription(&mut harness.publish).await;
+            tokio::time::timeout(StdDuration::from_secs(10), paused_rx)
                 .await
-                .expect("receiving realtime record");
-            assert_eq!(
-                recv_timestamp, fresh_timestamp,
-                "realtime timestamp mismatch"
-            );
-            assert_eq!(recv_data, fresh_payload, "realtime payload mismatch");
+                .unwrap()
+                .unwrap();
+            let record = gen_conn_raw_event();
+            // The hook is outside the write guard: storage can complete while paused.
+            tokio::time::timeout(StdDuration::from_secs(10), async {
+                store_conn_and_notify(
+                    &harness.db,
+                    &*harness.stream_direct_channels.read().await,
+                    200,
+                    &record,
+                )
+                .await;
+            })
+            .await
+            .unwrap();
+            resume_tx.send(()).unwrap();
+            let mut stream = receive_conn_subscription(&harness.publish).await;
+            assert_next_conn(&mut stream, 100, &initial).await;
+            assert_next_conn(&mut stream, 200, &record).await;
+            let marker = gen_dns_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                201,
+                &marker,
+            )
+            .await;
+            assert_next_conn(&mut stream, 201, &marker).await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn time_series_generator_serializes_snapshot_with_store_and_notification() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let channels = harness.stream_direct_channels.read().await;
+            request_conn_subscription(&mut harness.publish).await;
+            tokio::time::timeout(StdDuration::from_secs(10), async {
+                while harness.stream_direct_channels.try_read().is_ok() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("subscription writer must wait for the ingest read guard");
+            let record = gen_conn_raw_event();
+            store_conn_and_notify(&harness.db, &channels, 200, &record).await;
+            drop(channels);
+            let mut stream = receive_conn_subscription(&harness.publish).await;
+            assert_next_conn(&mut stream, 200, &record).await;
+            let marker = gen_dns_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                201,
+                &marker,
+            )
+            .await;
+            assert_next_conn(&mut stream, 201, &marker).await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn semi_supervised_delivers_negative_timestamps() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let sensor = SENSOR_SEMI_SUPERVISED_ONE;
+            let mut stream = start_semi_supervised_subscription(
+                &mut harness.publish,
+                RequestStreamRecord::Conn,
+                &[sensor],
+            )
+            .await;
+            let payload = gen_conn_raw_event();
+            {
+                let channels = harness.stream_direct_channels.read().await;
+                for timestamp in [-1, 1] {
+                    notify_direct_stream(
+                        &NetworkKey::new(sensor, RequestStreamRecord::Conn),
+                        &payload,
+                        timestamp,
+                        sensor,
+                        &channels,
+                    )
+                    .unwrap();
+                }
+            }
+            for expected in [-1, 1] {
+                let received = tokio::time::timeout(
+                    StdDuration::from_secs(10),
+                    receive_semi_supervised_data(&mut stream),
+                )
+                .await
+                .expect("semi-supervised record must arrive")
+                .unwrap();
+                let (timestamp, received_sensor, received_payload) =
+                    decode_semi_supervised_frame(&received);
+                assert_eq!(timestamp, expected);
+                assert_eq!(received_sensor, sensor);
+                assert_eq!(received_payload, payload);
+            }
         })
     })
     .await;
@@ -7849,7 +8003,9 @@ mod bootroot_service_fqdn_contract {
         ingest::NetworkKey,
         new_stream_direct_channels,
         peer::{PeerInfo, Peers},
-        publish::{is_current_giganto_in_charge, peer_in_charge_publish_addr, send_direct_stream},
+        publish::{
+            is_current_giganto_in_charge, notify_direct_stream, peer_in_charge_publish_addr,
+        },
         stream_channel_key::StreamChannelKey,
     };
     use crate::server::service_fqdn_from_cert;
@@ -7909,7 +8065,7 @@ mod bootroot_service_fqdn_contract {
     }
 
     #[tokio::test]
-    async fn send_direct_stream_embeds_cert_derived_fqdn_in_semi_supervised_payload() {
+    async fn notify_direct_stream_embeds_cert_derived_fqdn_in_semi_supervised_payload() {
         let local_fqdn = cert_derived_fqdn(NODE1.test_node);
         let key = NetworkKey::new(&local_fqdn, RequestStreamRecord::Conn);
 
@@ -7924,15 +8080,14 @@ mod bootroot_service_fqdn_contract {
 
         let timestamp: i64 = 42;
         let payload = b"raw-event-bytes".to_vec();
-        send_direct_stream(
+        notify_direct_stream(
             &key,
             &payload,
             timestamp,
             &local_fqdn,
-            stream_direct_channels,
+            &*stream_direct_channels.read().await,
         )
-        .await
-        .expect("send_direct_stream");
+        .expect("notify_direct_stream");
 
         let frame = rx.recv().await.expect("frame received");
         // Match the wire layout used by the publish server's stream task,
