@@ -29,6 +29,67 @@ use crate::storage::{Database, DbOptions, Direction, KeyExtractor, TimestampKeyE
 
 mod fixture;
 
+#[tokio::test]
+async fn ip_range_rejects_exports_before_registering_tasks() {
+    let schema = TestSchema::new();
+    // A registered task pauses before opening its store, so it cannot finish
+    // before the pending-count assertion and hide an unintended admission.
+    let control = Arc::new(crate::graphql::ExportTestControl::new());
+    let _registration =
+        crate::graphql::register_export_test_control(schema.export_dir.path(), control);
+    for populated in [false, true] {
+        if populated {
+            insert_conn_raw_event(&schema.db.conn_store().unwrap(), "src1", 1, 1);
+        }
+        for protocol in [
+            "conn",
+            "dns",
+            "malformed_dns",
+            "http",
+            "rdp",
+            "smtp",
+            "ntlm",
+            "kerberos",
+            "ssh",
+            "dce rpc",
+            "ftp",
+            "mqtt",
+            "ldap",
+            "tls",
+            "smb",
+            "nfs",
+            "bootp",
+            "dhcp",
+            "radius",
+            "icmp",
+            "network connect",
+            "netflow5",
+            "netflow9",
+            "secu log",
+        ] {
+            for address in ["origAddr", "respAddr"] {
+                for bound in ["start", "end"] {
+                    let query = format!(
+                        "{{ export(filter: {{ protocol: \"{protocol}\", sensorId: \"src1\", \
+                         kind: {}, {address}: {{ {bound}: \"invalid\" }} }}, \
+                         exportType: \"json\") }}",
+                        if protocol == "secu log" {
+                            "\"device\""
+                        } else {
+                            "null"
+                        }
+                    );
+                    let response = schema.execute(&query).await;
+                    assert_eq!(schema.top_level_tracker.pending_count(), 0, "{query}");
+                    assert_eq!(response.errors.len(), 1, "{query}: {response:?}");
+                    assert!(response.errors[0].message.contains("invalid ip"));
+                    assert_eq!(fs::read_dir(schema.export_dir.path()).unwrap().count(), 0);
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn test_to_string_or_empty() {
     assert_eq!(to_string_or_empty(Some(42)), "42");

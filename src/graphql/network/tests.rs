@@ -5612,23 +5612,37 @@ async fn ip_range_preserves_query_results_for_valid_and_optional_bounds() {
         );
     }
     for address in ["origAddr", "respAddr"] {
-        for (bounds, expected_count) in [
-            ("{ start: \"192.0.2.1\", end: \"192.0.2.3\" }", 1),
-            ("{ start: \"2001:db8::1\", end: \"2001:db8::3\" }", 1),
-            ("{}", 2),
-            ("{ start: null, end: null }", 2),
-            ("null", 2),
+        for (bounds, expected_addresses) in [
+            (
+                "{ start: \"192.0.2.1\", end: \"192.0.2.3\" }",
+                vec!["192.0.2.2"],
+            ),
+            (
+                "{ start: \"2001:db8::1\", end: \"2001:db8::3\" }",
+                vec!["2001:db8::2"],
+            ),
+            ("{}", vec!["192.0.2.2", "2001:db8::2"]),
+            (
+                "{ start: null, end: null }",
+                vec!["192.0.2.2", "2001:db8::2"],
+            ),
+            ("null", vec!["192.0.2.2", "2001:db8::2"]),
         ] {
             let query = format!(
                 "{{ connRawEvents(filter: {{ sensor: \"src1\", {address}: {bounds} }}) \
-                 {{ edges {{ node {{ origAddr }} }} }} }}"
+                 {{ edges {{ node {{ origAddr respAddr }} }} }} }}"
             );
             let response = schema.execute(&query).await;
             assert!(response.errors.is_empty(), "{query}: {response:?}");
             let data = response.data.into_json().unwrap();
             assert_eq!(
-                data["connRawEvents"]["edges"].as_array().unwrap().len(),
-                expected_count,
+                data["connRawEvents"]["edges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|edge| edge["node"][address].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                expected_addresses,
                 "{query}"
             );
         }
