@@ -97,16 +97,18 @@ const USAGE_EXIT_STATUS: u8 = 2;
 /// # Errors
 ///
 /// This function will return an error if:
-/// * The certificate and key cannot be combined into a PKCS#12 identity
+/// * The certificate and key cannot be combined into an identity
 /// * The reqwest client cannot be built with the provided configuration
-fn create_graphql_client(cert_pem: &[u8], key_pem: &[u8]) -> Result<reqwest::Client> {
+fn create_graphql_client(
+    cert_pem: &[u8],
+    key_pem: &[u8],
+    ca_pem: &[u8],
+) -> Result<reqwest::Client> {
     let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat())
         .context("failed to create client identity from certificate and key")?;
 
-    reqwest::Client::builder()
+    tls_reload::graphql_client_trust(reqwest::Client::builder(), ca_pem)?
         .identity(identity)
-        .danger_accept_invalid_certs(true)
-        .tls_sni(false)
         .build()
         .context("failed to build GraphQL client with mTLS support")
 }
@@ -456,7 +458,7 @@ impl ProcessContext {
         let cert = loaded.certs.certs.clone();
         let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::new(loaded));
         let tls = tls_reload::get_current_tls_material(&tls_watch);
-        let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)?;
+        let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem, &tls.ca_pem)?;
 
         Ok(Self {
             rocksdb_limits,
@@ -2016,7 +2018,7 @@ mod tests {
         let invalid_cert = b"invalid cert";
         let invalid_key = b"invalid key";
 
-        let result = create_graphql_client(invalid_cert, invalid_key);
+        let result = create_graphql_client(invalid_cert, invalid_key, invalid_cert);
         assert!(result.is_err());
     }
 
@@ -2028,8 +2030,112 @@ mod tests {
         let cert_pem = cert.cert.pem();
         let key_pem = cert.signing_key.serialize_pem();
 
-        let result = create_graphql_client(cert_pem.as_bytes(), key_pem.as_bytes());
+        let result =
+            create_graphql_client(cert_pem.as_bytes(), key_pem.as_bytes(), cert_pem.as_bytes());
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn graphql_client_verifies_peer_tls_and_presents_identity() {
+        use rcgen::{
+            BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa,
+            KeyPair, KeyUsagePurpose,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        fn issuer() -> CertifiedIssuer<'static, KeyPair> {
+            let mut params = CertificateParams::default();
+            params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            params.key_usages = vec![
+                KeyUsagePurpose::KeyCertSign,
+                KeyUsagePurpose::DigitalSignature,
+            ];
+            CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap()
+        }
+        crate::test_bootroot::init_crypto();
+        let ca = issuer();
+        let other_ca = issuer();
+        let client_key = KeyPair::generate().unwrap();
+        let mut client_params = CertificateParams::new(vec!["client.test".into()]).unwrap();
+        client_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        let client_cert = client_params.signed_by(&client_key, &ca).unwrap();
+        let client = create_graphql_client(
+            client_cert.pem().as_bytes(),
+            client_key.serialize_pem().as_bytes(),
+            ca.pem().as_bytes(),
+        )
+        .unwrap();
+
+        for case in ["valid", "untrusted", "name", "expired", "future"] {
+            let key = KeyPair::generate().unwrap();
+            let name = if case == "name" {
+                "127.0.0.2"
+            } else {
+                "127.0.0.1"
+            };
+            let mut params = CertificateParams::new(vec![name.into()]).unwrap();
+            params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+            if case == "expired" {
+                params.not_before = rcgen::date_time_ymd(2000, 1, 1);
+                params.not_after = rcgen::date_time_ymd(2001, 1, 1);
+            } else if case == "future" {
+                params.not_before = rcgen::date_time_ymd(4090, 1, 1);
+                params.not_after = rcgen::date_time_ymd(4091, 1, 1);
+            }
+            let cert = params
+                .signed_by(&key, if case == "untrusted" { &other_ca } else { &ca })
+                .unwrap();
+            let mut roots = rustls::RootCertStore::empty();
+            roots.add(ca.der().clone()).unwrap();
+            let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+                .build()
+                .unwrap();
+            let config = rustls::ServerConfig::builder()
+                .with_client_cert_verifier(verifier)
+                .with_single_cert(
+                    vec![cert.der().clone()],
+                    rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+                )
+                .unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let Ok(mut stream) = tokio_rustls::TlsAcceptor::from(Arc::new(config))
+                    .accept(stream)
+                    .await
+                else {
+                    return false;
+                };
+                let authenticated = stream
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .is_some_and(|certs| !certs.is_empty());
+                let mut request = [0; 4096];
+                let _ = stream.read(&mut request).await.unwrap();
+                let body = r#"{"data":{"hello":"world"}}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+                authenticated
+            });
+            let response = client
+                .post(format!("https://{addr}/graphql"))
+                .json(&serde_json::json!({"query":"{ hello }"}))
+                .send()
+                .await;
+            if case == "valid" {
+                let body: serde_json::Value = response.unwrap().json().await.unwrap();
+                assert_eq!(body, serde_json::json!({"data":{"hello":"world"}}));
+                assert!(task.await.unwrap(), "server must authenticate the client");
+            } else {
+                assert!(response.is_err(), "{case} certificate was accepted");
+                assert!(!task.await.unwrap(), "{case} completed TLS");
+            }
+        }
     }
 
     mod reload_https_server_tests {

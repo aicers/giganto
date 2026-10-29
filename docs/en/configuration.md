@@ -101,6 +101,11 @@ P2P cluster mode is enabled **only when a valid `peer_srv_addr` is
 configured**. `peers` addresses should be defined according to the actual
 operational network. `peers[].hostname` is the peer certificate's SAN DNS name;
 Giganto verifies the peer's certificate against it when connecting.
+Outbound peer GraphQL connections use the connected peer's IP address and its
+advertised GraphQL port. Each peer's server certificate must therefore also
+include that IP address as an IP SAN. The configured CA bundle must trust the
+peer's server certificate chain; certificates must be valid at the current time.
+Giganto presents its configured client certificate for these mTLS connections.
 
 ## Certificate Requirements
 

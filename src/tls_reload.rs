@@ -95,6 +95,22 @@ fn load_root_cert(ca_certs_paths: &[String]) -> Result<(rustls::RootCertStore, V
     Ok((root_cert, combined_pem))
 }
 
+/// Configure outbound GraphQL clients to trust the same CA bundle as listeners.
+pub fn graphql_client_trust(
+    builder: reqwest::ClientBuilder,
+    ca_pem: &[u8],
+) -> Result<reqwest::ClientBuilder> {
+    let certificates = reqwest::Certificate::from_pem_bundle(ca_pem)
+        .context("failed to parse GraphQL client CA bundle")?;
+    if certificates.is_empty() {
+        bail!("no certificates found in GraphQL client CA bundle");
+    }
+    Ok(certificates.into_iter().fold(
+        builder.tls_built_in_root_certs(false),
+        reqwest::ClientBuilder::add_root_certificate,
+    ))
+}
+
 pub struct TlsMaterial {
     pub certs: Arc<Certs>,
     pub cert_pem: Vec<u8>,

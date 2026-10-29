@@ -206,6 +206,8 @@ where
     F: 'static + FnOnce(Option<ResponseDataType>) -> ResultDataType,
 {
     let client = ctx.data::<reqwest::Client>()?;
+    // The peer map contains the connected address, so the HTTPS server
+    // certificate must include that address as an IP subject alternative name.
     let req = client
         .post(format!(
             "{}://{}/graphql",
