@@ -13,6 +13,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   it instead of X25519. A node that does not support it is still reached with
   X25519, without an extra round trip.
 
+- `updateConfig` now rejects RocksDB options outside their validity ranges:
+  `max_open_files` 20 through the process open-file bound, level base 1 through
+  262144 MiB, background threads 1 through 128, and subcompactions 1 through 8.
+  Startup clamps legacy values and logs one WARN per changed field without
+  rewriting TOML. `max_open_files = -1` becomes the process bound; zero and
+  overflowing level sizes are corrected, and sizes above 262144 reduce the
+  WAL limit, level base, and file size target. Thread counts above the caps
+  decrease; `num_of_thread = i32::MIN` no longer reaches undefined C++
+  arithmetic. Other clamping matches RocksDB's existing adjustment.
+
+### Fixed
+
+- An accepted configuration update that prevents the database from opening no
+  longer stops Giganto. It restores the previous configuration and restarts
+  once; failures after store opening retain their existing behavior.
+
 ## [0.34.0] - 2026-10-28
 
 ### Added
