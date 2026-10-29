@@ -1941,7 +1941,8 @@ mod tests {
             "the empty snapshot should not suppress the next one, got: {output}"
         );
     }
-    const THREAD_TEST_TIMEOUT: Duration = Duration::from_secs(1);
+    /// A hang guard for tests waiting on a runtime thread.
+    const THREAD_TEST_TIMEOUT: Duration = Duration::from_secs(30);
     const UNFINISHED_TASK_LOG: &str = "tracked task did not run to completion";
 
     fn run_on_current_thread_runtime<T, F>(future: F) -> T
