@@ -60,7 +60,7 @@ use tokio_util::sync::CancellationToken;
 use super::{Server, shutdown_ingest};
 use crate::test_bootroot::{
     bootroot_chain_node1_client_certs, bootroot_chain_node1_fixture,
-    bootroot_chain_node1_server_certs,
+    bootroot_chain_node1_server_certs, build_bootroot_chain_fixture, load_certs,
 };
 use crate::{
     cancellation::TaskTracker,
@@ -200,15 +200,31 @@ fn spawn_server_with(
     ack_transmission_cnt: u16,
     notify_sensor: Option<Arc<Notify>>,
 ) -> TestServer {
+    spawn_server_with_certs(
+        db,
+        ack_transmission_cnt,
+        notify_sensor,
+        load_test_server_certs(),
+    )
+}
+
+fn spawn_server_with_certs(
+    db: Database,
+    ack_transmission_cnt: u16,
+    notify_sensor: Option<Arc<Notify>>,
+    certs: Arc<Certs>,
+) -> TestServer {
     init_crypto();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
     let stream_direct_channels = new_stream_direct_channels();
     let server_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
-    let bound = server(server_addr).bind().expect("bind ingest test server");
+    let bound = Server::new(server_addr, &certs)
+        .bind()
+        .expect("bind ingest test server");
     let local_addr = bound.local_addr();
-    let (tls_sender, tls_watch) = test_tls_watch(load_test_server_certs());
+    let (tls_sender, tls_watch) = test_tls_watch(certs);
     let token = CancellationToken::new();
     let handle = tokio::spawn(bound.run(
         db,
@@ -2610,8 +2626,8 @@ async fn check_sensors_conn_updates_runtime_state() {
 
     use crate::comm::ingest::ConnState;
 
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let harness = TestHarness::new().await;
+    let db = harness.db.clone();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
@@ -2642,9 +2658,15 @@ async fn check_sensors_conn_updates_runtime_state() {
     let now = DateTime::now();
 
     // Test Connection
-    tx.send((sensor_name.clone(), now, ConnState::Connected, false))
-        .await
-        .unwrap();
+    tx.send((
+        sensor_name.clone(),
+        now,
+        ConnState::Connected,
+        false,
+        harness.client.conn.clone(),
+    ))
+    .await
+    .unwrap();
 
     wait_until(
         "sensor connected",
@@ -2662,9 +2684,15 @@ async fn check_sensors_conn_updates_runtime_state() {
     .await;
 
     // Test Disconnection
-    tx.send((sensor_name.clone(), now, ConnState::Disconnected, false))
-        .await
-        .unwrap();
+    tx.send((
+        sensor_name.clone(),
+        now,
+        ConnState::Disconnected,
+        false,
+        harness.client.conn.clone(),
+    ))
+    .await
+    .unwrap();
     wait_until(
         "sensor disconnected",
         std::time::Duration::from_secs(1),
@@ -2682,6 +2710,7 @@ async fn check_sensors_conn_updates_runtime_state() {
     with_timeout("sensor-state drain", SHUTDOWN_TIMEOUT, sensor_state)
         .await
         .expect("sensor-state task should not panic");
+    harness.shutdown(b"done").await;
 }
 
 #[tokio::test]
@@ -2691,8 +2720,8 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
 
     use crate::comm::ingest::ConnState;
 
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let harness = TestHarness::new().await;
+    let db = harness.db.clone();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
@@ -2724,9 +2753,15 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
     let sensor_name = "notify_sensor".to_string();
     let now = DateTime::now();
 
-    tx.send((sensor_name, now, ConnState::Connected, false))
-        .await
-        .unwrap();
+    tx.send((
+        sensor_name,
+        now,
+        ConnState::Connected,
+        false,
+        harness.client.conn.clone(),
+    ))
+    .await
+    .unwrap();
 
     with_timeout(
         "notify_sensor",
@@ -2768,6 +2803,7 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
         now,
         ConnState::Connected,
         false,
+        harness.client.conn.clone(),
     ))
     .await
     .unwrap();
@@ -2784,6 +2820,7 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
         now,
         ConnState::Disconnected,
         false,
+        harness.client.conn.clone(),
     ))
     .await
     .unwrap();
@@ -2803,6 +2840,7 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
         now,
         ConnState::Connected,
         false,
+        harness.client.conn.clone(),
     ))
     .await
     .unwrap();
@@ -2829,6 +2867,7 @@ async fn notify_sensor_on_connect_updates_state_and_db() {
     with_timeout("sensor-state drain", SHUTDOWN_TIMEOUT, sensor_state)
         .await
         .expect("sensor-state task should not panic");
+    harness.shutdown(b"done").await;
 }
 
 #[tokio::test]
@@ -2875,9 +2914,15 @@ async fn notify_sensor_and_pcap_disconnect_behaviors() {
         .await
         .insert(sensor_name.clone(), vec![harness.client.conn.clone()]);
 
-    tx.send((sensor_name, now, ConnState::Disconnected, false))
-        .await
-        .unwrap();
+    tx.send((
+        sensor_name,
+        now,
+        ConnState::Disconnected,
+        false,
+        harness.client.conn.clone(),
+    ))
+    .await
+    .unwrap();
 
     let res = timeout(
         std::time::Duration::from_millis(200),
@@ -2911,6 +2956,7 @@ async fn notify_sensor_and_pcap_disconnect_behaviors() {
         now,
         ConnState::Disconnected,
         true,
+        harness.client.conn.clone(),
     ))
     .await
     .unwrap();
@@ -2944,8 +2990,8 @@ async fn check_sensors_conn_pcap_removes_runtime_on_disconnect() {
 
     use crate::comm::ingest::ConnState;
 
-    let db_dir = tempfile::tempdir().unwrap();
-    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let harness = TestHarness::new().await;
+    let db = harness.db.clone();
     let pcap_sensors = new_pcap_sensors();
     let ingest_sensors = new_ingest_sensors(&db);
     let runtime_ingest_sensors = new_runtime_ingest_sensors();
@@ -2975,9 +3021,15 @@ async fn check_sensors_conn_pcap_removes_runtime_on_disconnect() {
     let sensor_name = "piglet_sensor".to_string(); // "piglet" implies pcap sensor logic in handle_connection, but here we explicitly set is_pcap_sensor
     let now = DateTime::now();
 
-    tx.send((sensor_name.clone(), now, ConnState::Connected, true))
-        .await
-        .unwrap();
+    tx.send((
+        sensor_name.clone(),
+        now,
+        ConnState::Connected,
+        true,
+        harness.client.conn.clone(),
+    ))
+    .await
+    .unwrap();
     wait_until(
         "pcap_sensor_connected",
         std::time::Duration::from_secs(1),
@@ -2990,9 +3042,15 @@ async fn check_sensors_conn_pcap_removes_runtime_on_disconnect() {
     )
     .await;
 
-    tx.send((sensor_name.clone(), now, ConnState::Disconnected, true))
-        .await
-        .unwrap();
+    tx.send((
+        sensor_name.clone(),
+        now,
+        ConnState::Disconnected,
+        true,
+        harness.client.conn.clone(),
+    ))
+    .await
+    .unwrap();
     wait_until(
         "pcap_sensor_disconnected",
         std::time::Duration::from_secs(1),
@@ -3017,6 +3075,294 @@ async fn check_sensors_conn_pcap_removes_runtime_on_disconnect() {
     with_timeout("sensor-state drain", SHUTDOWN_TIMEOUT, sensor_state)
         .await
         .expect("sensor-state task should not panic");
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn overlapping_pcap_connections_disconnect_a_first() {
+    assert_overlapping_pcap_disconnects(false).await;
+}
+
+#[tokio::test]
+async fn overlapping_pcap_connections_disconnect_b_first() {
+    assert_overlapping_pcap_disconnects(true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn assert_overlapping_pcap_disconnects(b_first: bool) {
+    let harness = TestHarness::new().await;
+    let client_b = TestClient::new(harness.server.local_addr).await;
+    let a = &harness.client.conn;
+    let b = &client_b.conn;
+    assert_ne!(a.stable_id(), b.stable_id());
+    let sensor = "overlapping_pcap";
+    let store = harness.db.sensors_store().unwrap();
+    let pcap = new_pcap_sensors();
+    let ingest = new_ingest_sensors(&harness.db);
+    let runtime = new_runtime_ingest_sensors();
+    let mut live = std::collections::HashMap::new();
+    pcap.write()
+        .await
+        .insert(sensor.to_string(), vec![a.clone(), b.clone()]);
+    for conn in [a, b] {
+        super::apply_sensor_update(
+            (
+                sensor.to_string(),
+                DateTime::now(),
+                super::ConnState::Connected,
+                true,
+                conn.clone(),
+            ),
+            &mut live,
+            &store,
+            &pcap,
+            &ingest,
+            &runtime,
+            None,
+        )
+        .await;
+    }
+    let (first, last) = if b_first { (b, a) } else { (a, b) };
+    super::apply_sensor_update(
+        (
+            sensor.to_string(),
+            DateTime::now(),
+            super::ConnState::Disconnected,
+            true,
+            first.clone(),
+        ),
+        &mut live,
+        &store,
+        &pcap,
+        &ingest,
+        &runtime,
+        None,
+    )
+    .await;
+    assert!(runtime.read().await.contains_key(sensor));
+    assert_eq!(
+        pcap.read()
+            .await
+            .get(sensor)
+            .unwrap()
+            .iter()
+            .map(Connection::stable_id)
+            .collect::<Vec<_>>(),
+        vec![last.stable_id()],
+    );
+    let selected =
+        crate::comm::publish::get_pcap_conn_if_current_giganto_in_charge(pcap.clone(), sensor)
+            .await
+            .unwrap();
+    assert_eq!(selected.stable_id(), last.stable_id());
+    super::apply_sensor_update(
+        (
+            sensor.to_string(),
+            DateTime::now(),
+            super::ConnState::Disconnected,
+            true,
+            last.clone(),
+        ),
+        &mut live,
+        &store,
+        &pcap,
+        &ingest,
+        &runtime,
+        None,
+    )
+    .await;
+    assert!(!runtime.read().await.contains_key(sensor));
+    assert!(!pcap.read().await.contains_key(sensor));
+    assert!(!live.contains_key(sensor));
+    assert!(ingest.read().await.contains(sensor));
+    client_b.conn.close(0_u32.into(), b"done");
+    client_b.endpoint.wait_idle().await;
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn stale_disconnect_after_customer_cleanup_does_not_recreate_sensor() {
+    let harness = TestHarness::new().await;
+    let sensor = "deleted_pcap";
+    let store = harness.db.sensors_store().unwrap();
+    let pcap = new_pcap_sensors();
+    let ingest = new_ingest_sensors(&harness.db);
+    let runtime = new_runtime_ingest_sensors();
+    let mut live = std::collections::HashMap::new();
+    let conn = &harness.client.conn;
+    pcap.write()
+        .await
+        .insert(sensor.to_string(), vec![conn.clone()]);
+    super::apply_sensor_update(
+        (
+            sensor.to_string(),
+            DateTime::now(),
+            super::ConnState::Connected,
+            true,
+            conn.clone(),
+        ),
+        &mut live,
+        &store,
+        &pcap,
+        &ingest,
+        &runtime,
+        None,
+    )
+    .await;
+    store.delete(sensor).unwrap();
+    runtime.write().await.remove(sensor);
+    pcap.write().await.remove(sensor);
+    let (logs, guard) = capture_logs();
+    super::apply_sensor_update(
+        (
+            sensor.to_string(),
+            DateTime::now(),
+            super::ConnState::Disconnected,
+            true,
+            conn.clone(),
+        ),
+        &mut live,
+        &store,
+        &pcap,
+        &ingest,
+        &runtime,
+        None,
+    )
+    .await;
+    assert!(!store.sensor_list().contains(sensor));
+    assert!(!runtime.read().await.contains_key(sensor));
+    assert!(!pcap.read().await.contains_key(sensor));
+    assert!(!captured(&logs).contains("ERROR"));
+    drop(guard);
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn overlapping_real_pcap_connections_keep_live_publish_connection() {
+    init_crypto();
+    let fixture = build_bootroot_chain_fixture(
+        "001.piglet.node1.example.test",
+        "001.piglet.node1.example.test",
+    );
+    let server_certs = Arc::new(load_certs(
+        &fixture.server_leaf_path,
+        &fixture.server_key_path,
+        &fixture.ca_bundle_intermediate_then_root_path,
+    ));
+    let client_certs = load_certs(
+        &fixture.client_leaf_path,
+        &fixture.client_key_path,
+        &fixture.ca_bundle_intermediate_then_root_path,
+    );
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = Database::open(db_dir.path(), &DbOptions::default()).unwrap();
+    let mut server = spawn_server_with_certs(db, 1024, None, server_certs);
+    let mut endpoint = Endpoint::client("[::]:0".parse().unwrap()).unwrap();
+    endpoint.set_default_client_config(config_client(&client_certs).unwrap());
+    let sensor = "piglet.node1.example.test";
+    let a = endpoint
+        .connect(server.local_addr, &fixture.server_name)
+        .unwrap()
+        .await
+        .unwrap();
+    client_handshake(&a, PROTOCOL_VERSION).await.unwrap();
+    wait_until(
+        "pcap A registered",
+        std::time::Duration::from_secs(2),
+        || async {
+            server
+                .pcap_sensors
+                .read()
+                .await
+                .get(sensor)
+                .is_some_and(|connections| connections.len() == 1)
+        },
+    )
+    .await;
+    let a_id = server
+        .pcap_sensors
+        .read()
+        .await
+        .get(sensor)
+        .unwrap()
+        .first()
+        .unwrap()
+        .stable_id();
+    let b = endpoint
+        .connect(server.local_addr, &fixture.server_name)
+        .unwrap()
+        .await
+        .unwrap();
+    client_handshake(&b, PROTOCOL_VERSION).await.unwrap();
+    wait_until(
+        "pcap B registered",
+        std::time::Duration::from_secs(2),
+        || async {
+            server
+                .pcap_sensors
+                .read()
+                .await
+                .get(sensor)
+                .is_some_and(|connections| connections.len() == 2)
+        },
+    )
+    .await;
+    let b_id = server
+        .pcap_sensors
+        .read()
+        .await
+        .get(sensor)
+        .unwrap()
+        .last()
+        .unwrap()
+        .stable_id();
+    assert_ne!(a_id, b_id);
+    b.close(0_u32.into(), b"disconnect B");
+    wait_until(
+        "pcap B disconnect applied",
+        std::time::Duration::from_secs(2),
+        || async {
+            server
+                .pcap_sensors
+                .read()
+                .await
+                .get(sensor)
+                .is_some_and(|connections| connections.len() == 1)
+        },
+    )
+    .await;
+    assert!(
+        server
+            .runtime_ingest_sensors
+            .read()
+            .await
+            .contains_key(sensor)
+    );
+    let selected = crate::comm::publish::get_pcap_conn_if_current_giganto_in_charge(
+        server.pcap_sensors.clone(),
+        sensor,
+    )
+    .await
+    .unwrap();
+    assert_eq!(selected.stable_id(), a_id);
+    assert!(selected.close_reason().is_none());
+    a.close(0_u32.into(), b"done");
+    wait_until(
+        "pcap A disconnect applied",
+        std::time::Duration::from_secs(2),
+        || async { !server.pcap_sensors.read().await.contains_key(sensor) },
+    )
+    .await;
+    assert!(
+        !server
+            .runtime_ingest_sensors
+            .read()
+            .await
+            .contains_key(sensor)
+    );
+    endpoint.wait_idle().await;
+    server.shutdown().await;
 }
 
 #[tokio::test]
