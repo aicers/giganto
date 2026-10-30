@@ -26,7 +26,8 @@ pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
 pub type RunTimeIngestSensors = Arc<RwLock<HashMap<String, DateTime>>>;
 use self::stream_channel_key::StreamChannelKey;
 
-pub type StreamDirectChannels = Arc<RwLock<HashMap<StreamChannelKey, UnboundedSender<Vec<u8>>>>>;
+pub(crate) type StreamDirectChannelMap = HashMap<StreamChannelKey, UnboundedSender<Vec<u8>>>;
+pub type StreamDirectChannels = Arc<RwLock<StreamDirectChannelMap>>;
 
 /// Parses PEM-encoded certificates and returns a certificate chain.
 ///

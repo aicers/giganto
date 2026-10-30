@@ -12,7 +12,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the QUIC and GraphQL connections it opens to other Giganto nodes, so they use
   it instead of X25519. A node that does not support it is still reached with
   X25519, without an extra round trip.
-
 - `updateConfig` now rejects RocksDB options outside their validity ranges:
   `max_open_files` 20 through the process open-file bound, level base 1 through
   262144 MiB, background threads 1 through 128, and subcompactions 1 through 8.
@@ -25,6 +24,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- A time series generator subscription no longer sends a record twice when
+  moving from replay to realtime and no longer fails to send records that
+  arrive late during the subscription.
 - An accepted configuration update that prevents the database from opening no
   longer stops Giganto. It restores the previous configuration and restarts
   once; failures after store opening retain their existing behavior.
