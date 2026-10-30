@@ -193,6 +193,61 @@ mod tests {
 
     use super::*;
 
+    // Based on the shutdown line in Poem 3.1.12's Server::run_with_graceful_shutdown.
+    const POEM_SHUTDOWN_LOG: &str = "wait for all connections to close.";
+    // Even the keep-alive test's successive waits leave room to release the
+    // request within both the client and graceful-shutdown 30-second limits.
+    const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[derive(Clone, Default)]
+    struct CaptureBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CaptureBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("capture lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureBuf {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    impl CaptureBuf {
+        fn logs(&self) -> String {
+            String::from_utf8(self.0.lock().expect("capture lock").clone()).expect("utf8 logs")
+        }
+
+        async fn wait_for_shutdown(&self) {
+            tokio::time::timeout(WAIT_TIMEOUT, async {
+                while !self.logs().contains(POEM_SHUTDOWN_LOG) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("Poem must begin waiting for connections to close");
+        }
+    }
+
+    fn capture_logs() -> (CaptureBuf, tracing::subscriber::DefaultGuard) {
+        let buf = CaptureBuf::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(buf.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        (buf, guard)
+    }
+
     static INSTALL_PROVIDER: Once = Once::new();
 
     fn install_crypto_provider() {
@@ -208,6 +263,9 @@ mod tests {
     #[derive(Clone)]
     struct SlowEntered(std::sync::Arc<tokio::sync::Notify>);
 
+    /// Holds the resolver until the test has observed shutdown and rejection.
+    struct SlowRelease(std::sync::Arc<tokio::sync::Notify>);
+
     struct Query;
 
     #[Object]
@@ -221,10 +279,14 @@ mod tests {
         ///
         /// If a [`SlowEntered`] signal is present in the schema data, it is
         /// notified on entry so the caller can synchronize on the request
-        /// reaching this resolver.
+        /// reaching this resolver. If a [`SlowRelease`] gate is also present,
+        /// wait for it before starting the simulated work.
         async fn slow(&self, ctx: &Context<'_>, millis: i32) -> &'static str {
             if let Ok(entered) = ctx.data::<SlowEntered>() {
                 entered.0.notify_one();
+            }
+            if let Ok(release) = ctx.data::<SlowRelease>() {
+                release.0.notified().await;
             }
             let millis = u64::try_from(millis).unwrap_or(0);
             sleep(Duration::from_millis(millis)).await;
@@ -242,6 +304,16 @@ mod tests {
     ) -> Schema<Query, EmptyMutation, EmptySubscription> {
         Schema::build(Query, EmptyMutation, EmptySubscription)
             .data(SlowEntered(entered))
+            .finish()
+    }
+
+    fn test_schema_with_gate(
+        entered: std::sync::Arc<tokio::sync::Notify>,
+        release: std::sync::Arc<tokio::sync::Notify>,
+    ) -> Schema<Query, EmptyMutation, EmptySubscription> {
+        Schema::build(Query, EmptyMutation, EmptySubscription)
+            .data(SlowEntered(entered))
+            .data(SlowRelease(release))
             .finish()
     }
 
@@ -360,63 +432,83 @@ mod tests {
         controller.shutdown().await.expect("second shutdown");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn accepted_ordinary_request_finishes_before_timeout() {
+        crate::cancellation::hold_callsite_interest_open();
+        let (logs, _guard) = capture_logs();
         install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_pki(dir.path());
         let addr = free_addr();
 
         // A generous timeout: the accepted request is well within it.
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
         let controller = serve(
-            test_schema(),
+            test_schema_with_gate(entered.clone(), release.clone()),
             addr,
             cert.clone(),
             key.clone(),
             ca.clone(),
-            Duration::from_secs(10),
+            Duration::from_secs(30),
         )
         .await
         .expect("serve should start");
-        sleep(Duration::from_millis(50)).await;
 
         // Start an in-flight request, then let it run into the shutdown window.
         let client = build_mtls_client(&cert, &key, &ca);
         let inflight =
             tokio::spawn(async move { run_query(&client, addr, "{ slow(millis: 800) }").await });
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::timeout(WAIT_TIMEOUT, entered.notified())
+            .await
+            .expect("the slow request must enter its resolver before shutdown");
 
         // Shutdown waits for the accepted request rather than cutting it off.
-        controller.shutdown().await.expect("graceful shutdown");
+        let shutdown = tokio::spawn(controller.shutdown());
+        logs.wait_for_shutdown().await;
 
-        let body = inflight
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown must wait for the held request"
+        );
+        release.notify_one();
+        let body = tokio::time::timeout(WAIT_TIMEOUT, inflight)
             .await
+            .expect("the released request must finish promptly")
             .expect("join the in-flight request")
             .expect("an accepted ordinary request must finish before the timeout");
         assert!(
             body.contains("slept"),
             "the in-flight request should have completed normally, got: {body}"
         );
+        tokio::time::timeout(WAIT_TIMEOUT, shutdown)
+            .await
+            .expect("shutdown must finish after the request")
+            .expect("join shutdown")
+            .expect("graceful shutdown");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn new_requests_rejected_after_shutdown_begins() {
+        crate::cancellation::hold_callsite_interest_open();
+        let (logs, _guard) = capture_logs();
         install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_pki(dir.path());
         let addr = free_addr();
 
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
         let controller = serve(
-            test_schema(),
+            test_schema_with_gate(entered.clone(), release.clone()),
             addr,
             cert.clone(),
             key.clone(),
             ca.clone(),
-            Duration::from_secs(10),
+            Duration::from_secs(30),
         )
         .await
         .expect("serve should start");
-        sleep(Duration::from_millis(50)).await;
 
         // Confirm the server serves before shutdown begins.
         let client = build_mtls_client(&cert, &key, &ca);
@@ -431,12 +523,14 @@ mod tests {
             tokio::spawn(
                 async move { run_query(&hold_client, addr, "{ slow(millis: 1500) }").await },
             );
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::timeout(WAIT_TIMEOUT, entered.notified())
+            .await
+            .expect("the slow request must enter its resolver before shutdown");
 
         // Begin shutdown; the acceptor stops taking new connections and the
         // server stops admitting new requests.
         let shutdown = tokio::spawn(controller.shutdown());
-        sleep(Duration::from_millis(250)).await;
+        logs.wait_for_shutdown().await;
 
         // A brand-new connection must be refused now that shutdown has begun and
         // the acceptor is closed. Rejection on an *already-established*
@@ -446,15 +540,32 @@ mod tests {
         // pooled `reqwest::Client` cannot establish that here because it may
         // silently open a fresh connection instead of reusing its idle one.
         let new_client = build_mtls_client(&cert, &key, &ca);
-        let rejected = run_query(&new_client, addr, "{ hello }").await;
+        let rejected =
+            tokio::time::timeout(WAIT_TIMEOUT, run_query(&new_client, addr, "{ hello }"))
+                .await
+                .expect("a new connection must be rejected promptly");
         assert!(
             rejected.is_err(),
             "a new request on a fresh connection must be rejected once web shutdown has begun"
         );
 
-        let _ = hold.await.expect("join the holding request");
-        shutdown
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown must wait for the held request"
+        );
+        release.notify_one();
+        let body = tokio::time::timeout(WAIT_TIMEOUT, hold)
             .await
+            .expect("the released request must finish promptly")
+            .expect("join the holding request")
+            .expect("the holding request must complete normally");
+        assert!(
+            body.contains("slept"),
+            "the holding request must finish, got: {body}"
+        );
+        tokio::time::timeout(WAIT_TIMEOUT, shutdown)
+            .await
+            .expect("shutdown must finish after the request")
             .expect("join shutdown")
             .expect("graceful shutdown");
     }
@@ -544,43 +655,16 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn shutdown_reports_each_pending_round_without_aborting_the_web_task() {
         use std::sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicBool, Ordering},
         };
 
         use tokio::sync::oneshot;
-        use tracing_subscriber::fmt::MakeWriter;
 
         const REPORT_INTERVAL: Duration = Duration::from_millis(25);
 
-        #[derive(Clone)]
-        struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for CaptureBuf {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("capture lock").extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> MakeWriter<'a> for CaptureBuf {
-            type Writer = CaptureBuf;
-            fn make_writer(&'a self) -> Self::Writer {
-                self.clone()
-            }
-        }
-
-        // `#[tokio::test]` runs on a current-thread runtime, so the spawned
-        // stand-in task and the reporting loop are polled on this thread and
-        // their events land in this thread-local subscriber's buffer.
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .without_time()
-            .with_writer(CaptureBuf(Arc::clone(&buf)))
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        // The current-thread runtime keeps spawned task logs in this capture.
+        let (buf, _guard) = capture_logs();
 
         // A stand-in web task that stays pending until released, then finishes
         // on its own. Deferring completion past several report intervals is what
@@ -620,7 +704,7 @@ mod tests {
             completed.load(Ordering::SeqCst),
             "the web task must finish on its own; it must not be aborted"
         );
-        let logs = String::from_utf8(buf.lock().expect("capture lock").clone()).expect("utf8 logs");
+        let logs = buf.logs();
         let reports = logs.matches("shutdown still pending").count();
         assert_eq!(
             reports, 2,
@@ -708,24 +792,27 @@ mod tests {
     /// *requests*, not only new connections. This drives a raw TLS socket so the
     /// second request is demonstrably sent over the same connection the first
     /// succeeded on, closing the gap a pooled HTTP client leaves open.
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn established_keepalive_connection_rejects_new_request() {
+        crate::cancellation::hold_callsite_interest_open();
+        let (logs, _guard) = capture_logs();
         install_crypto_provider();
         let dir = tempdir().expect("tempdir");
         let (cert, key, ca) = write_pki(dir.path());
         let addr = free_addr();
 
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
         let controller = serve(
-            test_schema(),
+            test_schema_with_gate(entered.clone(), release.clone()),
             addr,
             cert.clone(),
             key.clone(),
             ca.clone(),
-            Duration::from_secs(10),
+            Duration::from_secs(30),
         )
         .await
         .expect("serve should start");
-        sleep(Duration::from_millis(50)).await;
 
         // Establish one keep-alive connection and confirm it serves a request
         // before shutdown begins.
@@ -745,16 +832,36 @@ mod tests {
             tokio::spawn(
                 async move { run_query(&hold_client, addr, "{ slow(millis: 1500) }").await },
             );
-        sleep(Duration::from_millis(150)).await;
+        tokio::time::timeout(WAIT_TIMEOUT, entered.notified())
+            .await
+            .expect("the slow request must enter its resolver before shutdown");
 
         let shutdown = tokio::spawn(controller.shutdown());
-        sleep(Duration::from_millis(250)).await;
+        logs.wait_for_shutdown().await;
+
+        // Drain any bytes left over from the first response until the server
+        // closes this idle connection; a partial response read is not closure.
+        tokio::time::timeout(WAIT_TIMEOUT, async {
+            use tokio::io::AsyncReadExt;
+
+            let mut buf = [0; 4096];
+            loop {
+                match conn.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await
+        .expect("the idle keep-alive connection was not closed");
 
         // The second request is sent over the *same* connection the first
         // succeeded on. Graceful shutdown closes the idle keep-alive connection,
         // so this must not be served: either the write/read fails outright, or no
         // `200` response comes back.
-        let second = http1_hello_over(&mut conn).await;
+        let second = tokio::time::timeout(WAIT_TIMEOUT, http1_hello_over(&mut conn))
+            .await
+            .expect("the second keep-alive request must be rejected promptly");
         let refused = match second {
             Err(_) => true,
             Ok(resp) => !resp.contains("200"),
@@ -765,9 +872,23 @@ mod tests {
              once web shutdown has begun"
         );
 
-        let _ = hold.await.expect("join the holding request");
-        shutdown
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown must wait for the held request"
+        );
+        release.notify_one();
+        let body = tokio::time::timeout(WAIT_TIMEOUT, hold)
             .await
+            .expect("the released request must finish promptly")
+            .expect("join the holding request")
+            .expect("the holding request must complete normally");
+        assert!(
+            body.contains("slept"),
+            "the holding request must finish, got: {body}"
+        );
+        tokio::time::timeout(WAIT_TIMEOUT, shutdown)
+            .await
+            .expect("shutdown must finish after the request")
             .expect("join shutdown")
             .expect("graceful shutdown");
     }
