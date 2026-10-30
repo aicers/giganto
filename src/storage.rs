@@ -1731,7 +1731,30 @@ pub async fn retain_periodically(
     cancel: CancellationToken,
     deletion_coordination: Arc<CustomerDeletionCoordinator>,
 ) -> Result<()> {
+    retain_periodically_with_hook(
+        interval,
+        retention_period,
+        oplog_retention_period,
+        db,
+        cancel,
+        deletion_coordination,
+        || {},
+    )
+    .await
+}
+
+async fn retain_periodically_with_hook(
+    interval: Duration,
+    retention_period: Duration,
+    oplog_retention_period: Duration,
+    db: Database,
+    cancel: CancellationToken,
+    deletion_coordination: Arc<CustomerDeletionCoordinator>,
+    before_cleanup: impl Fn() + Send + Sync + 'static,
+) -> Result<()> {
     const DEFAULT_FROM_TIMESTAMP_NANOS: i64 = 61_000_000_000;
+
+    let before_cleanup = Arc::new(before_cleanup);
 
     let mut itv = time::interval(interval);
     let retention_duration = i64::try_from(retention_period.as_nanos())?;
@@ -1785,7 +1808,9 @@ pub async fn retain_periodically(
             |cutoffs| {
                 let db = db.clone();
                 let warned_malformed_series = Arc::clone(&warned_malformed_series);
+                let before_cleanup = Arc::clone(&before_cleanup);
                 tokio::task::spawn_blocking(move || {
+                    before_cleanup();
                     retain_cleanup_iteration(&db, cutoffs, from_timestamp, &warned_malformed_series)
                 })
             },
@@ -2265,13 +2290,13 @@ mod tests {
         db.db.get_cf(cf, key).unwrap().is_none()
     }
 
-    /// Waits for state a test set up to be reached, and fails the test if it
-    /// never is.
-    ///
-    /// The condition is the synchronization; the deadline only exists so a run
-    /// that will never satisfy it ends with an assertion rather than a hang.
+    /// A hang guard for storage polling and the runtime-progress handshake.
+    const STORAGE_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// Waits for state a test set up to be reached. The deadline is only a
+    /// hang guard; the condition synchronizes successful runs.
     async fn wait_until(condition: impl Fn() -> bool, what: &str) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + STORAGE_TEST_TIMEOUT;
         while !condition() {
             assert!(std::time::Instant::now() < deadline, "{what}");
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -3433,23 +3458,15 @@ mod tests {
         assert_eq!(iterations.load(Ordering::SeqCst), 2);
     }
 
-    /// Cancellation during the retry backoff ends the pass without waiting the
-    /// backoff out.
+    /// Cancellation during the retry backoff ends the pass without waiting it out.
     ///
-    /// The retry the backoff exists for is retention work like any other, so
-    /// once shutdown has begun it is deferred rather than run. The iteration
-    /// signals from the blocking thread just before it panics, which puts the
-    /// cancellation inside the backoff window with nearly the whole of
-    /// `BLOCKING_JOIN_BACKOFF` to spare; a cancellation that landed before the
-    /// join was observed would fail the pass instead, so this cannot pass by
-    /// losing the race.
-    ///
-    /// The bound on how long the pass may take after cancellation is what
-    /// pins the guard down. A backoff that ignored the token would still
-    /// schedule no retry — the check at the top of the loop catches it on the
-    /// way round — but it would hold shutdown open for the rest of the
-    /// backoff, and only the deadline below can tell the two apart.
-    #[tokio::test]
+    /// Unfinished `spawn_blocking` work inhibits paused time's auto-advance.
+    /// When it completes, Tokio wakes the `JoinHandle` before lifting that
+    /// inhibition, so the pass observes the join error and arms the 1 s
+    /// backoff before virtual time advances. Cancellation before observing
+    /// the join error would yield `Err`; cancellation in backoff yields
+    /// `Ok(Cancelled)`. The 300 ms timeout also rejects an uncancellable backoff.
+    #[tokio::test(start_paused = true)]
     async fn cancellation_during_the_retry_backoff_stops_the_pass() {
         let cancel = CancellationToken::new();
         let iterations = Arc::new(AtomicUsize::new(0));
@@ -3484,14 +3501,13 @@ mod tests {
         about_to_panic_rx
             .await
             .expect("the iteration should have started");
-        // Long enough for the pass to observe the join failure and settle into
-        // the backoff, and far short of `BLOCKING_JOIN_BACKOFF` itself.
+        // Unfinished blocking work inhibits auto-advance. Tokio wakes the
+        // JoinHandle before lifting that inhibition, letting the pass observe
+        // the error and arm its 1 s backoff before this 100 ms wait advances.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         cancel.cancel();
 
-        // Roughly a third of the backoff that is still owed, so a pass that
-        // slept it out would miss this by some 600ms rather than by a margin
-        // a loaded machine could close.
+        // The 300 ms virtual deadline expires before the remaining backoff.
         let outcome = tokio::time::timeout(std::time::Duration::from_millis(300), pass)
             .await
             .expect("a cancelled backoff should end the pass, not be slept out")
@@ -3514,9 +3530,9 @@ mod tests {
 
         let store = db.conn_store().unwrap();
         let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
-        let retention_period = std::time::Duration::from_secs(2);
-        let old_ts_nanos = now_nanos - 10_000_000_000;
-        let new_ts_nanos = now_nanos - 1_000_000_000;
+        let retention_period = std::time::Duration::from_secs(3600);
+        let old_ts_nanos = now_nanos - 7_200_000_000_000;
+        let new_ts_nanos = now_nanos - 60_000_000_000;
 
         let old_key = StorageKey::builder()
             .start_key(sensor)
@@ -3545,7 +3561,7 @@ mod tests {
             idle_coordination(),
         ));
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + STORAGE_TEST_TIMEOUT;
         loop {
             if db
                 .db
@@ -3742,42 +3758,29 @@ mod tests {
         assert!(task.await.unwrap().is_ok());
     }
 
-    #[tokio::test]
-    async fn test_retain_periodically_keeps_within_retention_window() {
+    #[test]
+    fn retention_keeps_data_inside_the_window() {
         let (_dir, db) = setup_db();
         let sensor = "retain_boundary_sensor";
         register_sensor(&db, sensor);
-
+        let cutoff = PRESSURE_CUTOFFS.data;
+        let an_hour = 3_600_000_000_000;
+        let expired = conn_key(sensor, cutoff - an_hour);
+        let kept = conn_key(sensor, cutoff + an_hour);
         let store = db.conn_store().unwrap();
-        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
-        let retention_period = std::time::Duration::from_secs(2);
-        // Keep the timestamp safely within the retention window to avoid timing flakiness.
-        let retention_ts_nanos = now_nanos - 1_000_000_000;
+        insert_conn(&store, sensor, cutoff - an_hour, b"old");
+        insert_conn(&store, sensor, cutoff + an_hour, b"new");
 
-        let boundary_key = conn_key(sensor, retention_ts_nanos);
+        super::retain_cleanup_iteration(
+            &db,
+            PRESSURE_CUTOFFS,
+            RETENTION_FROM_TIMESTAMP,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
 
-        store.append(&boundary_key, b"boundary").unwrap();
-
-        assert_conn_key_exists(&db, &boundary_key);
-
-        let cancel = CancellationToken::new();
-        let task = tokio::spawn(super::retain_periodically(
-            std::time::Duration::from_millis(10),
-            retention_period,
-            retention_period,
-            db.clone(),
-            cancel.clone(),
-            idle_coordination(),
-        ));
-
-        // Give retain loop a chance to run.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        assert_conn_key_exists(&db, &boundary_key);
-
-        cancel.cancel();
-        let result = task.await.unwrap();
-        assert!(result.is_ok());
+        assert!(conn_key_is_gone(&db, &expired));
+        assert_conn_key_exists(&db, &kept);
     }
 
     /// The timestamp `retain_periodically` starts its range deletes from.
@@ -3994,14 +3997,14 @@ mod tests {
     async fn test_retain_periodically_deletes_expired_series_windows() {
         let (_dir, db) = setup_db();
         let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
-        let expired = insert_series(&db, "1", now_nanos - 10_000_000_000);
-        let other_expired = insert_series(&db, "10", now_nanos - 10_000_000_000);
-        let recent = insert_series(&db, "1", now_nanos - 1_000_000_000);
+        let expired = insert_series(&db, "1", now_nanos - 7_200_000_000_000);
+        let other_expired = insert_series(&db, "10", now_nanos - 7_200_000_000_000);
+        let recent = insert_series(&db, "1", now_nanos - 60_000_000_000);
 
         let (cancel, task) = spawn_retention(
             &db,
-            std::time::Duration::from_secs(2),
-            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
         );
 
         wait_until(
@@ -4018,38 +4021,28 @@ mod tests {
         assert!(task.await.unwrap().is_ok());
     }
 
-    #[tokio::test]
-    async fn test_retain_periodically_skips_unregistered_sensor() {
+    #[test]
+    fn retention_skips_an_unregistered_sensor() {
         let (_dir, db) = setup_db();
+        let sensor = "registered_sensor";
+        register_sensor(&db, sensor);
+        let expired_at = PRESSURE_CUTOFFS.data - 3_600_000_000_000;
         let store = db.conn_store().unwrap();
-        let sensor = "orphan_sensor";
-        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
-        let retention_period = std::time::Duration::from_secs(2);
-        let old_ts_nanos = now_nanos - 10_000_000_000;
+        let registered = conn_key(sensor, expired_at);
+        let orphan = conn_key("orphan_sensor", expired_at);
+        insert_conn(&store, sensor, expired_at, b"old");
+        insert_conn(&store, "orphan_sensor", expired_at, b"orphan");
 
-        let orphan_key = conn_key(sensor, old_ts_nanos);
-        store.append(&orphan_key, b"orphan").unwrap();
+        super::retain_cleanup_iteration(
+            &db,
+            PRESSURE_CUTOFFS,
+            RETENTION_FROM_TIMESTAMP,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
 
-        assert_conn_key_exists(&db, &orphan_key);
-
-        let cancel = CancellationToken::new();
-        let task = tokio::spawn(super::retain_periodically(
-            std::time::Duration::from_millis(10),
-            retention_period,
-            retention_period,
-            db.clone(),
-            cancel.clone(),
-            idle_coordination(),
-        ));
-
-        // Wait briefly to give retain loop a chance to run.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        assert_conn_key_exists(&db, &orphan_key);
-
-        cancel.cancel();
-        let result = task.await.unwrap();
-        assert!(result.is_ok());
+        assert!(conn_key_is_gone(&db, &registered));
+        assert_conn_key_exists(&db, &orphan);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -4057,54 +4050,58 @@ mod tests {
         let (_dir, db) = setup_db();
         let sensor = "block_test_sensor";
         register_sensor(&db, sensor);
-
-        let store = db.conn_store().unwrap();
         let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
-        let retention_period = std::time::Duration::from_secs(2);
-        let old_ts_nanos = now_nanos - 10_000_000_000;
+        let expired = conn_key(sensor, now_nanos - 7_200_000_000_000);
+        insert_conn(
+            &db.conn_store().unwrap(),
+            sensor,
+            now_nanos - 7_200_000_000_000,
+            b"old",
+        );
 
-        for offset in 0..100 {
-            insert_conn(&store, sensor, old_ts_nanos + offset, b"old");
-        }
-
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+        let first_call = std::sync::Mutex::new(Some((entered_tx, ack_rx)));
+        let acknowledged = Arc::new(AtomicBool::new(false));
         let cancel = CancellationToken::new();
-        let progress = Arc::new(AtomicUsize::new(0));
-
-        let progress_clone = progress.clone();
-        let ticker = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(1));
-            loop {
-                interval.tick().await;
-                progress_clone.fetch_add(1, Ordering::Relaxed);
-            }
-        });
-
-        let task = tokio::spawn(super::retain_periodically(
+        let task = tokio::spawn(super::retain_periodically_with_hook(
             std::time::Duration::from_millis(10),
-            retention_period,
-            retention_period,
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
             db.clone(),
             cancel.clone(),
             idle_coordination(),
+            {
+                let acknowledged = Arc::clone(&acknowledged);
+                move || {
+                    let Some((entered_tx, ack_rx)) = first_call.lock().unwrap().take() else {
+                        return;
+                    };
+                    let _ = entered_tx.send(());
+                    // The receiver is dropped when this call returns, including
+                    // on timeout, so inline cleanup makes the test's send fail.
+                    if ack_rx.recv_timeout(STORAGE_TEST_TIMEOUT).is_ok() {
+                        acknowledged.store(true, Ordering::SeqCst);
+                    }
+                }
+            },
         ));
 
-        // The interval's first tick is immediate and a pass repeats every
-        // 10ms, so cleanup is running for most of this window. Cleanup that
-        // ran on the runtime instead of the blocking pool would stall the
-        // ticker for it.
-        let progress_before = progress.load(Ordering::Relaxed);
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let progress_after = progress.load(Ordering::Relaxed);
-
+        tokio::time::timeout(STORAGE_TEST_TIMEOUT, entered_rx)
+            .await
+            .expect("cleanup should enter before the hang guard")
+            .expect("cleanup should signal entry");
+        ack_tx
+            .send(())
+            .expect("runtime must acknowledge while cleanup waits");
+        wait_until(
+            || conn_key_is_gone(&db, &expired),
+            "retention did not delete the expired key",
+        )
+        .await;
         cancel.cancel();
-        let result = task.await.unwrap();
-        assert!(result.is_ok());
-        ticker.abort();
-
-        assert!(
-            progress_after > progress_before + 5,
-            "runtime was blocked during retention cleanup"
-        );
+        assert!(task.await.unwrap().is_ok());
+        assert!(acknowledged.load(Ordering::SeqCst));
     }
 
     #[test]
