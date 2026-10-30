@@ -2068,11 +2068,11 @@ impl RawEventFilter for ExportFilter {
     }
 }
 
-pub(crate) struct ExportClaim {
+struct ExportClaim {
     file: File,
     progress_path: PathBuf,
     done_path: PathBuf,
-    published: bool,
+    remove_on_drop: bool,
 }
 
 impl ExportClaim {
@@ -2106,21 +2106,11 @@ impl ExportClaim {
                 file,
                 progress_path,
                 done_path,
-                published: false,
+                remove_on_drop: true,
             };
             match fs::symlink_metadata(&claim.done_path) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(claim),
-                Ok(_) => {
-                    fs::remove_file(&claim.progress_path).with_context(|| {
-                        format!(
-                            "removing export progress file {}",
-                            claim.progress_path.display()
-                        )
-                    })?;
-                    // The file was removed explicitly; avoid a second removal in Drop.
-                    let mut claim = claim;
-                    claim.published = true;
-                }
+                Ok(_) => claim.discard()?,
                 Err(e) => {
                     return Err(e)
                         .with_context(|| {
@@ -2137,6 +2127,17 @@ impl ExportClaim {
         .into())
     }
 
+    fn discard(mut self) -> Result<()> {
+        fs::remove_file(&self.progress_path).with_context(|| {
+            format!(
+                "removing export progress file {}",
+                self.progress_path.display()
+            )
+        })?;
+        self.remove_on_drop = false;
+        Ok(())
+    }
+
     fn rename(mut self) -> Result<String> {
         fs::rename(&self.progress_path, &self.done_path).with_context(|| {
             format!(
@@ -2145,14 +2146,14 @@ impl ExportClaim {
                 self.done_path.display()
             )
         })?;
-        self.published = true;
+        self.remove_on_drop = false;
         Ok(format!("export file success: {}", self.done_path.display()))
     }
 }
 
 impl Drop for ExportClaim {
     fn drop(&mut self) {
-        if !self.published
+        if self.remove_on_drop
             && let Err(e) = fs::remove_file(&self.progress_path)
         {
             warn!(
@@ -2176,7 +2177,7 @@ fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) 
     )
 }
 
-pub(crate) fn start_export(
+fn start_export(
     db: &Database,
     path: &Path,
     node_name: &NodeName,
@@ -2199,10 +2200,8 @@ pub(crate) fn start_export(
         now.strftime("%Y%m%d_%H%M%S")
     )
     .replace(' ', "");
-    let claim = ExportClaim::claim(path, &base, &export_type)?;
-    let download_path = format!("{}@{}", claim.done_path.display(), node_name.0);
-    export_by_protocol(tracker, db.clone(), filter, export_type, claim)?;
-    Ok(download_path)
+    let done_path = export_by_protocol(tracker, db.clone(), filter, export_type, path, &base)?;
+    Ok(format!("{}@{}", done_path.display(), node_name.0))
 }
 
 #[Object]
@@ -2299,16 +2298,19 @@ fn export_by_protocol(
     db: Database,
     filter: &ExportFilter,
     export_type: String,
-    claim: ExportClaim,
-) -> Result<()> {
+    path: &Path,
+    base: &str,
+) -> Result<PathBuf> {
     let filter = filter.clone();
     let protocol = filter.protocol.as_str();
 
     macro_rules! spawn_export {
-        ($store_method:ident, $process_fn:ident) => {
+        ($store_method:ident, $process_fn:ident) => {{
+            let claim = ExportClaim::claim(path, base, &export_type)?;
+            let done_path = claim.done_path.clone();
             // The token is ignored: an accepted export is waited on by the
             // drain, never cancelled, so it runs to completion.
-            tracker.spawn("export", move |_cancel| async move {
+            let spawn_result = tracker.spawn("export", move |_cancel| async move {
                 #[cfg(test)]
                 let _finished_guard = {
                     let control = claim.done_path.parent().and_then(|destination| {
@@ -2337,11 +2339,12 @@ fn export_by_protocol(
                 } else {
                     error!("Failed to open db store");
                 }
-            })
-        };
+            });
+            (spawn_result, done_path)
+        }};
     }
 
-    let spawn_result = match protocol {
+    let (spawn_result, done_path) = match protocol {
         "conn" => spawn_export!(conn_store, process_export),
         "dns" => spawn_export!(dns_store, process_export),
         "malformed_dns" => spawn_export!(malformed_dns_store, process_export),
@@ -2394,7 +2397,7 @@ fn export_by_protocol(
         error!("Failed to register export task for draining: {e}");
     }
 
-    Ok(())
+    Ok(done_path)
 }
 
 fn process_export<T, N>(
@@ -2590,11 +2593,6 @@ fn export_statistic_file(
                     }
                 }
             }
-        }
-
-        // if all iters have no value, end file writing.
-        if iter_next_values.is_empty() {
-            break;
         }
     }
 

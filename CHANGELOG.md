@@ -37,6 +37,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A time series generator subscription no longer sends a record twice when
   moving from replay to realtime and no longer fails to send records that
   arrive late during the subscription.
+- Statistics exports with no matching records or only malformed records now
+  complete with an empty file instead of panicking.
 - Results of exports of the same kind started in the same second no longer mix
   or overwrite each other.
 - An accepted configuration update that prevents the database from opening no
