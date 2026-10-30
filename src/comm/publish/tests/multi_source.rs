@@ -22,6 +22,9 @@ use crate::comm::publish::multi_source::{
 
 /// A short peer timeout, so a test that waits one out stays quick.
 const SHORT_PEER_TIMEOUT: StdDuration = StdDuration::from_millis(500);
+/// Provides connect-stage headroom for post-connect timeout assertions only.
+/// The race remains until `peer_timeout` is split by stage.
+const LATE_STAGE_PEER_TIMEOUT: StdDuration = StdDuration::from_secs(3);
 /// How long a test waits for any one frame of a response.
 const FRAME_TIMEOUT: StdDuration = StdDuration::from_secs(10);
 const MULTI_SOURCE_END: i64 = 1_000_000;
@@ -1273,7 +1276,7 @@ async fn multi_source_range_times_out_a_peer_that_never_answers() {
         .multi_source_range(
             "multi.source.silent",
             &CancellationToken::new(),
-            SHORT_PEER_TIMEOUT,
+            LATE_STAGE_PEER_TIMEOUT,
         )
         .await;
 
@@ -1299,7 +1302,7 @@ async fn raw_data_with_status_times_out_a_peer_that_never_answers() {
         .raw_data_with_status(
             "raw.status.silent",
             &CancellationToken::new(),
-            SHORT_PEER_TIMEOUT,
+            LATE_STAGE_PEER_TIMEOUT,
         )
         .await;
 
@@ -1366,27 +1369,31 @@ async fn raw_data_with_status_fails_the_sources_of_a_peer_that_breaks_off() {
 #[tokio::test]
 async fn requests_fail_the_sources_of_a_peer_whose_response_is_wrong() {
     init_crypto();
-    // The cause each response should be reported with, and the response.
+    // The expected cause, response, completion behavior, and peer timeout.
     let cases = [
         (
             "which it was not asked for",
             vec![event_frame(2, "stray")],
             AfterScript::Finish,
+            PEER_RESPONSE_TIMEOUT,
         ),
         (
             "waiting for its status timed out",
             vec![terminator_frame()],
             AfterScript::Hold,
+            LATE_STAGE_PEER_TIMEOUT,
         ),
         (
             "ended without a status",
             vec![terminator_frame()],
             AfterScript::Finish,
+            PEER_RESPONSE_TIMEOUT,
         ),
         (
             "did not list the source",
             vec![terminator_frame(), status_frame(&Ok(Vec::new()))],
             AfterScript::Finish,
+            PEER_RESPONSE_TIMEOUT,
         ),
         (
             "failed the whole request: refused",
@@ -1395,9 +1402,10 @@ async fn requests_fail_the_sources_of_a_peer_whose_response_is_wrong() {
                 status_frame(&Err("refused".to_string())),
             ],
             AfterScript::Finish,
+            PEER_RESPONSE_TIMEOUT,
         ),
     ];
-    for (cause, frames, after) in cases {
+    for (cause, frames, after, peer_timeout) in cases {
         let peer_server = setup_scripted_peer_server(
             &NODE2.build_certs(),
             crate::comm::publish::PUBLISH_VERSION_REQ,
@@ -1410,7 +1418,7 @@ async fn requests_fail_the_sources_of_a_peer_whose_response_is_wrong() {
             .multi_source_range(
                 "multi.source.wrong",
                 &CancellationToken::new(),
-                SHORT_PEER_TIMEOUT,
+                peer_timeout,
             )
             .await;
         assert_eq!(
@@ -1421,11 +1429,7 @@ async fn requests_fail_the_sources_of_a_peer_whose_response_is_wrong() {
         assert_peer_failed(status, peer_server.addr, cause);
 
         let (events, status) = fixture
-            .raw_data_with_status(
-                "raw.status.wrong",
-                &CancellationToken::new(),
-                SHORT_PEER_TIMEOUT,
-            )
+            .raw_data_with_status("raw.status.wrong", &CancellationToken::new(), peer_timeout)
             .await;
         assert_eq!(
             sorted_order(&events),
@@ -1452,7 +1456,7 @@ async fn multi_source_range_fails_a_peer_that_refuses_the_handshake() {
         .multi_source_range(
             "multi.source.refused",
             &CancellationToken::new(),
-            SHORT_PEER_TIMEOUT,
+            PEER_RESPONSE_TIMEOUT,
         )
         .await;
 
@@ -1470,7 +1474,7 @@ async fn multi_source_range_times_out_a_peer_that_grants_no_stream() {
         .multi_source_range(
             "multi.source.streamless",
             &CancellationToken::new(),
-            SHORT_PEER_TIMEOUT,
+            LATE_STAGE_PEER_TIMEOUT,
         )
         .await;
 
@@ -1659,11 +1663,13 @@ fn setup_silent_peer_server(certs: &Arc<Certs>) -> PeerHandshakeServer {
     .expect("start the silent peer server");
     let addr = endpoint.local_addr().expect("silent peer server address");
 
+    let (connection_tx, connection_rx) = mpsc::unbounded_channel();
     let endpoint_for_accept = endpoint.clone();
     tokio::spawn(async move {
         let Some(connecting) = endpoint_for_accept.accept().await else {
             return;
         };
+        let _ = connection_tx.send(());
         let Ok(connection) = connecting.await else {
             return;
         };
@@ -1685,6 +1691,7 @@ fn setup_silent_peer_server(certs: &Arc<Certs>) -> PeerHandshakeServer {
 
     PeerHandshakeServer {
         addr,
+        connection_rx,
         _endpoint: endpoint,
     }
 }
@@ -1728,9 +1735,11 @@ fn setup_scripted_peer_server(
     .expect("start the scripted peer server");
     let addr = endpoint.local_addr().expect("scripted peer server address");
 
+    let (connection_tx, connection_rx) = mpsc::unbounded_channel();
     let endpoint_for_accept = endpoint.clone();
     tokio::spawn(async move {
         while let Some(connecting) = endpoint_for_accept.accept().await {
+            let _ = connection_tx.send(());
             let Ok(connection) = connecting.await else {
                 continue;
             };
@@ -1755,6 +1764,7 @@ fn setup_scripted_peer_server(
 
     PeerHandshakeServer {
         addr,
+        connection_rx,
         _endpoint: endpoint,
     }
 }
@@ -1775,11 +1785,13 @@ fn setup_streamless_peer_server(certs: &Arc<Certs>) -> PeerHandshakeServer {
         .local_addr()
         .expect("streamless peer server address");
 
+    let (connection_tx, connection_rx) = mpsc::unbounded_channel();
     let endpoint_for_accept = endpoint.clone();
     tokio::spawn(async move {
         let Some(connecting) = endpoint_for_accept.accept().await else {
             return;
         };
+        let _ = connection_tx.send(());
         let Ok(connection) = connecting.await else {
             return;
         };
@@ -1796,6 +1808,7 @@ fn setup_streamless_peer_server(certs: &Arc<Certs>) -> PeerHandshakeServer {
 
     PeerHandshakeServer {
         addr,
+        connection_rx,
         _endpoint: endpoint,
     }
 }
