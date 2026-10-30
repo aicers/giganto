@@ -23,7 +23,7 @@ use giganto_client::ingest::sysmon::{
 use giganto_client::{
     RawEventKind,
     connection::client_handshake,
-    frame::{recv_bytes, send_bytes, send_raw},
+    frame::{recv_bytes, send_bytes, send_handshake, send_raw},
     ingest::{
         Packet,
         log::{Log, OpLog, OpLogLevel},
@@ -70,9 +70,7 @@ use crate::{
         stream_channel_key::StreamChannelKey,
     },
     server::{Certs, config_client, host_fqdn_from_cert, service_fqdn_from_cert},
-    storage::{
-        APPEND_UNIQUE_MAX_PROBES, Database, DbOptions, RawEventStore, StorageKey, rocksdb_options,
-    },
+    storage::{Database, DbOptions, RawEventStore, StorageKey, rocksdb_options},
     tls_reload::{TlsMaterial, TlsWatch},
 };
 
@@ -319,6 +317,10 @@ impl TestHarness {
         init_crypto();
         let db = Database::open(db_dir.path(), &DbOptions::default())
             .expect("open ingest test database");
+        Self::with_database(db_dir, db, ack_transmission_cnt).await
+    }
+
+    async fn with_database(db_dir: TempDir, db: Database, ack_transmission_cnt: u16) -> Self {
         let server = spawn_server_with(
             db.clone(),
             ack_transmission_cnt,
@@ -544,19 +546,13 @@ where
     }
 }
 
-async fn assert_no_raw_events(db: &Database, kinds: &[RawEventKind]) {
-    let deadline = Instant::now() + std::time::Duration::from_millis(200);
-    loop {
-        for kind in kinds {
-            assert!(
-                read_raw_event_from_db(db, *kind).is_none(),
-                "unexpected stored {kind:?} event"
-            );
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        sleep(std::time::Duration::from_millis(10)).await;
+/// Checks stores after the caller has observed handler termination.
+fn assert_no_raw_events(db: &Database, kinds: &[RawEventKind]) {
+    for kind in kinds {
+        assert!(
+            read_raw_event_from_db(db, *kind).is_none(),
+            "unexpected stored {kind:?} event"
+        );
     }
 }
 
@@ -2338,15 +2334,21 @@ async fn a_collision_at_the_largest_timestamp_is_dropped_and_logged() {
 
 #[tokio::test]
 async fn an_event_past_the_probe_limit_is_dropped_and_the_next_one_is_stored() {
+    const LIMIT: i64 = 64;
     let (logs, _guard) = capture_logs();
-    let harness = TestHarness::with_ack_transmission(1).await;
+    init_crypto();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default())
+        .expect("open ingest test database")
+        .with_append_unique_max_probes(LIMIT);
+    let harness = TestHarness::with_database(db_dir, db, 1).await;
     let timestamp = next_timestamp();
     // Take far more timestamps than `next_timestamp` hands out across the
     // tests, starting well past them.
     let crowded = timestamp + 1_000_000_000;
     {
         let store = harness.db.http_store().unwrap();
-        for offset in 0..APPEND_UNIQUE_MAX_PROBES {
+        for offset in 0..LIMIT - 1 {
             store
                 .append(
                     &StorageKey::builder()
@@ -2364,6 +2366,20 @@ async fn an_event_past_the_probe_limit_is_dropped_and_the_next_one_is_stored() {
     send_record_header(&mut send, RawEventKind::Http)
         .await
         .unwrap();
+    let last = http_event("/last");
+    assert_eq!(
+        send_batch_and_receive_ack(
+            &mut send,
+            &mut recv,
+            &[(crowded, last.clone()), (crowded, last.clone())],
+        )
+        .await,
+        crowded
+    );
+    let stored = stored_timestamps_and_values(&harness.db.http_store().unwrap());
+    assert_eq!(stored.len(), usize::try_from(LIMIT).unwrap());
+    assert_eq!(stored.last(), Some(&(crowded + LIMIT - 1, last)));
+
     let next = http_event("/next");
     let ack = send_batch_and_receive_ack(
         &mut send,
@@ -2374,14 +2390,11 @@ async fn an_event_past_the_probe_limit_is_dropped_and_the_next_one_is_stored() {
     assert_eq!(ack, timestamp);
 
     let stored = stored_timestamps_and_values(&harness.db.http_store().unwrap());
-    assert_eq!(
-        stored.len(),
-        usize::try_from(APPEND_UNIQUE_MAX_PROBES).unwrap() + 1
-    );
+    assert_eq!(stored.len(), usize::try_from(LIMIT).unwrap() + 1);
     assert_eq!(stored.first(), Some(&(timestamp, next)));
     assert_eq!(
         stored.last().map(|(time, _)| *time),
-        Some(crowded + APPEND_UNIQUE_MAX_PROBES - 1)
+        Some(crowded + LIMIT - 1)
     );
     let output = captured(&logs);
     assert!(
@@ -2390,7 +2403,7 @@ async fn an_event_past_the_probe_limit_is_dropped_and_the_next_one_is_stored() {
                 "Dropped Http event from {} at {crowded}",
                 test_sensor_name()
             ))
-            && output.contains(&APPEND_UNIQUE_MAX_PROBES.to_string()),
+            && output.contains(&format!("the {LIMIT} timestamps")),
         "{output}"
     );
 
@@ -2482,7 +2495,7 @@ async fn channel_close_sends_ack_timestamp() {
 #[tokio::test]
 async fn invalid_record_header() {
     let harness = TestHarness::new().await;
-    let (mut send, _) = harness.open_bi().await;
+    let (mut send, mut recv) = harness.open_bi().await;
 
     // Send an unknown RawEventKind value as the header.
     let invalid_header = u32::MAX.to_le_bytes();
@@ -2491,22 +2504,30 @@ async fn invalid_record_header() {
         .expect("failed to send data");
 
     send.finish().expect("failed to shutdown stream");
-    assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS).await;
+    timeout(std::time::Duration::from_secs(2), recv.read_to_end(64))
+        .await
+        .expect("handler should finish the response stream")
+        .expect("handler should send FIN without a reset or excessive data");
+    assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS);
     harness.shutdown(b"done").await;
 }
 
 #[tokio::test]
 async fn incomplete_record_header() {
     let harness = TestHarness::new().await;
-    let (mut send, _) = harness.open_bi().await;
+    let (mut send, mut recv) = harness.open_bi().await;
 
     // Send fewer than 4 bytes for the header.
-    send_raw(&mut send, &[0x01, 0x00])
+    send_bytes(&mut send, &[0x01, 0x00])
         .await
         .expect("failed to send data");
     send.finish().expect("failed to shutdown stream");
 
-    assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS).await;
+    timeout(std::time::Duration::from_secs(2), recv.read_to_end(64))
+        .await
+        .expect("handler should finish the response stream")
+        .expect("handler should send FIN without a reset or excessive data");
+    assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS);
     harness.shutdown(b"done").await;
 }
 
@@ -2516,7 +2537,7 @@ async fn invalid_body_all_kinds() {
 
     for kind in STOREABLE_RAW_EVENT_KINDS {
         let harness = TestHarness::new().await;
-        let (mut send, _) = harness.open_bi().await;
+        let (mut send, mut recv) = harness.open_bi().await;
 
         send_record_header(&mut send, *kind).await.unwrap();
         send_raw(&mut send, invalid_body)
@@ -2524,7 +2545,11 @@ async fn invalid_body_all_kinds() {
             .expect("failed to send data");
         send.finish().expect("failed to shutdown stream");
 
-        assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS).await;
+        timeout(std::time::Duration::from_secs(2), recv.read_to_end(64))
+            .await
+            .expect("handler should finish the response stream")
+            .expect("handler should send FIN without a reset or excessive data");
+        assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS);
         harness.shutdown(b"done").await;
     }
 }
@@ -3184,8 +3209,8 @@ async fn cancellation_releases_an_idle_connection() {
     );
 }
 
-/// A sensor that finished the QUIC handshake and then went quiet is parked in
-/// `server_handshake` on the ingest side. It must not hold the drain open.
+/// A sensor sends its version request but does not read the version response,
+/// stalling the `server_handshake` response write. It must not hold the drain open.
 #[tokio::test]
 async fn cancellation_releases_a_connection_stalled_before_the_version_handshake() {
     init_crypto();
@@ -3193,7 +3218,7 @@ async fn cancellation_releases_a_connection_stalled_before_the_version_handshake
     let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
     let mut server = spawn_server(db);
 
-    let endpoint = init_client();
+    let endpoint = init_client_with_stream_window(0);
     let conn = with_timeout(
         "stalled client connect",
         std::time::Duration::from_secs(2),
@@ -3203,8 +3228,14 @@ async fn cancellation_releases_a_connection_stalled_before_the_version_handshake
     )
     .await
     .expect("the QUIC handshake should complete");
-    // `client_handshake` is deliberately skipped, so the ingest side stays
-    // parked waiting for a version message that never comes.
+    let (mut send, _recv) = conn.open_bi().await.expect("open version stream");
+    send_handshake(&mut send, PROTOCOL_VERSION.as_bytes())
+        .await
+        .expect("send version request");
+    wait_until("version response blocked", SHUTDOWN_TIMEOUT, || async {
+        conn.stats().frame_rx.stream_data_blocked >= 1
+    })
+    .await;
 
     server.shutdown().await;
     drop(conn);
@@ -3222,7 +3253,7 @@ async fn cancellation_rejects_new_streams_on_an_existing_connection() {
         harness.client.conn.open_bi().await.is_err(),
         "ingest admitted a stream after shutdown"
     );
-    assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS).await;
+    assert_no_raw_events(&harness.db, STOREABLE_RAW_EVENT_KINDS);
 }
 
 /// What a handler appended before cancellation survives the shutdown, and by
@@ -3329,8 +3360,8 @@ fn init_client_with_stream_window(window: u32) -> Endpoint {
     let certs = load_test_client_certs();
     let mut config = config_client(&certs).expect("ingest test client config");
     let mut transport = quinn::TransportConfig::default();
-    // The connection window is left alone: shrinking it would stall the
-    // version handshake as well, and the point here is one stalled stream.
+    // Leave the connection window alone so only the stream window controls
+    // which server write blocks.
     transport.stream_receive_window(quinn::VarInt::from_u32(window));
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(5)));
     config.transport_config(Arc::new(transport));
@@ -3346,36 +3377,6 @@ fn stored_log_count(db: &Database) -> usize {
         .expect("open the log store")
         .iter_forward()
         .count()
-}
-
-/// Waits until the handler stops appending, and reports where it stopped.
-///
-/// The handler appends a batch and then acknowledges it, so a count that has
-/// climbed above zero and then held still for several polls is a handler
-/// parked in the acknowledgement write rather than one still working through
-/// the events behind it.
-async fn wait_for_append_to_stall(db: &Database) -> usize {
-    const STILL_ROUNDS: usize = 5;
-    let deadline = Instant::now() + std::time::Duration::from_secs(5);
-    let mut last = 0;
-    let mut still = 0;
-    loop {
-        let count = stored_log_count(db);
-        if count > 0 && count == last {
-            still += 1;
-            if still >= STILL_ROUNDS {
-                return count;
-            }
-        } else {
-            still = 0;
-            last = count;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the append count never settled, last seen {count}"
-        );
-        sleep(std::time::Duration::from_millis(20)).await;
-    }
 }
 
 /// A sensor that stops reading its acknowledgements parks the request handler
@@ -3425,11 +3426,17 @@ async fn cancellation_releases_a_handler_blocked_writing_an_ack() {
             .expect("failed to send log");
     }
 
-    let appended = wait_for_append_to_stall(&db).await;
+    // The handshake response was read and fits in the window, so the blocked
+    // frame now identifies the data stream's acknowledgement write.
+    wait_until("acknowledgement blocked", SHUTDOWN_TIMEOUT, || async {
+        conn.stats().frame_rx.stream_data_blocked >= 1
+    })
+    .await;
+    let appended = stored_log_count(&db);
     assert!(
-        appended < EVENTS,
-        "the acknowledgement window should have run out before the last event, \
-         but all {EVENTS} were appended"
+        0 < appended && appended < EVENTS,
+        "expected the acknowledgement window to block after some of the \
+         {EVENTS} events, got {appended}"
     );
 
     // The assertion is `shutdown` returning at all: a handler nothing releases
@@ -3637,6 +3644,7 @@ async fn ack_interval_acknowledges_a_batch_below_the_count_threshold() {
         tokio::task::yield_now().await;
     }
 
+    tokio::time::resume();
     let acked = with_timeout(
         "periodic ack",
         std::time::Duration::from_secs(2),
@@ -3659,10 +3667,12 @@ async fn ack_interval_acknowledges_a_batch_below_the_count_threshold() {
         outcome.is_ok(),
         "a cancelled request handler should return cleanly, got: {outcome:?}"
     );
+    tokio::time::pause();
     for _ in 0..=super::ACK_INTERVAL_TIME {
         tokio::time::advance(std::time::Duration::from_secs(1)).await;
         tokio::task::yield_now().await;
     }
+    tokio::time::resume();
     let ack = timeout(
         std::time::Duration::from_millis(200),
         receive_ack_timestamp(&mut handler.recv),

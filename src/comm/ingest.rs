@@ -67,9 +67,7 @@ use crate::server::{
     Certs, config_server, connected_client_display_from_cert, extract_cert_from_conn,
     host_fqdn_from_cert, service_fqdn_from_cert,
 };
-use crate::storage::{
-    APPEND_UNIQUE_MAX_PROBES, Database, RawEventStore, SensorStore, StorageKey, UniqueAppend,
-};
+use crate::storage::{Database, RawEventStore, SensorStore, StorageKey, UniqueAppend};
 use crate::tls_reload::TlsWatch;
 
 const ACK_INTERVAL_TIME: u64 = 60;
@@ -1493,9 +1491,10 @@ async fn handle_data<T>(
                             continue;
                         }
                         UniqueAppend::ProbeLimit => {
+                            let limit = store.append_unique_max_probes();
                             error!(
                                 "Dropped {raw_event_kind:?} event from {sensor} at {timestamp}: \
-                                 the {APPEND_UNIQUE_MAX_PROBES} timestamps from it on all hold \
+                                 the {limit} timestamps from it on all hold \
                                  different events"
                             );
                             continue;
