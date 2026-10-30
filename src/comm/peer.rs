@@ -1437,9 +1437,9 @@ pub mod tests {
 
         use super::super::request_init_info;
         use super::super::{
-            CancellationToken, IngestSensors, PEER_VERSION_REQ, Peer, PeerCode, PeerConns,
-            PeerIdentity, PeerIdents, PeerInfo, Peers, SharedClientConfig, TaskTracker,
-            server_connection,
+            CancellationToken, IngestSensors, PEER_RETRY_INTERVAL, PEER_VERSION_REQ, Peer,
+            PeerCode, PeerConns, PeerIdentity, PeerIdents, PeerInfo, Peers, SharedClientConfig,
+            TaskTracker, server_connection,
         };
         use crate::comm::peer::{receive_peer_data, response_init_info};
         use crate::server::{Certs, config_client, config_server};
@@ -1454,16 +1454,27 @@ pub mod tests {
         /// so the value only has to be non-zero.
         pub(super) const TEST_DRAIN_REPORT_INTERVAL: Duration = Duration::from_secs(5);
         pub(super) const TEST_TIMEOUT: Duration = Duration::from_secs(10);
-        pub(super) const RELOAD_RACE_TIMEOUT: Duration = Duration::from_secs(40);
         /// Caps one dial attempt (QUIC connect + protocol handshake).
         /// Short enough that a genuine server hang fails fast across all
         /// attempts, yet far larger than a healthy localhost handshake.
         pub(super) const DIAL_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(3);
         /// Number of bounded dial attempts before a test dial gives up.
-        pub(super) const DIAL_ATTEMPTS: usize = 5;
+        pub(super) const DIAL_ATTEMPTS: u32 = 5;
         /// Pause between dial attempts, giving a stalled runner room to
         /// recover before the next try.
         pub(super) const DIAL_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+        /// Bounds mock readiness and reload-race observations. A full
+        /// `accept_quic_with_retry` cycle allows one handshake budget per
+        /// attempt, the production reconnect delay after the first attempt,
+        /// and a retry pause after every attempt. Add `TEST_TIMEOUT` for the
+        /// protocol handshake and init exchange that readiness also awaits.
+        pub(super) const MOCK_READY_TIMEOUT: Duration = DIAL_ATTEMPT_TIMEOUT
+            .saturating_mul(DIAL_ATTEMPTS)
+            .saturating_add(
+                Duration::from_secs(PEER_RETRY_INTERVAL).saturating_mul(DIAL_ATTEMPTS - 1),
+            )
+            .saturating_add(DIAL_RETRY_INTERVAL.saturating_mul(DIAL_ATTEMPTS))
+            .saturating_add(TEST_TIMEOUT);
 
         #[derive(Clone, Default)]
         pub(super) struct SharedLogBuffer(Arc<StdMutex<Vec<u8>>>);
@@ -1818,12 +1829,6 @@ pub mod tests {
             server_endpoint: Endpoint,
             what: &'static str,
         ) -> Connection {
-            // This is the reconnect delay used by the production
-            // `client_connection` error path. After the first failed QUIC
-            // connection, later server attempts must allow for this delay
-            // before granting the next handshake its full timeout budget.
-            const PRODUCTION_CLIENT_RETRY_INTERVAL: Duration = Duration::from_secs(5);
-
             let server_addr = server_endpoint
                 .local_addr()
                 .expect("server endpoint address");
@@ -1837,7 +1842,7 @@ pub mod tests {
                 let attempt_timeout = if attempt_index == 0 {
                     DIAL_ATTEMPT_TIMEOUT
                 } else {
-                    PRODUCTION_CLIENT_RETRY_INTERVAL + DIAL_ATTEMPT_TIMEOUT
+                    Duration::from_secs(PEER_RETRY_INTERVAL) + DIAL_ATTEMPT_TIMEOUT
                 };
                 let attempt = async {
                     let incoming = server_endpoint
@@ -1866,6 +1871,11 @@ pub mod tests {
         /// the whole accept+connect pair per attempt so a scheduler stall
         /// on a loaded runner cannot expire quinn's idle timeout and
         /// permanently wedge the fixture.
+        ///
+        /// Stage errors are retried only for setup dials. Stages exercising
+        /// the behavior under test must assert success themselves so an error
+        /// fails immediately. Attempt timeouts are retried to tolerate CI
+        /// stalls, which can also hide an intermittent hang in that behavior.
         ///
         /// The server endpoint's accept queue is shared across attempts, so
         /// an aborted earlier attempt can leave a stale incoming ahead of
@@ -2032,15 +2042,15 @@ pub mod tests {
                 None,
                 || Endpoint::client("[::]:0".parse().unwrap()).unwrap(),
                 async |client: &Endpoint| {
-                    super::super::connect(client, shared, identity)
+                    Ok(super::super::connect(client, shared, identity)
                         .await
-                        .map_err(|e| e.to_string())
+                        .expect("production connect must succeed"))
                 },
                 async |incoming: quinn::Incoming| {
-                    let conn = incoming.await.map_err(|e| e.to_string())?;
+                    let conn = incoming.await.expect("production connect QUIC handshake");
                     server_handshake(&conn, PEER_VERSION_REQ)
                         .await
-                        .map_err(|e| e.to_string())?;
+                        .expect("production connect protocol handshake");
                     Ok(conn)
                 },
             )
@@ -2590,7 +2600,7 @@ pub mod tests {
         )
         .await;
 
-        tokio::time::timeout(RELOAD_RACE_TIMEOUT, other_ready_rx)
+        tokio::time::timeout(MOCK_READY_TIMEOUT, other_ready_rx)
             .await
             .expect("other peer readiness timeout")
             .expect("other peer did not accept");
@@ -2694,7 +2704,7 @@ pub mod tests {
         ));
 
         let (recv_peer_list, recv_sensor_list) =
-            tokio::time::timeout(RELOAD_RACE_TIMEOUT, server_ready_rx)
+            tokio::time::timeout(MOCK_READY_TIMEOUT, server_ready_rx)
                 .await
                 .expect("server readiness timeout")
                 .expect("server ready channel closed");
@@ -4141,13 +4151,17 @@ pub mod tests {
                 endpoint
             },
             async |endpoint: &Endpoint| {
-                endpoint
+                Ok(endpoint
                     .connect(probe_addr, test_connect_name_node2())
-                    .map_err(|e| e.to_string())?
+                    .expect("reloaded client config must start a probe dial")
                     .await
-                    .map_err(|e| e.to_string())
+                    .expect("reloaded client config must connect to the new server"))
             },
-            async |incoming: quinn::Incoming| incoming.await.map_err(|e| e.to_string()),
+            async |incoming: quinn::Incoming| {
+                Ok(incoming
+                    .await
+                    .expect("reloaded config probe QUIC handshake"))
+            },
         )
         .await;
         let presented = extract_cert_from_conn(&client_conn).expect("probe server certs");
@@ -4534,13 +4548,6 @@ pub mod tests {
     /// server.
     #[tokio::test]
     async fn client_connection_retries_when_inflight_dial_is_superseded_by_reload() {
-        // A full server-side accept cycle can consume about 35.25 seconds:
-        // 3 seconds for the initial attempt, four subsequent attempts that
-        // each allow the production client's 5-second reconnect delay plus
-        // a fresh 3-second QUIC handshake, and five 50-millisecond retry
-        // intervals. Keep this larger budget local so the shared 10-second
-        // test timeout remains strict for unrelated peer tests.
-
         init_crypto();
 
         let server_certs = create_certs();
@@ -4624,7 +4631,7 @@ pub mod tests {
             }
         });
 
-        tokio::time::timeout(RELOAD_RACE_TIMEOUT, first_quic_done_rx)
+        tokio::time::timeout(MOCK_READY_TIMEOUT, first_quic_done_rx)
             .await
             .expect("first QUIC handshake exceeded the retry budget")
             .expect("server should accept the first dial");
@@ -4644,7 +4651,7 @@ pub mod tests {
             .send(())
             .expect("release first handshake");
 
-        let observed_fp = tokio::time::timeout(RELOAD_RACE_TIMEOUT, second_dial_observed_rx)
+        let observed_fp = tokio::time::timeout(MOCK_READY_TIMEOUT, second_dial_observed_rx)
             .await
             .expect("post-reload QUIC handshake exceeded the retry budget")
             .expect("client_connection should retry after detecting stale snapshot");
@@ -4877,7 +4884,7 @@ pub mod tests {
             update_to_new_peer_list_with_writer,
         };
         use super::fixtures::{
-            ConnectedPeers, PROTOCOL_VERSION, RELOAD_RACE_TIMEOUT, TEST_DRAIN_REPORT_INTERVAL,
+            ConnectedPeers, MOCK_READY_TIMEOUT, PROTOCOL_VERSION, TEST_DRAIN_REPORT_INTERVAL,
             TEST_TIMEOUT, TempConfig, TestClient, accept_incoming, accept_quic_with_retry,
             build_peer_conn_info, build_peer_conn_info_with_sensors, capture_logs,
             connect_client_handshake, connect_client_server, create_certs, create_node2_certs,
@@ -5181,7 +5188,7 @@ pub mod tests {
             let inbound = client.conn.clone();
 
             // Client role: the bootstrap dial reached the other peer.
-            tokio::time::timeout(RELOAD_RACE_TIMEOUT, other_ready_rx)
+            tokio::time::timeout(MOCK_READY_TIMEOUT, other_ready_rx)
                 .await
                 .expect("bootstrap readiness timeout")
                 .expect("the bootstrap dial never completed its init exchange");
