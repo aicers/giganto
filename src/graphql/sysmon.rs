@@ -1851,6 +1851,48 @@ fn sysmon_connection(
     let mut file_delete_detected_data = file_delete_detected_iter.next();
 
     loop {
+        if (result_vec.len() >= size)
+            || (process_create_data.is_none()
+                && file_create_time_data.is_none()
+                && network_connect_data.is_none()
+                && process_terminate_data.is_none()
+                && image_load_data.is_none()
+                && file_create_data.is_none()
+                && registry_value_set_data.is_none()
+                && registry_key_rename_data.is_none()
+                && file_create_stream_hash_data.is_none()
+                && pipe_event_data.is_none()
+                && dns_query_data.is_none()
+                && file_delete_data.is_none()
+                && process_tamper_data.is_none()
+                && file_delete_detected_data.is_none())
+        {
+            if process_create_data.is_some()
+                || file_create_time_data.is_some()
+                || network_connect_data.is_some()
+                || process_terminate_data.is_some()
+                || image_load_data.is_some()
+                || file_create_data.is_some()
+                || registry_value_set_data.is_some()
+                || registry_key_rename_data.is_some()
+                || file_create_stream_hash_data.is_some()
+                || pipe_event_data.is_some()
+                || dns_query_data.is_some()
+                || file_delete_data.is_some()
+                || process_tamper_data.is_some()
+                || file_delete_detected_data.is_some()
+            {
+                has_next_value = true;
+            }
+            if is_forward {
+                has_next_page = has_next_value;
+            } else {
+                result_vec.reverse();
+                has_previous_page = has_next_value;
+            }
+            break;
+        }
+
         let process_create_ts = if let Some((ref key, _)) = process_create_data {
             get_time_from_key(key)?
         } else {
@@ -2119,47 +2161,6 @@ fn sysmon_connection(
                 }
             }
             _ => {}
-        }
-        if (result_vec.len() >= size)
-            || (process_create_data.is_none()
-                && file_create_time_data.is_none()
-                && network_connect_data.is_none()
-                && process_terminate_data.is_none()
-                && image_load_data.is_none()
-                && file_create_data.is_none()
-                && registry_value_set_data.is_none()
-                && registry_key_rename_data.is_none()
-                && file_create_stream_hash_data.is_none()
-                && pipe_event_data.is_none()
-                && dns_query_data.is_none()
-                && file_delete_data.is_none()
-                && process_tamper_data.is_none()
-                && file_delete_detected_data.is_none())
-        {
-            if process_create_data.is_some()
-                || file_create_time_data.is_some()
-                || network_connect_data.is_some()
-                || process_terminate_data.is_some()
-                || image_load_data.is_some()
-                || file_create_data.is_some()
-                || registry_value_set_data.is_some()
-                || registry_key_rename_data.is_some()
-                || file_create_stream_hash_data.is_some()
-                || pipe_event_data.is_some()
-                || dns_query_data.is_some()
-                || file_delete_data.is_some()
-                || process_tamper_data.is_some()
-                || file_delete_detected_data.is_some()
-            {
-                has_next_value = true;
-            }
-            if is_forward {
-                has_next_page = has_next_value;
-            } else {
-                result_vec.reverse();
-                has_previous_page = has_next_value;
-            }
-            break;
         }
     }
 

@@ -701,10 +701,13 @@ where
             item.1.agent_id(),
             item.1.service_name(),
         ) {
+            if size == 0 {
+                return (records, true);
+            }
             records.push(item);
         }
 
-        if records.len() == size {
+        if size > 0 && records.len() == size {
             if invalid_data_cnt > 1 {
                 error!(
                     "Failed to read database or invalid data of {data_type} #{invalid_data_cnt}"
