@@ -181,6 +181,7 @@ impl<'db, T> RetentionStores<'db, T> {
             periodic_time_series: RawEventStore::new(
                 &db.db,
                 db.get_cf_handle(PERIODIC_TIME_SERIES_CF)?,
+                db.append_unique_max_probes,
             ),
             op_log_cf: db.op_log_store()?,
         })
@@ -235,6 +236,7 @@ impl DbOptions {
 #[derive(Clone)]
 pub struct Database {
     db: Arc<DB>,
+    append_unique_max_probes: i64,
 }
 
 impl Database {
@@ -258,7 +260,19 @@ impl Database {
             .map(|name| ColumnFamilyDescriptor::new(name, cf_opts.clone()));
 
         let db = DB::open_cf_descriptors(&db_opts, path, cfs).context("cannot open database")?;
-        Ok(Database { db: Arc::new(db) })
+        Ok(Database {
+            db: Arc::new(db),
+            append_unique_max_probes: APPEND_UNIQUE_MAX_PROBES,
+        })
+    }
+
+    /// Sets the append-unique probe limit for stores created from this database.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_append_unique_max_probes(mut self, limit: i64) -> Self {
+        assert!(limit > 0, "the probe limit must be positive");
+        self.append_unique_max_probes = limit;
+        self
     }
 
     /// Shuts down the database, ensuring data integrity and consistency before exiting.
@@ -313,12 +327,18 @@ impl Database {
             }
             if NON_STANDARD_CFS.contains(&store) {
                 let cf = self.get_cf_handle(store)?;
-                stores
-                    .non_standard_cfs
-                    .push(RawEventStore::new(&self.db, cf));
+                stores.non_standard_cfs.push(RawEventStore::new(
+                    &self.db,
+                    cf,
+                    self.append_unique_max_probes,
+                ));
             } else {
                 let cf = self.get_cf_handle(store)?;
-                stores.standard_cfs.push(RawEventStore::new(&self.db, cf));
+                stores.standard_cfs.push(RawEventStore::new(
+                    &self.db,
+                    cf,
+                    self.append_unique_max_probes,
+                ));
             }
         }
         Ok(stores)
@@ -355,91 +375,151 @@ impl Database {
     /// Returns the raw event store for connections.
     pub fn conn_store(&self) -> Result<RawEventStore<'_, Conn>> {
         let cf = self.get_cf_handle("conn")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for dns.
     pub fn dns_store(&self) -> Result<RawEventStore<'_, Dns>> {
         let cf = self.get_cf_handle("dns")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for `malformed_dns`.
     pub fn malformed_dns_store(&self) -> Result<RawEventStore<'_, ClientMalformedDns>> {
         let cf = self.get_cf_handle("malformed_dns")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for log.
     pub fn log_store(&self) -> Result<RawEventStore<'_, Log>> {
         let cf = self.get_cf_handle("log")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for http.
     pub fn http_store(&self) -> Result<RawEventStore<'_, Http>> {
         let cf = self.get_cf_handle("http")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for rdp.
     pub fn rdp_store(&self) -> Result<RawEventStore<'_, Rdp>> {
         let cf = self.get_cf_handle("rdp")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for periodic time series.
     pub fn periodic_time_series_store(&self) -> Result<RawEventStore<'_, PeriodicTimeSeries>> {
         let cf = self.get_cf_handle(PERIODIC_TIME_SERIES_CF)?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for smtp.
     pub fn smtp_store(&self) -> Result<RawEventStore<'_, Smtp>> {
         let cf = self.get_cf_handle("smtp")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for ntlm.
     pub fn ntlm_store(&self) -> Result<RawEventStore<'_, Ntlm>> {
         let cf = self.get_cf_handle("ntlm")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for kerberos.
     pub fn kerberos_store(&self) -> Result<RawEventStore<'_, Kerberos>> {
         let cf = self.get_cf_handle("kerberos")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for ssh.
     pub fn ssh_store(&self) -> Result<RawEventStore<'_, Ssh>> {
         let cf = self.get_cf_handle("ssh")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the raw event store for dce rpc.
     pub fn dce_rpc_store(&self) -> Result<RawEventStore<'_, DceRpc>> {
         let cf = self.get_cf_handle("dce rpc")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for statistics
     pub fn statistics_store(&self) -> Result<RawEventStore<'_, Statistics>> {
         let cf = self.get_cf_handle("statistics")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for operation log
     pub fn op_log_store(&self) -> Result<RawEventStore<'_, OpLog>> {
         let cf = self.get_cf_handle("oplog")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for packet
     pub fn packet_store(&self) -> Result<RawEventStore<'_, Packet>> {
         let cf = self.get_cf_handle("packet")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for connection sensors
@@ -519,163 +599,271 @@ impl Database {
     /// Returns the store for Ftp
     pub fn ftp_store(&self) -> Result<RawEventStore<'_, Ftp>> {
         let cf = self.get_cf_handle("ftp")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for Mqtt
     pub fn mqtt_store(&self) -> Result<RawEventStore<'_, Mqtt>> {
         let cf = self.get_cf_handle("mqtt")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for ldap
     pub fn ldap_store(&self) -> Result<RawEventStore<'_, Ldap>> {
         let cf = self.get_cf_handle("ldap")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for tls
     pub fn tls_store(&self) -> Result<RawEventStore<'_, Tls>> {
         let cf = self.get_cf_handle("tls")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for smb
     pub fn smb_store(&self) -> Result<RawEventStore<'_, Smb>> {
         let cf = self.get_cf_handle("smb")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for nfs
     pub fn nfs_store(&self) -> Result<RawEventStore<'_, Nfs>> {
         let cf = self.get_cf_handle("nfs")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for bootp
     pub fn bootp_store(&self) -> Result<RawEventStore<'_, Bootp>> {
         let cf = self.get_cf_handle("bootp")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for dhcp
     pub fn dhcp_store(&self) -> Result<RawEventStore<'_, Dhcp>> {
         let cf = self.get_cf_handle("dhcp")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for radius
     pub fn radius_store(&self) -> Result<RawEventStore<'_, Radius>> {
         let cf = self.get_cf_handle("radius")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for icmp
     pub fn icmp_store(&self) -> Result<RawEventStore<'_, Icmp>> {
         let cf = self.get_cf_handle("icmp")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `ProcessCreate` (#1).
     pub fn process_create_store(&self) -> Result<RawEventStore<'_, ProcessCreate>> {
         let cf = self.get_cf_handle("process create")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `FileCreateTime` (#2).
     pub fn file_create_time_store(&self) -> Result<RawEventStore<'_, FileCreationTimeChanged>> {
         let cf = self.get_cf_handle("file create time")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `NetworkConnect` (#3).
     pub fn network_connect_store(&self) -> Result<RawEventStore<'_, NetworkConnection>> {
         let cf = self.get_cf_handle("network connect")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `ProcessTerminate` (#5).
     pub fn process_terminate_store(&self) -> Result<RawEventStore<'_, ProcessTerminated>> {
         let cf = self.get_cf_handle("process terminate")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `ImageLoad` (#7).
     pub fn image_load_store(&self) -> Result<RawEventStore<'_, ImageLoaded>> {
         let cf = self.get_cf_handle("image load")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `FileCreate` (#11).
     pub fn file_create_store(&self) -> Result<RawEventStore<'_, FileCreate>> {
         let cf = self.get_cf_handle("file create")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `RegistryValueSet` (#13).
     pub fn registry_value_set_store(&self) -> Result<RawEventStore<'_, RegistryValueSet>> {
         let cf = self.get_cf_handle("registry value set")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `RegistryKeyRename` (#14).
     pub fn registry_key_rename_store(&self) -> Result<RawEventStore<'_, RegistryKeyValueRename>> {
         let cf = self.get_cf_handle("registry key rename")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `FileCreateStreamHash` (#15).
     pub fn file_create_stream_hash_store(&self) -> Result<RawEventStore<'_, FileCreateStreamHash>> {
         let cf = self.get_cf_handle("file create stream hash")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `PipeEvent` (#17).
     pub fn pipe_event_store(&self) -> Result<RawEventStore<'_, PipeEvent>> {
         let cf = self.get_cf_handle("pipe event")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `DnsQuery` (#22).
     pub fn dns_query_store(&self) -> Result<RawEventStore<'_, DnsEvent>> {
         let cf = self.get_cf_handle("dns query")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `FileDelete` (#23).
     pub fn file_delete_store(&self) -> Result<RawEventStore<'_, FileDelete>> {
         let cf = self.get_cf_handle("file delete")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `ProcessTamper` (#25).
     pub fn process_tamper_store(&self) -> Result<RawEventStore<'_, ProcessTampering>> {
         let cf = self.get_cf_handle("process tamper")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for sysmon event `FileDeleteDetected` (#26).
     pub fn file_delete_detected_store(&self) -> Result<RawEventStore<'_, FileDeleteDetected>> {
         let cf = self.get_cf_handle("file delete detected")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for event `netflow5`.
     pub fn netflow5_store(&self) -> Result<RawEventStore<'_, Netflow5>> {
         let cf = self.get_cf_handle("netflow5")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for event `netflow9`.
     pub fn netflow9_store(&self) -> Result<RawEventStore<'_, Netflow9>> {
         let cf = self.get_cf_handle("netflow9")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 
     /// Returns the store for security log.
     pub fn secu_log_store(&self) -> Result<RawEventStore<'_, SecuLog>> {
         let cf = self.get_cf_handle("seculog")?;
-        Ok(RawEventStore::new(&self.db, cf))
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
     }
 }
 
@@ -702,13 +890,14 @@ pub(crate) enum UniqueAppend {
     Duplicate(i64),
     /// Every timestamp up to `i64::MAX` holds a different event.
     Overflow,
-    /// `APPEND_UNIQUE_MAX_PROBES` timestamps in a row hold different events.
+    /// The store's probe limit of consecutive timestamps all hold different events.
     ProbeLimit,
 }
 
 pub struct RawEventStore<'db, T> {
     db: &'db DB,
     cf: &'db ColumnFamily,
+    append_unique_max_probes: i64,
     phantom: PhantomData<T>,
 }
 
@@ -717,12 +906,23 @@ pub struct RawEventStore<'db, T> {
 unsafe impl<T> Send for RawEventStore<'_, T> {}
 
 impl<'db, T> RawEventStore<'db, T> {
-    fn new(db: &'db DB, cf: &'db ColumnFamily) -> RawEventStore<'db, T> {
+    fn new(
+        db: &'db DB,
+        cf: &'db ColumnFamily,
+        append_unique_max_probes: i64,
+    ) -> RawEventStore<'db, T> {
         RawEventStore {
             db,
             cf,
+            append_unique_max_probes,
             phantom: PhantomData,
         }
+    }
+
+    /// Returns the maximum number of timestamps probed by `append_unique`.
+    #[must_use]
+    pub(crate) fn append_unique_max_probes(&self) -> i64 {
+        self.append_unique_max_probes
     }
 
     pub fn append(&self, key: &[u8], raw_event: &[u8]) -> Result<()> {
@@ -755,7 +955,7 @@ impl<'db, T> RawEventStore<'db, T> {
         let _guard = lock.lock().await;
 
         let mut probe_key = key.to_vec();
-        for offset in 0..APPEND_UNIQUE_MAX_PROBES {
+        for offset in 0..self.append_unique_max_probes {
             let Some(probe_timestamp) = timestamp.checked_add(offset) else {
                 return Ok(UniqueAppend::Overflow);
             };
@@ -4249,15 +4449,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_database_uses_the_production_probe_limit() {
+        let (_dir, db) = setup_db();
+        assert_eq!(APPEND_UNIQUE_MAX_PROBES, 65_536);
+        assert_eq!(db.append_unique_max_probes, 65_536);
+        assert_eq!(db.conn_store().unwrap().append_unique_max_probes(), 65_536);
+    }
+
     #[tokio::test]
     async fn append_unique_stops_at_the_probe_limit() {
+        const LIMIT: i64 = 64;
         let (_dir, db) = setup_db();
+        let db = db.with_append_unique_max_probes(LIMIT);
+        let retention = db.retain_period_store().unwrap();
+        for store in retention
+            .standard_cfs
+            .iter()
+            .chain(&retention.non_standard_cfs)
+        {
+            assert_eq!(store.append_unique_max_probes(), LIMIT);
+        }
+        assert_eq!(
+            retention.periodic_time_series.append_unique_max_probes(),
+            LIMIT
+        );
+        assert_eq!(retention.op_log_cf.append_unique_max_probes(), LIMIT);
         let store = db.conn_store().unwrap();
         let timestamp = 1_000;
         let key = conn_key("sensor", timestamp);
 
         let mut batch = WriteBatch::default();
-        for offset in 0..APPEND_UNIQUE_MAX_PROBES - 1 {
+        for offset in 0..LIMIT - 1 {
             batch.put_cf(
                 store.cf,
                 conn_key("sensor", timestamp + offset),
@@ -4269,20 +4492,17 @@ mod tests {
         // The last slot within the limit is still found.
         assert_eq!(
             store.append_unique(&key, b"last").await.unwrap(),
-            UniqueAppend::Stored(timestamp + APPEND_UNIQUE_MAX_PROBES - 1)
+            UniqueAppend::Stored(timestamp + LIMIT - 1)
         );
         assert_eq!(
             store.append_unique(&key, b"last").await.unwrap(),
-            UniqueAppend::Duplicate(timestamp + APPEND_UNIQUE_MAX_PROBES - 1)
+            UniqueAppend::Duplicate(timestamp + LIMIT - 1)
         );
         assert_eq!(
             store.append_unique(&key, b"beyond").await.unwrap(),
             UniqueAppend::ProbeLimit
         );
-        assert_eq!(
-            get_conn(&store, "sensor", timestamp + APPEND_UNIQUE_MAX_PROBES),
-            None
-        );
+        assert_eq!(get_conn(&store, "sensor", timestamp + LIMIT), None);
     }
 
     /// Two ingest streams of one sensor and kind, each with its own store,

@@ -299,28 +299,32 @@ mod tests {
 
     #[test]
     fn first_sequence_is_one_on_new_generator_and_after_date_reset() {
-        let today = SequenceGenerator::get_date_key();
-
+        let before = SequenceGenerator::get_date_key();
         let generator = SequenceGenerator::new();
-        assert_state_parts(&generator, today, 0);
-        assert_sequence_parts(generator.generate_sequence_number(today), today, 1);
+        let after = SequenceGenerator::get_date_key();
+        let (date, counter) = SequenceGenerator::unpack(generator.state.load(Ordering::Relaxed));
+        assert_eq!(counter, 0);
+        assert!(before <= date && date <= after);
+        assert_sequence_parts(generator.generate_sequence_number(date), date, 1);
 
-        set_to_yesterday(&generator, 50);
+        set_state(&generator, date - 1, 50);
 
-        let first_after_reset = generator.generate_sequence_number(today);
-        assert_sequence_parts(first_after_reset, today, 1);
+        let first_after_reset = generator.generate_sequence_number(date);
+        assert_sequence_parts(first_after_reset, date, 1);
     }
 
     #[test]
     fn get_date_key_matches_num_days_from_ce() {
-        let date = SequenceGenerator::current_utc_date();
-        let y = i32::from(date.year()) - 1;
-        let ordinal = i32::from(date.day_of_year());
-        let days = 365 * y + y / 4 - y / 100 + y / 400 + ordinal;
-        let expected: u32 = days.try_into().expect("date should be positive");
+        let before = SequenceGenerator::current_utc_date();
         let date_key = SequenceGenerator::get_date_key();
-
-        assert_eq!(date_key, expected);
+        let after = SequenceGenerator::current_utc_date();
+        let expected = |date: jiff::civil::Date| -> u32 {
+            let y = i32::from(date.year()) - 1;
+            let ordinal = i32::from(date.day_of_year());
+            let days = 365 * y + y / 4 - y / 100 + y / 400 + ordinal;
+            days.try_into().expect("date should be positive")
+        };
+        assert!(expected(before) <= date_key && date_key <= expected(after));
 
         assert!(
             date_key > 730_000,
