@@ -80,7 +80,7 @@ fn export_file_succeeds_with_invalid_data() {
             file: fs::File::create(&progress_path).unwrap(),
             progress_path: progress_path.clone(),
             done_path: done_path.clone(),
-            published: false,
+            remove_on_drop: true,
         },
     );
 
@@ -105,7 +105,7 @@ fn export_oplog_file_succeeds_with_invalid_data() {
             file: fs::File::create(&progress_path).unwrap(),
             progress_path: progress_path.clone(),
             done_path: done_path.clone(),
-            published: false,
+            remove_on_drop: true,
         },
     );
 
@@ -143,7 +143,7 @@ fn export_statistic_file_orders_multiple_iterators() {
             file: fs::File::create(&progress_path).unwrap(),
             progress_path: progress_path.clone(),
             done_path: done_path.clone(),
-            published: false,
+            remove_on_drop: true,
         },
     );
 
@@ -217,6 +217,60 @@ async fn export_rejects_unknown_protocol() {
              ,exportType:"json")
      }"#;
     assert_export_error(query, "Unknown protocol").await;
+}
+
+#[tokio::test]
+async fn export_rejects_unknown_protocol_paths_before_claiming() {
+    let schema = TestSchema::new();
+    let outside = tempdir().unwrap();
+    for protocol in [
+        outside.path().join("missing/x").display().to_string(),
+        outside.path().join("x").display().to_string(),
+        "../x".to_string(),
+    ] {
+        let err = start_fixed(&schema, &protocol, "src1").unwrap_err();
+        assert!(err.message.contains("Unknown protocol"), "{err:?}");
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(schema.export_dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn export_statistics_with_no_matching_records_publishes_empty_file() {
+    let schema = TestSchema::new();
+    let store = schema.db.statistics_store().unwrap();
+    insert_statistics_raw_event(
+        &store,
+        test_event_timestamp_nanos(),
+        "other",
+        1,
+        1,
+        100,
+        1000,
+    );
+
+    let done = download_file(&start_fixed(&schema, "statistics", "src1").unwrap());
+    wait_done(&done).await;
+    assert_eq!(fs::read(&done).unwrap(), b"");
+    assert!(!done.with_extension("csv.dump").exists());
+}
+
+#[tokio::test]
+async fn export_statistics_with_only_invalid_records_publishes_empty_file() {
+    let schema = TestSchema::new();
+    let store = schema.db.statistics_store().unwrap();
+    for core in [0_u32, 1] {
+        let mut key = b"src1\0".to_vec();
+        key.extend_from_slice(&core.to_be_bytes());
+        key.push(0);
+        key.extend_from_slice(&test_event_timestamp_nanos().to_be_bytes());
+        store.append(&key, b"invalid").unwrap();
+    }
+
+    let done = download_file(&start_fixed(&schema, "statistics", "src1").unwrap());
+    wait_done(&done).await;
+    assert_eq!(fs::read(&done).unwrap(), b"");
+    assert!(!done.with_extension("csv.dump").exists());
 }
 
 #[tokio::test]
@@ -1363,7 +1417,8 @@ async fn export_task_is_registered_and_drained() {
         db.clone(),
         &filter,
         "csv".to_string(),
-        ExportClaim::claim(export_dir.path(), "conn_export", "csv").unwrap(),
+        export_dir.path(),
+        "conn_export",
     )
     .expect("export should be accepted while the tracker is open");
 
@@ -1416,7 +1471,8 @@ async fn export_after_tracker_closed_registers_nothing() {
         db.clone(),
         &filter,
         "csv".to_string(),
-        ExportClaim::claim(export_dir.path(), "conn_export", "csv").unwrap(),
+        export_dir.path(),
+        "conn_export",
     )
     .expect("a closed tracker is reported, not surfaced as a request error");
 
@@ -1662,7 +1718,7 @@ fn export_writer_failure_removes_progress() {
         file: fs::File::open(&progress_path).unwrap(),
         progress_path: progress_path.clone(),
         done_path: done_path.clone(),
-        published: false,
+        remove_on_drop: true,
     };
     assert!(export_file(iter, &export_filter_base("conn"), "csv", claim).is_err());
     assert!(!progress_path.exists());
