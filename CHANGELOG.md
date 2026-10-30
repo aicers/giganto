@@ -34,6 +34,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Overlapping connections of the same pcap sensor no longer send pcap extraction
+  requests to a disconnected connection after either connection disconnects.
+  A disconnected connection also no longer re-records a sensor removed by
+  customer deletion.
+
 - A time series generator subscription no longer sends a record twice when
   moving from replay to realtime and no longer fails to send records that
   arrive late during the subscription.

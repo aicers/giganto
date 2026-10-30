@@ -866,7 +866,7 @@ async fn close_peer_connection(endpoint: &Endpoint, connection: &Connection) {
     endpoint.wait_idle().await;
 }
 
-async fn get_pcap_conn_if_current_giganto_in_charge(
+pub(super) async fn get_pcap_conn_if_current_giganto_in_charge(
     pcap_sensors: PcapSensors,
     sensor: &str,
 ) -> Option<Connection> {
