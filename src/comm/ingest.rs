@@ -24,8 +24,12 @@ pub mod implement;
 #[cfg(test)]
 mod tests;
 
-use std::sync::OnceLock;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use generation::SequenceGenerator;
@@ -81,7 +85,8 @@ const INGEST_VERSION_REQ: &str = ">=0.27.0,<0.35.0";
 /// Names the ingest subsystem tracker in the drain progress log.
 const INGEST_DRAIN_LABEL: &str = "ingest";
 
-type SensorInfo = (String, DateTime, ConnState, bool);
+// Keep the connection alive until its update is applied so its stable ID cannot be reused.
+type SensorInfo = (String, DateTime, ConnState, bool, quinn::Connection);
 
 static GENERATOR: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
 
@@ -472,6 +477,7 @@ async fn handle_connection(
             DateTime::now(),
             ConnState::Connected,
             is_pcap_sensor,
+            connection.clone(),
         ))
         .await
     {
@@ -502,7 +508,7 @@ async fn handle_connection(
             // gone.
             () = token.cancelled() => {
                 if let Err(error) = sender
-                    .send((sensor, DateTime::now(), ConnState::Disconnected, is_pcap_sensor))
+                    .send((sensor, DateTime::now(), ConnState::Disconnected, is_pcap_sensor, connection.clone()))
                     .await
                 {
                     error!("Failed to send internal channel data: {error}");
@@ -515,7 +521,7 @@ async fn handle_connection(
                 let stream = match stream {
                     Err(conn_err) => {
                         if let Err(error) = sender
-                            .send((sensor, DateTime::now(), ConnState::Disconnected, is_pcap_sensor))
+                            .send((sensor, DateTime::now(), ConnState::Disconnected, is_pcap_sensor, connection.clone()))
                             .await
                         {
                             error!("Failed to send internal channel data: {error}");
@@ -1579,15 +1585,21 @@ async fn send_ack_timestamp(send: &mut SendStream, timestamp: i64) -> Result<(),
 /// an update admitted to the channel is applied the same way whichever side
 /// takes it off.
 async fn apply_sensor_update(
-    (sensor_key, time_val, conn_state, is_pcap_sensor): SensorInfo,
+    (sensor_key, time_val, conn_state, is_pcap_sensor, connection): SensorInfo,
+    live_connections: &mut HashMap<String, HashSet<usize>>,
     sensor_store: &SensorStore<'_>,
     pcap_sensors: &PcapSensors,
     ingest_sensors: &IngestSensors,
     runtime_ingest_sensors: &RunTimeIngestSensors,
     notify_sensor: Option<&Arc<Notify>>,
 ) {
+    let connection_id = connection.stable_id();
     match conn_state {
         ConnState::Connected => {
+            live_connections
+                .entry(sensor_key.clone())
+                .or_default()
+                .insert(connection_id);
             if sensor_store.insert(&sensor_key, time_val).is_err() {
                 error!("Failed to append sensor store");
             }
@@ -1601,18 +1613,31 @@ async fn apply_sensor_update(
             }
         }
         ConnState::Disconnected => {
-            if sensor_store.insert(&sensor_key, time_val).is_err() {
-                error!("Failed to append sensor store");
+            if let Some(connections) = live_connections.get_mut(&sensor_key) {
+                connections.remove(&connection_id);
+                if connections.is_empty() {
+                    live_connections.remove(&sensor_key);
+                }
             }
-            runtime_ingest_sensors.write().await.remove(&sensor_key);
-            if is_pcap_sensor
-                && let Some(connections) = pcap_sensors
-                    .write()
-                    .await
-                    .get_mut(&sensor_key)
-                    .filter(|connection_vec| !connection_vec.is_empty())
             {
-                connections.remove(0);
+                let mut runtime_sensors = runtime_ingest_sensors.write().await;
+                if runtime_sensors.contains_key(&sensor_key) {
+                    if sensor_store.insert(&sensor_key, time_val).is_err() {
+                        error!("Failed to append sensor store");
+                    }
+                    if !live_connections.contains_key(&sensor_key) {
+                        runtime_sensors.remove(&sensor_key);
+                    }
+                }
+            }
+            if is_pcap_sensor {
+                let mut pcap_sensors = pcap_sensors.write().await;
+                if let Some(connections) = pcap_sensors.get_mut(&sensor_key) {
+                    connections.retain(|conn| conn.stable_id() != connection_id);
+                    if connections.is_empty() {
+                        pcap_sensors.remove(&sensor_key);
+                    }
+                }
             }
         }
     }
@@ -1636,6 +1661,7 @@ async fn check_sensors_conn(
     notify_sensor: Option<Arc<Notify>>,
     token: CancellationToken,
 ) -> Result<()> {
+    let mut live_connections = HashMap::new();
     let mut itv = time::interval(time::Duration::from_secs(SENSOR_INTERVAL));
     itv.reset();
     let sensor_store = sensor_db
@@ -1660,6 +1686,7 @@ async fn check_sensors_conn(
             Some(update) = rx.recv() => {
                 apply_sensor_update(
                     update,
+                    &mut live_connections,
                     &sensor_store,
                     &pcap_sensors,
                     &ingest_sensors,
@@ -1686,6 +1713,7 @@ async fn check_sensors_conn(
     while let Some(update) = rx.recv().await {
         apply_sensor_update(
             update,
+            &mut live_connections,
             &sensor_store,
             &pcap_sensors,
             &ingest_sensors,
