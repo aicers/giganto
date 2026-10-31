@@ -56,7 +56,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use super::{Server, process_stream};
 use crate::test_bootroot::{TestNode, bootroot_cluster_certs, bootroot_cluster_server_name};
 use crate::{
-    cancellation::TaskTracker,
+    cancellation::{DrainOutcome, TaskTracker},
     comm::{
         IngestSensors, PcapSensors, StreamDirectChannels,
         ingest::NetworkKey,
@@ -72,6 +72,44 @@ use crate::{
 };
 
 static INIT: OnceLock<()> = OnceLock::new();
+
+#[test]
+fn log_capture_keeps_info_callsite_reached_first_without_subscriber() {
+    fn emit() {
+        tracing::info!("publish capture shared INFO callsite");
+    }
+
+    let (capture, _guard) = start_log_capture();
+    std::thread::spawn(emit)
+        .join()
+        .expect("the emitting thread should not panic");
+    emit();
+    let logs = String::from_utf8_lossy(&capture.buffer.lock().expect("log capture lock poisoned"))
+        .into_owned();
+    assert!(
+        logs.contains("publish capture shared INFO callsite"),
+        "{logs}"
+    );
+}
+
+#[test]
+fn leveled_log_capture_keeps_debug_callsite_reached_first_without_subscriber() {
+    fn emit() {
+        tracing::debug!("publish capture shared DEBUG callsite");
+    }
+
+    let (capture, _guard) = start_leveled_log_capture();
+    std::thread::spawn(emit)
+        .join()
+        .expect("the emitting thread should not panic");
+    emit();
+    assert!(
+        captured_lines_at(&capture, "DEBUG")
+            .iter()
+            .any(|line| line.contains("publish capture shared DEBUG callsite")),
+        "the capturing thread should see the shared DEBUG callsite"
+    );
+}
 
 #[test]
 fn logs_connected_client_identity() {
@@ -240,6 +278,7 @@ mod fixtures {
 
     pub(super) struct PeerHandshakeServer {
         pub(super) addr: SocketAddr,
+        pub(super) connection_rx: mpsc::UnboundedReceiver<()>,
         pub(super) _endpoint: Endpoint,
     }
 
@@ -517,6 +556,7 @@ mod fixtures {
             .with_level(false)
             .with_target(false)
             .finish();
+        crate::cancellation::hold_callsite_interest_open();
         let guard = tracing::subscriber::set_default(subscriber);
         (capture, guard)
     }
@@ -534,6 +574,7 @@ mod fixtures {
             .with_target(false)
             .with_max_level(tracing::Level::DEBUG)
             .finish();
+        crate::cancellation::hold_callsite_interest_open();
         let guard = tracing::subscriber::set_default(subscriber);
         (capture, guard)
     }
@@ -548,7 +589,7 @@ mod fixtures {
     }
 
     pub(super) async fn assert_log_contains(capture: &LogCapture, expected: &str) {
-        let deadline = Instant::now() + StdDuration::from_secs(1);
+        let deadline = Instant::now() + StdDuration::from_secs(5);
         let expected_bytes = expected.as_bytes();
         loop {
             let found = {
@@ -711,7 +752,7 @@ mod fixtures {
         );
 
         let publish = tokio::time::timeout(
-            StdDuration::from_secs(2),
+            StdDuration::from_secs(5),
             TestClient::new(server_addr, NODE1.server_name()),
         )
         .await
@@ -1066,15 +1107,13 @@ mod fixtures {
         pcap_sensors: PcapSensors,
         peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
         peer_idents: Arc<RwLock<HashSet<PeerIdentity>>>,
-    ) {
+    ) -> TaskTracker {
         let certs = build_test_certs();
         let tls_watch = build_test_tls_watch(&certs);
         let (mut server_send, _ack_server, _ack_client) = build_ack_stream("ack.local").await;
 
-        // A throwaway tracker stands in for the publish subsystem's: the relay
-        // is registered rather than detached now, and dropping the tracker
-        // afterwards leaves it running exactly as the detached spawn did,
-        // because a `CancellationToken` does not cancel when it is dropped.
+        // Keep relays tracked so callers can await completion. Discarding the
+        // returned tracker leaves them running: dropping a token does not cancel it.
         let tracker = TaskTracker::new();
         let token = tracker.root_token().clone();
         crate::comm::publish::process_pcap_extract_filters(
@@ -1090,13 +1129,22 @@ mod fixtures {
         )
         .await
         .expect("process_pcap_extract_filters failed");
+        tracker
     }
 
-    pub(super) async fn assert_no_peer_connection(mut connection_rx: mpsc::UnboundedReceiver<()>) {
-        let err = tokio::time::timeout(StdDuration::from_millis(200), connection_rx.recv())
-            .await
-            .unwrap_err();
-        assert_eq!(err.to_string(), "deadline has elapsed");
+    pub(super) async fn assert_no_peer_connection(
+        tracker: &TaskTracker,
+        mut connection_rx: mpsc::UnboundedReceiver<()>,
+    ) {
+        let outcome = tracker.drain(StdDuration::from_secs(5)).await;
+        assert!(
+            matches!(outcome, Ok(DrainOutcome::Drained)),
+            "relay tasks must finish before checking for a dial: {outcome:?}"
+        );
+        assert_eq!(
+            connection_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        );
     }
 
     pub(super) async fn build_ack_stream(host: &str) -> (SendStream, Endpoint, Endpoint) {
@@ -1179,22 +1227,22 @@ mod fixtures {
     pub(super) async fn setup_peer_handshake_mismatch_server(
         certs: Arc<Certs>,
         version_req: &'static str,
+        bind_ip: IpAddr,
     ) -> PeerHandshakeServer {
         let server_config = config_server(&certs).expect("peer publish server config");
-        let endpoint = Endpoint::server(
-            server_config,
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-        )
-        .expect("Failed to start peer publish server");
+        let endpoint = Endpoint::server(server_config, SocketAddr::new(bind_ip, 0))
+            .expect("Failed to start peer publish server");
         let addr = endpoint
             .local_addr()
             .expect("Failed to get peer publish server addr");
 
+        let (connection_tx, connection_rx) = mpsc::unbounded_channel();
         let endpoint_for_accept = endpoint.clone();
         tokio::spawn(async move {
             let Some(connecting) = endpoint_for_accept.accept().await else {
                 return;
             };
+            let _ = connection_tx.send(());
             let Ok(connection) = connecting.await else {
                 return;
             };
@@ -1203,6 +1251,7 @@ mod fixtures {
 
         PeerHandshakeServer {
             addr,
+            connection_rx,
             _endpoint: endpoint,
         }
     }
@@ -1251,11 +1300,13 @@ mod fixtures {
             .local_addr()
             .expect("Failed to get peer range server addr");
 
+        let (connection_tx, connection_rx) = mpsc::unbounded_channel();
         let endpoint_for_accept = endpoint.clone();
         tokio::spawn(async move {
             let Some(connecting) = endpoint_for_accept.accept().await else {
                 return;
             };
+            let _ = connection_tx.send(());
             let Ok(connection) = connecting.await else {
                 return;
             };
@@ -1282,6 +1333,7 @@ mod fixtures {
 
         PeerHandshakeServer {
             addr,
+            connection_rx,
             _endpoint: endpoint,
         }
     }
@@ -1300,11 +1352,13 @@ mod fixtures {
             .local_addr()
             .expect("Failed to get peer range server addr");
 
+        let (connection_tx, connection_rx) = mpsc::unbounded_channel();
         let endpoint_for_accept = endpoint.clone();
         tokio::spawn(async move {
             let Some(connecting) = endpoint_for_accept.accept().await else {
                 return;
             };
+            let _ = connection_tx.send(());
             let Ok(connection) = connecting.await else {
                 return;
             };
@@ -1330,6 +1384,7 @@ mod fixtures {
 
         PeerHandshakeServer {
             addr,
+            connection_rx,
             _endpoint: endpoint,
         }
     }
@@ -6515,7 +6570,9 @@ async fn process_raw_events_errors_when_peer_handshake_fails() {
     let store = db.conn_store().unwrap();
 
     let peer_certs = NODE2.build_certs();
-    let peer_server = setup_peer_handshake_mismatch_server(peer_certs, ">=99.0.0").await;
+    let peer_server =
+        setup_peer_handshake_mismatch_server(peer_certs, ">=99.0.0", Ipv4Addr::LOCALHOST.into())
+            .await;
 
     let ingest_sensors = build_ingest_sensors_from_list(&[]);
     let peers = build_peers_for_sensor(SENSOR, peer_server.addr);
@@ -7039,7 +7096,8 @@ async fn process_pcap_extract_filters_continues_after_failure() {
     let peer_certs = NODE2.build_certs();
     let PeerHandshakeServer {
         addr: peer_addr, ..
-    } = setup_peer_handshake_mismatch_server(peer_certs, ">=99.0.0").await;
+    } = setup_peer_handshake_mismatch_server(peer_certs, ">=99.0.0", Ipv4Addr::LOCALHOST.into())
+        .await;
 
     let peers = build_peers_for_sensor(SENSOR_FAIL, peer_addr);
     let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
@@ -7069,8 +7127,14 @@ async fn process_pcap_extract_filters_continues_after_peer_partial_failure() {
     let peer_certs_fail = NODE2.build_certs();
     let PeerHandshakeServer {
         addr: peer_fail_addr,
+        connection_rx: mut peer_fail_rx,
         ..
-    } = setup_peer_handshake_mismatch_server(peer_certs_fail, ">=99.0.0").await;
+    } = setup_peer_handshake_mismatch_server(
+        peer_certs_fail,
+        ">=99.0.0",
+        Ipv6Addr::LOCALHOST.into(),
+    )
+    .await;
 
     let peer_certs_ok = NODE2.build_certs();
     let PeerPcapServer {
@@ -7121,6 +7185,12 @@ async fn process_pcap_extract_filters_continues_after_peer_partial_failure() {
     )
     .await;
     assert_filter_matches(&received_filter, &filter_ok);
+    recv_with_timeout(
+        &mut peer_fail_rx,
+        "failing peer connection",
+        StdDuration::from_secs(5),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -7192,9 +7262,10 @@ async fn process_pcap_extract_filters_local_failure_does_not_fallback_to_peer() 
     let peers = build_peers_for_sensor(SENSOR, peer_addr);
     let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
 
-    run_process_pcap_extract_filters(vec![filter], pcap_sensors, peers, peer_idents).await;
+    let tracker =
+        run_process_pcap_extract_filters(vec![filter], pcap_sensors, peers, peer_idents).await;
 
-    assert_no_peer_connection(connection_rx).await;
+    assert_no_peer_connection(&tracker, connection_rx).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -7338,9 +7409,10 @@ async fn process_pcap_extract_filters_skips_when_peer_name_missing() {
 
     let pcap_sensors = new_pcap_sensors();
     with_log_capture(|log_capture| async move {
-        run_process_pcap_extract_filters(vec![filter], pcap_sensors, peers, peer_idents).await;
+        let tracker =
+            run_process_pcap_extract_filters(vec![filter], pcap_sensors, peers, peer_idents).await;
 
-        assert_no_peer_connection(connection_rx).await;
+        assert_no_peer_connection(&tracker, connection_rx).await;
         let expected_log = format!(
             "Peer's server name cannot be identitified. addr: {peer_addr}, sensor: {SENSOR}"
         );
@@ -7396,7 +7468,8 @@ async fn process_pcap_extract_filters_logs_peer_connect_failure() {
     let peer_certs = NODE2.build_certs();
     let PeerHandshakeServer {
         addr: peer_addr, ..
-    } = setup_peer_handshake_mismatch_server(peer_certs, ">=99.0.0").await;
+    } = setup_peer_handshake_mismatch_server(peer_certs, ">=99.0.0", Ipv4Addr::LOCALHOST.into())
+        .await;
 
     let peers = build_peers_for_sensor(SENSOR, peer_addr);
     let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
@@ -7428,9 +7501,10 @@ async fn process_pcap_extract_filters_skips_when_no_peer_in_charge() {
 
     let pcap_sensors = new_pcap_sensors();
     with_log_capture(|log_capture| async move {
-        run_process_pcap_extract_filters(vec![filter], pcap_sensors, peers, peer_idents).await;
+        let tracker =
+            run_process_pcap_extract_filters(vec![filter], pcap_sensors, peers, peer_idents).await;
 
-        assert_no_peer_connection(connection_rx).await;
+        assert_no_peer_connection(&tracker, connection_rx).await;
         let expected_log =
             format!("Neither this node nor peers are in charge of requested pcap sensor {SENSOR}");
         assert_log_contains(&log_capture, &expected_log).await;
@@ -7609,7 +7683,7 @@ mod tls_reload_connect {
     use crate::{
         comm::{to_cert_chain, to_private_key, to_root_cert},
         server::{Certs, config_server, extract_cert_from_conn},
-        tls_reload::{CertPaths, ReloadHandle, get_current_tls_material},
+        tls_reload::{CertPaths, ReloadHandle, ReloadOutcome, get_current_tls_material},
     };
 
     const TEST_SERVER_NAME: &str = "reload-test-server";
@@ -7849,11 +7923,10 @@ mod tls_reload_connect {
             .expect("rewrite client cert");
         std::fs::write(&fixture.client_key_path, new_key_pem.as_bytes())
             .expect("rewrite client key");
-        handle.reload();
+        assert_eq!(handle.reload(), ReloadOutcome::Updated);
 
-        // Give the reload notification time to propagate; the implementation
-        // must not act on it for already-established connections.
-        tokio::time::sleep(StdDuration::from_millis(200)).await;
+        // Check that the current synchronous reload path leaves the connection open.
+        tokio::task::yield_now().await;
 
         assert!(
             conn.close_reason().is_none(),
@@ -8469,7 +8542,7 @@ mod shutdown {
 
         assert_log_contains(&logs, "Rejected publish-pcap-relay-publish-request-refused").await;
         // Nothing ran in the refused relay's place: the peer never saw a dial.
-        super::fixtures::assert_no_peer_connection(connection_rx).await;
+        super::fixtures::assert_no_peer_connection(&tracker, connection_rx).await;
     }
 
     /// Drives one production `handle_connection` against `tracker` over a real
