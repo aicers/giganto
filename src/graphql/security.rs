@@ -196,6 +196,19 @@ mod tests {
     use crate::storage::RawEventStore;
 
     #[tokio::test]
+    async fn ip_range_rejects_security_log_bounds_with_stored_records() {
+        let schema = TestSchema::new();
+        insert_secu_log_event(&schema.db.secu_log_store().unwrap(), "device", "src1", 1);
+        crate::graphql::tests::assert_invalid_ip_ranges(
+            &schema,
+            "secuLogRawEvents",
+            "kind: \"device\"",
+            "{ edges { node { time } } }",
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn test_secu_log_event() {
         let schema = TestSchema::new();
         let store = schema.db.secu_log_store().unwrap();
