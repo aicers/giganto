@@ -360,7 +360,15 @@ async fn handle_connection(
     let connection = select! {
         biased;
         () = token.cancelled() => return Ok(()),
-        connection = conn => connection?,
+        connection = conn => match connection {
+            Ok(connection) => connection,
+            Err(error) => {
+                // Logged here rather than by the accept loop, which reports
+                // every failure after the handshake at ERROR.
+                warn!("TLS handshake from {remote} failed: {error}");
+                return Ok(());
+            }
+        },
     };
 
     // Cancellation branch. Same story one step further in: the version

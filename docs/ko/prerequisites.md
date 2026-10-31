@@ -12,6 +12,12 @@
 Giganto의 GraphQL 서버는 HTTPS로 동작하며 mTLS 클라이언트 인증을 요구합니다. 따라서 서버를 올리는 것만으로는 충분하지
 않고, 클라이언트 측에도 인증서/키/CA 준비가 필요합니다.
 
+ingest, publish, peer, GraphQL 서버는 TLS 1.3과 하이브리드 양자 내성 키 교환인
+X25519MLKEM768만 허용합니다. 센서와 그 밖의 ingest 및 publish 클라이언트, GraphQL
+클라이언트, 클러스터 피어 등 모든 클라이언트가 이를 제시해야 합니다. 제시하지 않는
+클라이언트는 핸드셰이크에서 거부되며, Giganto는 이 거부를 WARN 수준으로
+`TLS handshake from <address> failed: <error>`와 같이 기록합니다.
+
 ## 인증서 준비 원칙
 
 - 서버 인증서와 개인 키는 Giganto 실행 시 필수입니다.

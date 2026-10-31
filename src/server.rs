@@ -32,15 +32,50 @@ impl Clone for Certs {
     }
 }
 
-#[allow(clippy::module_name_repetitions)]
-pub fn config_server(certs: &Certs) -> Result<ServerConfig> {
-    let client_auth =
-        rustls::server::WebPkiClientVerifier::builder(Arc::new(certs.root.clone())).build()?;
+/// The TLS policy of every Giganto server: TLS 1.3 only, X25519MLKEM768 only.
+///
+/// `main` installs it as the process default, so Giganto's own clients
+/// inherit it as well. Because it carries only TLS 1.3 cipher suites, a
+/// builder asking for `DEFAULT_VERSIONS` still gets TLS 1.3 alone.
+pub(crate) fn server_crypto_provider() -> rustls::crypto::CryptoProvider {
+    let default = rustls::crypto::aws_lc_rs::default_provider();
+    let cipher_suites = default
+        .cipher_suites
+        .iter()
+        .copied()
+        .filter(|suite| suite.version() == &rustls::version::TLS13)
+        .collect();
+    rustls::crypto::CryptoProvider {
+        kx_groups: vec![rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768],
+        cipher_suites,
+        ..default
+    }
+}
 
-    let server_crypto = rustls::ServerConfig::builder()
+/// Builds the TLS configuration shared by the QUIC servers and the GraphQL
+/// HTTPS server, requiring a client certificate issued under `certs.root`.
+///
+/// It names [`server_crypto_provider`] and TLS 1.3 explicitly rather than
+/// relying on the process default.
+fn tls_server_config(certs: &Certs) -> Result<rustls::ServerConfig> {
+    let provider = Arc::new(server_crypto_provider());
+    let client_auth = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(certs.root.clone()),
+        Arc::clone(&provider),
+    )
+    .build()?;
+
+    rustls::ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .context("failed to configure TLS protocol versions")?
         .with_client_cert_verifier(client_auth)
         .with_single_cert(certs.certs.clone(), certs.key.clone_key())
-        .context("server config error")?;
+        .context("server config error")
+}
+
+#[allow(clippy::module_name_repetitions)]
+pub fn config_server(certs: &Certs) -> Result<ServerConfig> {
+    let server_crypto = tls_server_config(certs)?;
 
     let mut server_config =
         ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
@@ -50,6 +85,14 @@ pub fn config_server(certs: &Certs) -> Result<ServerConfig> {
         .max_concurrent_uni_streams(0_u8.into());
 
     Ok(server_config)
+}
+
+/// Builds the TLS configuration of the GraphQL HTTPS server, offering the
+/// `h2` and `http/1.1` ALPN protocols.
+pub(crate) fn graphql_server_config(certs: &Certs) -> Result<Arc<rustls::ServerConfig>> {
+    let mut config = tls_server_config(certs)?;
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(Arc::new(config))
 }
 
 pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<CertificateDer<'_>>> {
@@ -283,7 +326,8 @@ mod tests {
     use crate::comm::{to_cert_chain, to_private_key, to_root_cert};
     use crate::test_bootroot::{
         BundleOrder, PeerPresentation, build_bootroot_chain_fixture, config_client_for_tests,
-        config_client_without_cert, init_crypto, load_server_client_certs,
+        config_client_without_cert, config_client_x25519_only, init_crypto,
+        load_server_client_certs,
     };
 
     fn build_self_signed_cert_chain(
@@ -320,15 +364,35 @@ mod tests {
         }
     }
 
-    /// `main` installs this provider as the process default, which
-    /// `config_client` and the GraphQL client from `create_graphql_client`
-    /// both use.
+    /// `main` installs this provider as the process default, which every
+    /// server configuration also names explicitly.
     #[test]
-    fn client_provider_offers_hybrid_post_quantum_key_exchange_first() {
-        let provider = rustls::crypto::aws_lc_rs::default_provider();
+    fn server_crypto_provider_offers_only_hybrid_post_quantum_key_exchange_over_tls13() {
+        let provider = server_crypto_provider();
         assert_eq!(
-            provider.kx_groups.first().map(|group| group.name()),
-            Some(rustls::NamedGroup::X25519MLKEM768),
+            provider
+                .kx_groups
+                .iter()
+                .map(|group| group.name())
+                .collect::<Vec<_>>(),
+            vec![rustls::NamedGroup::X25519MLKEM768],
+        );
+        // quinn refuses a provider without this suite.
+        assert!(
+            provider
+                .cipher_suites
+                .iter()
+                .any(|suite| suite.suite() == rustls::CipherSuite::TLS13_AES_128_GCM_SHA256),
+            "the provider must keep TLS13_AES_128_GCM_SHA256: {:?}",
+            provider.cipher_suites,
+        );
+        assert!(
+            provider
+                .cipher_suites
+                .iter()
+                .all(|suite| suite.version() == &rustls::version::TLS13),
+            "every cipher suite must be a TLS 1.3 suite: {:?}",
+            provider.cipher_suites,
         );
     }
 
@@ -806,6 +870,33 @@ mod tests {
             assert!(
                 err.contains("invalid peer certificate: BadSignature"),
                 "invalid server certificate chain should surface a signature validation error, got: {err}"
+            );
+        }
+
+        /// The `bootroot_pem_bundle_accepts_*` tests above are the accepting
+        /// half: `config_server` completes a handshake with `config_client`.
+        #[tokio::test]
+        async fn config_server_refuses_x25519_only_client() {
+            let fixture = build_bootroot_chain_fixture(
+                "001.piglet.node1.example.test",
+                "001.piglet.node1.example.test",
+            );
+            let (server_certs, client_certs) = load_server_client_certs(
+                &fixture,
+                BundleOrder::IntermediateThenRoot,
+                PeerPresentation::LeafOnly,
+            );
+
+            let err = assert_bootroot_fixture_mtls_handshake_fails(
+                server_certs,
+                config_client_x25519_only(&client_certs),
+                &fixture.server_name,
+            )
+            .await;
+
+            assert!(
+                err.contains("NoKxGroupsInCommon"),
+                "an X25519-only client should be refused for lacking X25519MLKEM768, got: {err}"
             );
         }
     }

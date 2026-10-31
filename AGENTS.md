@@ -541,15 +541,18 @@ Where the crate handles key material or secrets:
 ## Certificate verification modules
 
 - Certificate verification lives in `src/server.rs`, with its trust store
-  in `src/tls_reload.rs`. `config_server` in `src/server.rs` builds the
-  `rustls` `WebPkiClientVerifier` the QUIC server enforces, and
+  in `src/tls_reload.rs`. `config_server` and `graphql_server_config` in
+  `src/server.rs` build the `rustls` `WebPkiClientVerifier` that the QUIC
+  servers and the GraphQL HTTPS listener in `src/web.rs` enforce, over the
+  root store `load_root_cert` in `src/tls_reload.rs` builds, and
   `config_client` there builds the client side over the same root store.
+  `server_crypto_provider` there is the one TLS policy, TLS 1.3 and
+  X25519MLKEM768 only, which every server configuration names and `main`
+  installs as the process default.
   `parse_client_identity` reads a peer's identity from the DNS SAN, with
   `x509_parser`, of a certificate that verifier has already accepted.
-  `load_root_cert` in `src/tls_reload.rs` builds that root store, and the
-  CA bundle the GraphQL HTTPS listener in `src/web.rs` requires client
-  certificates against. Do not verify anywhere else, and do not add a new
-  path without recording the decision in the pull request.
+  Do not verify anywhere else, and do not add a new path without recording
+  the decision in the pull request.
 - `create_graphql_client` in `src/main.rs` is an existing violation of
   that rule: it builds the `reqwest` client handed to the GraphQL schema
   with `danger_accept_invalid_certs(true)` and `tls_sni(false)`, so it

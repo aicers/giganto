@@ -1,4 +1,12 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    future::Future,
+    io,
+    net::SocketAddr,
+    pin::Pin,
+    sync::Arc,
+    task::{Context as TaskContext, Poll, ready},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow};
 use async_graphql::{
@@ -9,14 +17,21 @@ use async_graphql_poem::GraphQL;
 use poem::{
     Response, Route, Server,
     endpoint::make_sync,
-    listener::{Listener, RustlsCertificate, RustlsConfig, TcpListener},
+    http::uri::Scheme,
+    listener::{Acceptor, Listener, TcpAcceptor, TcpListener},
+    web::{LocalAddr, RemoteAddr},
 };
 use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::TcpStream,
     sync::oneshot,
     task::{self, JoinHandle},
     time::{MissedTickBehavior, interval},
 };
-use tracing::info;
+use tokio_rustls::{Accept, TlsAcceptor, server::TlsStream};
+use tracing::{info, warn};
+
+use crate::server::{Certs, graphql_server_config};
 
 /// How often [`WebController::shutdown`] reports that web shutdown is still
 /// pending while it waits for the web task to finish.
@@ -94,20 +109,16 @@ async fn await_with_pending_reports(
 /// The listener is bound eagerly so bind failures surface as errors
 /// before the spawned task begins accepting connections.
 ///
-/// Note that `key` is not compatible with the DER-encoded key extracted
-/// by `rustls-pemfile`.
-///
 /// # Arguments
 ///
 /// * `schema` - The GraphQL schema executor
 /// * `addr` - The socket address to bind to
-/// * `cert` - Server certificate in PEM format
-/// * `key` - Server private key in PEM format
-/// * `ca_pem` - Concatenated CA PEM bytes used for client verification.
-///   Callers must pass the already-validated bytes produced by the
-///   common TLS reload path; this function does not re-read the CA
-///   files from disk so that restart consumes the validated state
-///   without reopening a TOCTOU window.
+/// * `certs` - The server certificate chain, its private key, and the root
+///   store client certificates are verified against. Callers pass the
+///   already-validated material produced by the common TLS reload path, the
+///   same material the QUIC servers use; this function does not re-read
+///   anything from disk, so restart consumes the validated state without
+///   reopening a TOCTOU window.
 /// * `shutdown_timeout` - Graceful-shutdown budget applied to in-flight
 ///   requests once shutdown begins. After the signal is raised the server
 ///   stops accepting new connections and waits up to this duration for
@@ -117,13 +128,12 @@ async fn await_with_pending_reports(
 ///
 /// # Errors
 ///
-/// Returns an error if the TLS listener cannot bind to `addr`.
+/// Returns an error if the TLS configuration cannot be built from `certs`,
+/// or if the listener cannot bind to `addr`.
 pub async fn serve<S: Executor>(
     schema: S,
     addr: SocketAddr,
-    cert: Vec<u8>,
-    key: Vec<u8>,
-    ca_pem: Vec<u8>,
+    certs: Arc<Certs>,
     shutdown_timeout: Duration,
 ) -> Result<WebController> {
     let graphql = GraphQL::new(schema);
@@ -141,20 +151,19 @@ pub async fn serve<S: Executor>(
         .at("/graphql/playground", playground)
         .at("/", home);
 
-    let certificate = RustlsCertificate::new().cert(cert).key(key);
-
-    let listener = TcpListener::bind(addr).rustls(
-        RustlsConfig::new()
-            .fallback(certificate)
-            .client_auth_required(ca_pem),
-    );
+    let tls_config =
+        graphql_server_config(&certs).context("failed to build GraphQL TLS configuration")?;
 
     // Bind eagerly so the caller observes bind failures before the
     // background task is spawned.
-    let acceptor = listener
+    let tcp = TcpListener::bind(addr)
         .into_acceptor()
         .await
         .with_context(|| format!("failed to bind HTTPS listener on {addr}"))?;
+    let acceptor = GraphqlTlsAcceptor {
+        inner: tcp,
+        tls: TlsAcceptor::from(tls_config),
+    };
 
     info!("GraphQL web server is starting on https://{addr:?} with mTLS enabled");
 
@@ -179,11 +188,113 @@ pub async fn serve<S: Executor>(
     })
 }
 
+/// The TLS acceptor of the GraphQL HTTPS server.
+///
+/// It stands in for poem's `RustlsAcceptor`, which builds its configuration
+/// from the process default and reports a failed handshake only to the
+/// connection, whose result poem discards. This one serves
+/// [`graphql_server_config`] and logs every failed handshake.
+struct GraphqlTlsAcceptor {
+    inner: TcpAcceptor,
+    tls: TlsAcceptor,
+}
+
+impl Acceptor for GraphqlTlsAcceptor {
+    type Io = GraphqlTlsStream;
+
+    fn local_addr(&self) -> Vec<LocalAddr> {
+        self.inner.local_addr()
+    }
+
+    /// Returns as soon as a TCP connection is accepted. The handshake runs
+    /// on the connection's first poll, so a slow client cannot stall the
+    /// accept loop.
+    async fn accept(&mut self) -> io::Result<(Self::Io, LocalAddr, RemoteAddr, Scheme)> {
+        let (stream, local_addr, remote_addr, _) = self.inner.accept().await?;
+        let peer = *remote_addr
+            .as_socket_addr()
+            .ok_or_else(|| io::Error::other("TCP acceptor returned a non-socket peer address"))?;
+        let io = GraphqlTlsStream {
+            state: HandshakeState::Handshaking(self.tls.accept(stream)),
+            peer,
+        };
+        Ok((io, local_addr, remote_addr, Scheme::HTTPS))
+    }
+}
+
+enum HandshakeState {
+    Handshaking(Accept<TcpStream>),
+    Ready(TlsStream<TcpStream>),
+    Failed,
+}
+
+/// A GraphQL connection that drives its TLS handshake on the first read,
+/// write, flush or shutdown poll.
+struct GraphqlTlsStream {
+    state: HandshakeState,
+    peer: SocketAddr,
+}
+
+impl GraphqlTlsStream {
+    /// Completes the handshake if it is still running, then returns the TLS
+    /// stream. The first failure is logged and returned; every later poll
+    /// returns an error without logging again.
+    fn poll_stream(
+        &mut self,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<io::Result<Pin<&mut TlsStream<TcpStream>>>> {
+        if let HandshakeState::Handshaking(accept) = &mut self.state {
+            match ready!(Pin::new(accept).poll(cx)) {
+                Ok(stream) => self.state = HandshakeState::Ready(stream),
+                Err(error) => {
+                    warn!("TLS handshake from {} failed: {error}", self.peer);
+                    self.state = HandshakeState::Failed;
+                    return Poll::Ready(Err(error));
+                }
+            }
+        }
+        match &mut self.state {
+            HandshakeState::Ready(stream) => Poll::Ready(Ok(Pin::new(stream))),
+            HandshakeState::Handshaking(_) | HandshakeState::Failed => Poll::Ready(Err(
+                io::Error::new(io::ErrorKind::InvalidData, "TLS handshake failed"),
+            )),
+        }
+    }
+}
+
+impl AsyncRead for GraphqlTlsStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        ready!(self.get_mut().poll_stream(cx))?.poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for GraphqlTlsStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        ready!(self.get_mut().poll_stream(cx))?.poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        ready!(self.get_mut().poll_stream(cx))?.poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        ready!(self.get_mut().poll_stream(cx))?.poll_shutdown(cx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         net::{Ipv4Addr, SocketAddr},
-        sync::Once,
+        sync::{Arc, Once},
         time::Duration,
     };
 
@@ -192,12 +303,16 @@ mod tests {
     use tokio::{net::TcpListener as TokioTcpListener, time::sleep};
 
     use super::*;
+    use crate::test_bootroot::{
+        TlsClientBuilder, assert_tls_refused_with_one_warning, capture_logs, tls_handshake,
+        x25519_only_tls_client,
+    };
 
     static INSTALL_PROVIDER: Once = Once::new();
 
     fn install_crypto_provider() {
         INSTALL_PROVIDER.call_once(|| {
-            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            let _ = crate::server::server_crypto_provider().install_default();
         });
     }
 
@@ -294,6 +409,20 @@ mod tests {
         )
     }
 
+    /// Parses the PEM the test PKI produces into the `Certs` `serve` takes,
+    /// the way the TLS reload path does.
+    fn certs_from_pem(cert_pem: &[u8], key_pem: &[u8], ca_pem: &[u8]) -> Arc<Certs> {
+        let mut root = rustls::RootCertStore::empty();
+        for cert in crate::comm::to_cert_chain(ca_pem).expect("parse CA cert") {
+            root.add(cert).expect("add CA cert");
+        }
+        Arc::new(Certs {
+            certs: crate::comm::to_cert_chain(cert_pem).expect("parse cert"),
+            key: crate::comm::to_private_key(key_pem).expect("parse key"),
+            root,
+        })
+    }
+
     fn free_addr() -> SocketAddr {
         // Bind a kernel-assigned port, release it, and return the address.
         let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("reserve port");
@@ -312,7 +441,13 @@ mod tests {
             .expect("hold port");
         let addr = blocker.local_addr().expect("addr");
 
-        let result = serve(test_schema(), addr, cert, key, ca, Duration::from_secs(30)).await;
+        let result = serve(
+            test_schema(),
+            addr,
+            certs_from_pem(&cert, &key, &ca),
+            Duration::from_secs(30),
+        )
+        .await;
         assert!(result.is_err(), "bind on occupied port should fail");
     }
 
@@ -323,9 +458,14 @@ mod tests {
         let (cert, key, ca) = write_pki(dir.path());
         let addr = free_addr();
 
-        let controller = serve(test_schema(), addr, cert, key, ca, Duration::from_secs(30))
-            .await
-            .expect("serve should start");
+        let controller = serve(
+            test_schema(),
+            addr,
+            certs_from_pem(&cert, &key, &ca),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("serve should start");
 
         // Give the spawned task a moment to enter its accept loop.
         sleep(Duration::from_millis(50)).await;
@@ -343,9 +483,7 @@ mod tests {
         let controller = serve(
             test_schema(),
             addr,
-            cert.clone(),
-            key.clone(),
-            ca.clone(),
+            certs_from_pem(&cert, &key, &ca),
             Duration::from_secs(30),
         )
         .await
@@ -354,9 +492,14 @@ mod tests {
         controller.shutdown().await.expect("shutdown");
 
         // The same address must be re-bindable after shutdown completes.
-        let controller = serve(test_schema(), addr, cert, key, ca, Duration::from_secs(30))
-            .await
-            .expect("second serve should rebind");
+        let controller = serve(
+            test_schema(),
+            addr,
+            certs_from_pem(&cert, &key, &ca),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("second serve should rebind");
         controller.shutdown().await.expect("second shutdown");
     }
 
@@ -371,9 +514,7 @@ mod tests {
         let controller = serve(
             test_schema(),
             addr,
-            cert.clone(),
-            key.clone(),
-            ca.clone(),
+            certs_from_pem(&cert, &key, &ca),
             Duration::from_secs(10),
         )
         .await
@@ -409,9 +550,7 @@ mod tests {
         let controller = serve(
             test_schema(),
             addr,
-            cert.clone(),
-            key.clone(),
-            ca.clone(),
+            certs_from_pem(&cert, &key, &ca),
             Duration::from_secs(10),
         )
         .await
@@ -475,9 +614,7 @@ mod tests {
         let controller = serve(
             test_schema_signaling_entry(std::sync::Arc::clone(&entered)),
             addr,
-            cert.clone(),
-            key.clone(),
-            ca.clone(),
+            certs_from_pem(&cert, &key, &ca),
             Duration::from_millis(300),
         )
         .await
@@ -543,44 +680,15 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn shutdown_reports_each_pending_round_without_aborting_the_web_task() {
-        use std::sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
-        };
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         use tokio::sync::oneshot;
-        use tracing_subscriber::fmt::MakeWriter;
 
         const REPORT_INTERVAL: Duration = Duration::from_millis(25);
 
-        #[derive(Clone)]
-        struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for CaptureBuf {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("capture lock").extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> MakeWriter<'a> for CaptureBuf {
-            type Writer = CaptureBuf;
-            fn make_writer(&'a self) -> Self::Writer {
-                self.clone()
-            }
-        }
-
-        // `#[tokio::test]` runs on a current-thread runtime, so the spawned
-        // stand-in task and the reporting loop are polled on this thread and
-        // their events land in this thread-local subscriber's buffer.
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .without_time()
-            .with_writer(CaptureBuf(Arc::clone(&buf)))
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        // The spawned stand-in task and the reporting loop are polled on this
+        // thread, so their events land in the captured buffer.
+        let (logs, _guard) = capture_logs();
 
         // A stand-in web task that stays pending until released, then finishes
         // on its own. Deferring completion past several report intervals is what
@@ -620,7 +728,7 @@ mod tests {
             completed.load(Ordering::SeqCst),
             "the web task must finish on its own; it must not be aborted"
         );
-        let logs = String::from_utf8(buf.lock().expect("capture lock").clone()).expect("utf8 logs");
+        let logs = logs.contents();
         let reports = logs.matches("shutdown still pending").count();
         assert_eq!(
             reports, 2,
@@ -639,41 +747,21 @@ mod tests {
         key_pem: &[u8],
         ca_pem: &[u8],
     ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
-        use std::sync::Arc;
+        let config = rustls::ClientConfig::builder();
+        let (_, result) =
+            tls_handshake(addr, config, &certs_from_pem(cert_pem, key_pem, ca_pem)).await;
+        result.expect("TLS handshake")
+    }
 
-        use tokio_rustls::rustls::{
-            ClientConfig, RootCertStore,
-            pki_types::{CertificateDer, PrivateKeyDer, ServerName},
-        };
-
-        let mut roots = RootCertStore::empty();
-        for cert in rustls_pemfile::certs(&mut &ca_pem[..]) {
-            roots
-                .add(cert.expect("parse CA cert"))
-                .expect("add CA cert");
-        }
-        let client_certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut &cert_pem[..])
-            .map(|c| c.expect("parse client cert"))
-            .collect();
-        let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut &key_pem[..])
-            .expect("parse client key")
-            .expect("client key present");
-        let config = ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_client_auth_cert(client_certs, key)
-            .expect("build client TLS config");
-
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
-        let tcp = tokio::net::TcpStream::connect(addr)
-            .await
-            .expect("TCP connect");
-        // The server certificate's SAN is `localhost`; connecting by IP would
-        // fail hostname verification, so hand rustls the name it certifies.
-        let server_name = ServerName::try_from("localhost").expect("server name");
-        connector
-            .connect(server_name, tcp)
-            .await
-            .expect("TLS handshake")
+    /// A client builder that offers only TLS 1.2. It is built on the crate's
+    /// default provider, because the process default carries no TLS 1.2
+    /// suite and would refuse to build it at all.
+    fn tls12_only_client() -> TlsClientBuilder {
+        rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS12])
+        .expect("TLS 1.2 client config")
     }
 
     /// Sends one HTTP/1.1 `{ hello }` request over `stream` and reads the first
@@ -718,9 +806,7 @@ mod tests {
         let controller = serve(
             test_schema(),
             addr,
-            cert.clone(),
-            key.clone(),
-            ca.clone(),
+            certs_from_pem(&cert, &key, &ca),
             Duration::from_secs(10),
         )
         .await
@@ -774,8 +860,7 @@ mod tests {
 
     /// A client built from the process default provider, as the GraphQL
     /// client from `create_graphql_client` is, and the GraphQL listener agree
-    /// on the hybrid post-quantum key exchange without restricting either
-    /// side's groups.
+    /// on the hybrid post-quantum key exchange.
     #[tokio::test]
     async fn graphql_listener_negotiates_hybrid_post_quantum_key_exchange() {
         install_crypto_provider();
@@ -786,9 +871,7 @@ mod tests {
         let controller = serve(
             test_schema(),
             addr,
-            cert.clone(),
-            key.clone(),
-            ca.clone(),
+            certs_from_pem(&cert, &key, &ca),
             Duration::from_secs(10),
         )
         .await
@@ -804,6 +887,70 @@ mod tests {
         );
 
         drop(conn);
+        controller.shutdown().await.expect("graceful shutdown");
+    }
+
+    /// A client that offers only the classical X25519 group is refused, and
+    /// the refusal is logged once at WARN with the client's address.
+    #[tokio::test]
+    async fn graphql_listener_refuses_x25519_only_client() {
+        install_crypto_provider();
+        let (logs, _guard) = capture_logs();
+        let dir = tempdir().expect("tempdir");
+        let (cert, key, ca) = write_pki(dir.path());
+        let certs = certs_from_pem(&cert, &key, &ca);
+        let addr = free_addr();
+
+        let controller = serve(
+            test_schema(),
+            addr,
+            Arc::clone(&certs),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("serve should start");
+
+        assert_tls_refused_with_one_warning(
+            addr,
+            x25519_only_tls_client(),
+            &certs,
+            &logs,
+            "NoKxGroupsInCommon",
+        )
+        .await;
+
+        controller.shutdown().await.expect("graceful shutdown");
+    }
+
+    /// A client that offers only TLS 1.2 is refused, and the refusal is logged
+    /// once at WARN with the client's address.
+    #[tokio::test]
+    async fn graphql_listener_refuses_tls12_only_client() {
+        install_crypto_provider();
+        let (logs, _guard) = capture_logs();
+        let dir = tempdir().expect("tempdir");
+        let (cert, key, ca) = write_pki(dir.path());
+        let certs = certs_from_pem(&cert, &key, &ca);
+        let addr = free_addr();
+
+        let controller = serve(
+            test_schema(),
+            addr,
+            Arc::clone(&certs),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("serve should start");
+
+        assert_tls_refused_with_one_warning(
+            addr,
+            tls12_only_client(),
+            &certs,
+            &logs,
+            "Tls12NotOfferedOrEnabled",
+        )
+        .await;
+
         controller.shutdown().await.expect("graceful shutdown");
     }
 
@@ -852,9 +999,7 @@ mod tests {
         let controller = serve(
             test_schema(),
             addr,
-            cert.clone(),
-            key.clone(),
-            ca.clone(),
+            certs_from_pem(&cert, &key, &ca),
             resolved_timeout,
         )
         .await

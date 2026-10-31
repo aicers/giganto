@@ -417,6 +417,8 @@ async fn handle_connection(
     token: CancellationToken,
     ack_trans_cnt: u16,
 ) -> Result<()> {
+    let peer = conn.remote_address();
+
     // Cancellation branch. The QUIC handshake is dropped before it yields a
     // connection, so nothing has been admitted and nothing is lost. Without
     // this arm a peer that opens a connection and then stalls would hold the
@@ -424,7 +426,15 @@ async fn handle_connection(
     let connection = select! {
         biased;
         () = token.cancelled() => return Ok(()),
-        connection = conn => connection?,
+        connection = conn => match connection {
+            Ok(connection) => connection,
+            Err(error) => {
+                // Logged here rather than by the accept loop, which reports
+                // every failure after the handshake at ERROR.
+                warn!("TLS handshake from {peer} failed: {error}");
+                return Ok(());
+            }
+        },
     };
 
     // Cancellation branch. Same story one step further in: the version

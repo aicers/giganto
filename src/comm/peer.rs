@@ -999,7 +999,16 @@ async fn server_connection(
     // `server_handshake`, and the init exchange below all resolve when the
     // entry task closes the server endpoint, so a remote that connects and
     // then stalls cannot hold the drain.
-    let connection = conn.await?;
+    let peer = conn.remote_address();
+    let connection = match conn.await {
+        Ok(connection) => connection,
+        Err(error) => {
+            // Logged here rather than by the accept loop, which reports every
+            // failure after the handshake at ERROR.
+            warn!("TLS handshake from {peer} failed: {error}");
+            return Ok(());
+        }
+    };
 
     let (mut send, mut recv) = match server_handshake(&connection, PEER_VERSION_REQ).await {
         Ok((send, recv)) => (send, recv),
@@ -1467,7 +1476,7 @@ pub mod tests {
 
         pub(super) fn init_crypto() {
             INIT.get_or_init(|| {
-                let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+                let _ = crate::server::server_crypto_provider().install_default();
             });
         }
 
@@ -5170,6 +5179,53 @@ pub mod tests {
                 .await
                 .expect("QUIC handshake");
 
+            harness.cancel_and_join().await;
+        }
+
+        /// The peer server accepts only X25519MLKEM768: a peer that offers
+        /// only X25519 is refused, and the refusal is logged once at WARN and
+        /// not at ERROR.
+        #[tokio::test]
+        async fn an_x25519_only_peer_is_refused_with_one_warning() {
+            let (logs, _guard) = capture_logs();
+            let harness = PeerHarness::start(&[], HashSet::new()).await;
+
+            let mut client = Endpoint::client("127.0.0.1:0".parse().expect("client bind address"))
+                .expect("client endpoint");
+            client.set_default_client_config(crate::test_bootroot::config_client_x25519_only(
+                &create_certs(),
+            ));
+            let peer = client.local_addr().expect("client local addr");
+            let dial = client
+                .connect(harness.addr, test_connect_name())
+                .expect("dial setup");
+            let result = with_timeout("refused dial timeout", dial).await;
+            assert!(result.is_err(), "an X25519-only peer must be refused");
+
+            let needle = format!("TLS handshake from {peer} failed:");
+            wait_for_log(&logs, &needle).await;
+            let output = logs.contents();
+            let warnings: Vec<&str> = output
+                .lines()
+                .filter(|line| line.contains("WARN") && line.contains(&needle))
+                .collect();
+            assert_eq!(
+                warnings.len(),
+                1,
+                "exactly one WARN line per refused connection, got: {output}"
+            );
+            assert!(
+                warnings
+                    .iter()
+                    .all(|line| line.contains("NoKxGroupsInCommon")),
+                "the WARN line must name the missing group, got: {warnings:?}"
+            );
+            assert!(
+                !output.contains(&format!("Connection to {peer} failed")),
+                "a refused handshake must not also be logged at ERROR, got: {output}"
+            );
+
+            drop(client);
             harness.cancel_and_join().await;
         }
 

@@ -46,7 +46,7 @@ static INIT: OnceLock<()> = OnceLock::new();
 
 fn init_crypto() {
     INIT.get_or_init(|| {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = crate::server::server_crypto_provider().install_default();
     });
 }
 
@@ -59,8 +59,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Server, shutdown_ingest};
 use crate::test_bootroot::{
-    bootroot_chain_node1_client_certs, bootroot_chain_node1_fixture,
-    bootroot_chain_node1_server_certs,
+    BundleOrder, PeerPresentation, bootroot_chain_node1_client_certs, bootroot_chain_node1_fixture,
+    bootroot_chain_node1_server_certs, build_bootroot_chain_fixture, config_client_for_tests,
+    config_client_x25519_only, load_server_client_certs,
 };
 use crate::{
     cancellation::TaskTracker,
@@ -230,7 +231,7 @@ fn spawn_server_with(
         ingest_sensors,
         runtime_ingest_sensors,
         stream_direct_channels,
-        _tls_sender: tls_sender,
+        tls_sender,
     }
 }
 
@@ -243,7 +244,7 @@ struct TestServer {
     ingest_sensors: IngestSensors,
     runtime_ingest_sensors: RunTimeIngestSensors,
     stream_direct_channels: StreamDirectChannels,
-    _tls_sender: watch::Sender<Arc<TlsMaterial>>,
+    tls_sender: watch::Sender<Arc<TlsMaterial>>,
 }
 
 impl TestServer {
@@ -3971,4 +3972,128 @@ fn ingest_version_req_admits_earlier_sensors_and_this_version() {
         );
     }
     assert!(!req.matches(&semver::Version::parse("0.26.0").unwrap()));
+}
+
+/// Connects a QUIC client built on `config` to `server_addr` and returns the
+/// client's port with the outcome of the handshake.
+async fn quic_connect(
+    server_addr: SocketAddr,
+    config: quinn::ClientConfig,
+) -> (u16, Result<Connection, quinn::ConnectionError>) {
+    let mut endpoint =
+        Endpoint::client("[::]:0".parse().expect("client endpoint addr")).expect("client endpoint");
+    endpoint.set_default_client_config(config);
+    let port = endpoint.local_addr().expect("client local addr").port();
+    let result = with_timeout(
+        "QUIC handshake",
+        SHUTDOWN_TIMEOUT,
+        endpoint
+            .connect(server_addr, test_server_name())
+            .expect("connect future"),
+    )
+    .await;
+    (port, result)
+}
+
+/// Asserts that an X25519-only client presenting `client_certs` is refused,
+/// that the refusal is logged once at WARN with the client's address, and
+/// that it is not also logged at ERROR.
+async fn assert_x25519_only_client_refused(
+    server_addr: SocketAddr,
+    client_certs: &Certs,
+    logs: &Arc<StdMutex<Vec<u8>>>,
+) {
+    let (port, result) = quic_connect(server_addr, config_client_x25519_only(client_certs)).await;
+    assert!(result.is_err(), "an X25519-only client must be refused");
+
+    let needle = format!("TLS handshake from [::1]:{port} failed:");
+    wait_until("refused handshake logged", SHUTDOWN_TIMEOUT, || async {
+        captured(logs).contains(&needle)
+    })
+    .await;
+
+    let output = captured(logs);
+    let warnings: Vec<&str> = output
+        .lines()
+        .filter(|line| line.contains("WARN") && line.contains(&needle))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one WARN line per refused connection, got: {output}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .all(|line| line.contains("NoKxGroupsInCommon")),
+        "the WARN line must name the missing group, got: {warnings:?}"
+    );
+    assert!(
+        !output.contains(&format!("Connection to [::1]:{port} failed")),
+        "a refused handshake must not also be logged at ERROR, got: {output}"
+    );
+}
+
+/// The ingest server accepts only X25519MLKEM768: a client that offers only
+/// X25519 is refused, and the refusal is logged once at WARN.
+#[tokio::test]
+async fn refuses_x25519_only_client() {
+    init_crypto();
+    let (logs, _guard) = capture_logs();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    let mut server = spawn_server(db);
+
+    assert_x25519_only_client_refused(server.local_addr, &load_test_client_certs(), &logs).await;
+
+    server.shutdown().await;
+}
+
+/// A TLS reload rebuilds the ingest server configuration under the same
+/// policy: an X25519-only client is still refused, and a default client
+/// presenting the new material still connects.
+#[tokio::test]
+async fn refuses_x25519_only_client_after_reload() {
+    init_crypto();
+    let (logs, _guard) = capture_logs();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db = Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test db");
+    let mut server = spawn_server(db);
+
+    // Fresh material under a new CA, with the same names, so a client of the
+    // old material could not connect to the reloaded server.
+    let fixture = build_bootroot_chain_fixture(
+        "001.giganto.node1.example.test",
+        "001.giganto.node1.example.test",
+    );
+    let (server_certs, client_certs) = load_server_client_certs(
+        &fixture,
+        BundleOrder::IntermediateThenRoot,
+        PeerPresentation::LeafOnly,
+    );
+    server
+        .tls_sender
+        .send(Arc::new(TlsMaterial {
+            certs: Arc::new(server_certs),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+            ca_pem: Vec::new(),
+            generation: 1,
+        }))
+        .expect("the ingest listener should be watching for reloads");
+    // The old configuration refuses X25519 too, so probing before the reload
+    // took effect would prove nothing.
+    wait_until("server config reloaded", SHUTDOWN_TIMEOUT, || async {
+        captured(&logs).contains("Ingest listener: server config reloaded")
+    })
+    .await;
+
+    assert_x25519_only_client_refused(server.local_addr, &client_certs, &logs).await;
+
+    let (_, accepted) =
+        quic_connect(server.local_addr, config_client_for_tests(&client_certs)).await;
+    let conn = accepted.expect("a default client of the new material should connect");
+    conn.close(0_u32.into(), b"done");
+
+    server.shutdown().await;
 }

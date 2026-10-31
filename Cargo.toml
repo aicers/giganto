@@ -63,6 +63,7 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
+tokio-rustls = "0.26"
 thiserror = "2"
 toml = "1"
 toml_edit = "0.25"
@@ -85,7 +86,6 @@ serial_test = "4"
 # true)]`), so a timing-dependent test advances virtual time instead of
 # sleeping. It is a dev-dependency feature, so it is not enabled in the binary.
 tokio = { version = "1", features = ["test-util"] }
-tokio-rustls = "0.26"
 url = "2"
 
 [features]
