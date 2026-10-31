@@ -35,6 +35,18 @@
   node. It is logged at WARN, so under systemd it is shown by
   `journalctl -u <unit> -p warning`, not by `-p err`. `NoKxGroupsInCommon` in
   it means the peer at that address does not offer X25519MLKEM768.
+- Look for `Peer GraphQL request to <ip> refused: <reason>` at WARN. Giganto
+  sends a peer's GraphQL requests to the one name recorded for the peer's IP,
+  and sends nothing when it cannot pick that name:
+  - `no recorded peer identity`: no name is recorded at that IP. The peer's
+    `peer_srv_addr` may be `0.0.0.0` or `[::]`, or a different address from the
+    one it connects from, as behind NAT or on a multi-homed host.
+  - `more than one recorded peer identity`: two names are recorded at that IP,
+    as when two nodes share a host. Recorded peers are never removed
+    automatically, so an entry left by a peer that was re-certified under
+    another name, or that moved, is removed from `peers` by the operator.
+  - `recorded peer name ... is not a DNS name`: the name recorded at that IP,
+    such as an IP address, cannot be verified against a certificate.
 
 ## When the process exits while it was serving
 

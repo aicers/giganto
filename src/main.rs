@@ -83,34 +83,6 @@ const SHUTDOWN_PHASE: &str = "shutdown phase";
 /// The exit status clap uses for a command line it does not accept.
 const USAGE_EXIT_STATUS: u8 = 2;
 
-/// Creates a reqwest client configured for mTLS GraphQL communication.
-///
-/// # Arguments
-///
-/// * `cert_pem` - The client certificate in PEM format
-/// * `key_pem` - The private key in PEM format
-///
-/// # Returns
-///
-/// Returns a configured `reqwest::Client` with client certificate authentication.
-///
-/// # Errors
-///
-/// This function will return an error if:
-/// * The certificate and key cannot be combined into a PKCS#12 identity
-/// * The reqwest client cannot be built with the provided configuration
-fn create_graphql_client(cert_pem: &[u8], key_pem: &[u8]) -> Result<reqwest::Client> {
-    let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat())
-        .context("failed to create client identity from certificate and key")?;
-
-    reqwest::Client::builder()
-        .identity(identity)
-        .danger_accept_invalid_certs(true)
-        .tls_sni(false)
-        .build()
-        .context("failed to build GraphQL client with mTLS support")
-}
-
 /// Installs [`server::server_crypto_provider`] as the process-wide default.
 ///
 /// Every TLS configuration poem and reqwest build reads the process default,
@@ -422,7 +394,7 @@ fn act_on_generation_end(outcome: GenerationOutcome) -> Result<ControlFlow<()>> 
 ///
 /// `main` builds this once, before the first generation, and lends it to each
 /// one. Everything here is either read-only for a generation — the node
-/// certificate, the GraphQL client pool — or a process-wide channel a
+/// certificate, the TLS material watch — or a process-wide channel a
 /// generation only listens on. The configuration is not here: it is the one
 /// piece a generation can rewrite, so it is lent separately as `&mut
 /// Settings`.
@@ -438,26 +410,23 @@ struct ProcessContext {
     notify_terminate: Arc<Notify>,
     /// Raised by the SIGHUP handler.
     notify_tls_reload: Arc<Notify>,
-    /// mTLS client pool GraphQL uses to reach peer nodes.
-    request_client_pool: reqwest::Client,
 }
 
 impl ProcessContext {
     /// Builds the state every generation borrows.
     ///
-    /// The node certificate, the reload watch, and the GraphQL client pool are
-    /// all derived from one load of the TLS material on disk, so they are
-    /// built together here rather than assembled by the caller. This load is
-    /// also where TLS material the process cannot use is caught, before the
-    /// first generation opens the database.
+    /// The node certificate and the reload watch are both derived from one
+    /// load of the TLS material on disk, so they are built together here
+    /// rather than assembled by the caller. This load is also where TLS
+    /// material the process cannot use is caught, before the first generation
+    /// opens the database.
     ///
     /// The two notifiers are passed in because the signal handlers `main`
     /// installs raise them, so `main` needs its own handles on them.
     ///
     /// # Errors
     ///
-    /// Returns an error if the TLS material cannot be loaded, or if the mTLS
-    /// GraphQL client pool cannot be built from it.
+    /// Returns an error if the TLS material cannot be loaded.
     fn new(
         cert_paths: CertPaths,
         notify_terminate: Arc<Notify>,
@@ -468,8 +437,6 @@ impl ProcessContext {
             load_tls_material(&cert_paths).context("failed to load initial TLS material")?;
         let cert = loaded.certs.certs.clone();
         let (reload_handle, tls_watch) = ReloadHandle::new(cert_paths, Arc::new(loaded));
-        let tls = tls_reload::get_current_tls_material(&tls_watch);
-        let request_client_pool = create_graphql_client(&tls.cert_pem, &tls.key_pem)?;
 
         Ok(Self {
             rocksdb_limits,
@@ -478,7 +445,6 @@ impl ProcessContext {
             tls_watch,
             notify_terminate,
             notify_tls_reload,
-            request_client_pool,
         })
     }
 }
@@ -746,9 +712,10 @@ enum GenerationError {
 /// Returns an error if the data directory fails compression validation or
 /// migration, if the database cannot be opened, if a required task cannot be
 /// registered, if the node certificate carries no usable node name, if the
-/// peer subsystem cannot be built, or if the teardown could not shut the store
-/// down. A generation that ended degraded is not one of them: that is carried
-/// out as a value, because the ending's final action must still be taken.
+/// peer GraphQL client or the peer subsystem cannot be built, or if the
+/// teardown could not shut the store down. A generation that ended degraded
+/// is not one of them: that is carried out as a value, because the ending's
+/// final action must still be taken.
 #[allow(clippy::too_many_lines)]
 async fn run_generation(
     settings: &mut Settings,
@@ -792,6 +759,14 @@ async fn run_generation(
         .is_some()
         .then(|| Arc::new(Notify::new()));
     let (peers, peer_idents) = new_peers_data(settings.config.peers.clone());
+    // Per generation, over this generation's peer sets; it rebuilds its
+    // `reqwest::Client` itself when the TLS material is reloaded.
+    #[cfg(feature = "cluster")]
+    let peer_graphql_client = graphql::peer_client::PeerGraphqlClient::new(
+        Arc::clone(&peer_idents),
+        Arc::clone(&peers),
+        process.tls_watch.clone(),
+    )?;
     let ack_transmission_cnt = settings.config.visible.ack_transmission;
 
     // One top-level tracker per generation. It is created here so that it is
@@ -848,6 +823,13 @@ async fn run_generation(
     let tls = tls_reload::get_current_tls_material(&process.tls_watch);
     let certs = Arc::clone(&tls.certs);
 
+    #[cfg(feature = "cluster")]
+    let peer_context = graphql::PeerContext {
+        idents: Arc::clone(&peer_idents),
+        client: peer_graphql_client,
+    };
+    #[cfg(not(feature = "cluster"))]
+    let peer_context = graphql::PeerContext;
     let schema = graphql::schema(
         NodeName(host_fqdn_from_cert(&process.cert)?),
         database.clone(),
@@ -857,7 +839,7 @@ async fn run_generation(
         stream_direct_channels.clone(),
         notify_sensor_change.clone(),
         peers.clone(),
-        process.request_client_pool.clone(),
+        peer_context,
         settings.config.visible.export_dir.clone(),
         config_update_tx,
         process.notify_terminate.clone(),
@@ -2027,28 +2009,6 @@ mod tests {
             format!("{error:?}"),
             "a process-wide TLS crypto provider is already installed"
         );
-    }
-
-    #[test]
-    fn test_create_graphql_client_with_invalid_cert() {
-        crate::test_bootroot::init_crypto();
-        let invalid_cert = b"invalid cert";
-        let invalid_key = b"invalid key";
-
-        let result = create_graphql_client(invalid_cert, invalid_key);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_create_graphql_client_with_valid_cert() {
-        crate::test_bootroot::init_crypto();
-        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])
-            .expect("failed to generate self-signed certificate");
-        let cert_pem = cert.cert.pem();
-        let key_pem = cert.signing_key.serialize_pem();
-
-        let result = create_graphql_client(cert_pem.as_bytes(), key_pem.as_bytes());
-        assert!(result.is_ok());
     }
 
     mod reload_https_server_tests {

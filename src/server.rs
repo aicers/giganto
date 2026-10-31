@@ -297,10 +297,25 @@ fn parse_bootroot_dns_identity(dns_name: &str) -> Option<BootrootIdentity> {
     })
 }
 
-pub fn config_client(certs: &Certs) -> Result<ClientConfig> {
-    let tls_config = rustls::ClientConfig::builder()
+/// Builds the TLS configuration of Giganto's clients to its peers, trusting
+/// only `certs.root` and presenting `certs.certs`.
+///
+/// It is built on the process default provider, which `main` sets to
+/// [`server_crypto_provider`]. The server's certificate is verified by rustls's
+/// webpki verifier against the server name the connection is made to.
+///
+/// # Errors
+///
+/// Returns an error if the client certificate and key cannot be used.
+pub(crate) fn tls_client_config(certs: &Certs) -> Result<rustls::ClientConfig> {
+    rustls::ClientConfig::builder()
         .with_root_certificates(certs.root.clone())
-        .with_client_auth_cert(certs.certs.clone(), certs.key.clone_key())?;
+        .with_client_auth_cert(certs.certs.clone(), certs.key.clone_key())
+        .context("client config error")
+}
+
+pub fn config_client(certs: &Certs) -> Result<ClientConfig> {
+    let tls_config = tls_client_config(certs)?;
 
     let mut transport = TransportConfig::default();
     transport.keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));

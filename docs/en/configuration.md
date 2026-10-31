@@ -27,7 +27,9 @@
   still running. It is a reporting cadence, not a timeout: the drain waits for
   every task however long it takes, and this only decides how often a shutdown
   that is still waiting says so. Must be greater than zero, default `5s`
-- `peer_srv_addr`: Node-to-node communication address, no default
+- `peer_srv_addr`: Node-to-node communication address, no default. For other
+  nodes to send this node GraphQL requests, it must be a specific address, not
+  `0.0.0.0` or `[::]`
 - `peers`: Connected cluster nodes, no default
 
 When disk usage exceeds 95 %, the retention task shortens both retention periods
@@ -101,6 +103,11 @@ P2P cluster mode is enabled **only when a valid `peer_srv_addr` is
 configured**. `peers` addresses should be defined according to the actual
 operational network. `peers[].hostname` is the peer certificate's SAN DNS name;
 Giganto verifies the peer's certificate against it when connecting.
+
+`peers[].hostname`, or the name a peer advertised when it connected, is also
+the name Giganto sends that peer's GraphQL requests to and verifies its
+certificate against. The address comes from the name's recorded `addr`, and the
+port is the peer's GraphQL port.
 
 ## Certificate Requirements
 

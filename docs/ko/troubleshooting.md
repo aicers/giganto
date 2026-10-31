@@ -32,6 +32,18 @@
   이 기록은 WARN 수준이므로 systemd에서는 `-p err`가 아니라
   `journalctl -u <unit> -p warning`으로 확인합니다. 여기에 `NoKxGroupsInCommon`이
   있으면 해당 주소의 피어가 X25519MLKEM768을 제시하지 않는 것입니다.
+- WARN 수준의 `Peer GraphQL request to <ip> refused: <reason>`를 확인합니다.
+  Giganto는 피어의 IP에 기록된 단 하나의 이름으로 그 피어에 GraphQL 요청을
+  보내며, 그 이름을 정할 수 없으면 아무것도 보내지 않습니다.
+  - `no recorded peer identity`: 그 IP에 기록된 이름이 없습니다. 피어의
+    `peer_srv_addr`가 `0.0.0.0`이나 `[::]`이거나, NAT 뒤나 여러 주소를 가진
+    호스트처럼 피어가 연결해 오는 주소와 다를 수 있습니다.
+  - `more than one recorded peer identity`: 두 노드가 한 호스트를 쓰는 경우처럼
+    그 IP에 두 개의 이름이 기록되어 있습니다. 기록된 피어는 자동으로 제거되지
+    않으므로, 다른 이름으로 인증서를 다시 발급받았거나 주소를 옮긴 피어가 남긴
+    항목은 운영자가 `peers`에서 제거해야 합니다.
+  - `recorded peer name ... is not a DNS name`: IP 주소처럼 그 IP에 기록된
+    이름으로는 인증서를 검증할 수 없습니다.
 
 ## 동작 중이던 프로세스가 종료될 때
 

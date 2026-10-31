@@ -8,10 +8,17 @@ use graphql_client::Response as GraphQlResponse;
 use num_traits::AsPrimitive;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::{
-    comm::{IngestSensors, peer::Peers},
-    graphql::MAXIMUM_PAGE_SIZE,
+    comm::{
+        IngestSensors,
+        peer::{PeerIdents, Peers},
+    },
+    graphql::{
+        MAXIMUM_PAGE_SIZE,
+        peer_client::{PeerGraphqlClient, peer_graphql_url},
+    },
 };
 
 pub trait ClusterSortKey {
@@ -194,6 +201,13 @@ pub(crate) async fn find_who_are_in_charge(
     )
 }
 
+/// Sends a GraphQL request to the peer whose GraphQL server is at
+/// `peer_graphql_addr`, and converts its response.
+///
+/// The request goes to the one certificate name recorded for the peer's IP,
+/// on the port of `peer_graphql_addr`. If no name, more than one name, or a
+/// name that is not a DNS name is recorded for the IP, nothing is sent, and
+/// the refusal is logged at WARN and returned.
 pub async fn request_peer<QueryBodyType, ResponseDataType, ResultDataType, F>(
     ctx: &Context<'_>,
     peer_graphql_addr: SocketAddr,
@@ -205,13 +219,19 @@ where
     ResponseDataType: for<'a> Deserialize<'a>,
     F: 'static + FnOnce(Option<ResponseDataType>) -> ResultDataType,
 {
-    let client = ctx.data::<reqwest::Client>()?;
-    let req = client
-        .post(format!(
-            "{}://{}/graphql",
-            if cfg!(test) { "http" } else { "https" },
-            peer_graphql_addr
-        ))
+    let peer_client = ctx.data::<PeerGraphqlClient>()?;
+    let url = {
+        let idents = ctx.data::<PeerIdents>()?.read().await;
+        peer_graphql_url(peer_client.scheme(), &idents, peer_graphql_addr)
+    };
+    let url = url.map_err(|refusal| {
+        let message = refusal.to_string();
+        warn!("{message}");
+        Error::new(message)
+    })?;
+    let req = peer_client
+        .client()
+        .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .json(&req_body);
 
@@ -964,7 +984,7 @@ pub(crate) use impl_from_giganto_search_filter_for_graphql_client;
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
-    use std::net::SocketAddr;
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
 
     use async_graphql::{
@@ -972,6 +992,7 @@ mod tests {
         connection::{Connection, Edge, EmptyFields},
     };
     use mockito::Server;
+    use rustls::pki_types::CertificateDer;
     use serde_json::Value;
     use tokio::sync::RwLock;
 
@@ -981,10 +1002,15 @@ mod tests {
     };
     use crate::comm::{
         IngestSensors,
-        peer::{PeerInfo, Peers},
+        peer::{PeerIdentity, PeerIdents, PeerInfo, Peers},
     };
     use crate::datetime::DateTime;
-    use crate::graphql::validate_pagination_args;
+    use crate::graphql::{peer_client::PeerGraphqlClient, validate_pagination_args};
+    use crate::server::Certs;
+    use crate::test_bootroot::{
+        TestNode as ClusterNode, bootroot_cluster_certs, bootroot_cluster_server_name,
+    };
+    use crate::tls_reload::{TlsMaterial, TlsWatch, test_tls_watch};
 
     #[derive(SimpleObject, Debug)]
     struct TestNode {
@@ -1391,6 +1417,12 @@ mod tests {
         );
     }
 
+    /// The certificate name the mocked peers' identities are recorded under.
+    const MOCK_PEER_NAME: &str = "peer.giganto.example.test";
+    /// The QUIC port recorded with a peer identity, unrelated to the GraphQL
+    /// port a request goes to.
+    const PEER_QUIC_PORT: u16 = 38_383;
+
     struct RequestPeerTestQuery {
         server_addr: SocketAddr,
     }
@@ -1417,27 +1449,65 @@ mod tests {
         }
     }
 
+    /// Returns peer sets in which `hostname` is recorded at `server_addr`'s IP
+    /// and that IP is a connected peer.
+    fn recorded_peer_sets(server_addr: SocketAddr, hostname: &str) -> (PeerIdents, Peers) {
+        let peer_idents: PeerIdents = Arc::new(RwLock::new(HashSet::from([PeerIdentity {
+            addr: SocketAddr::new(server_addr.ip(), PEER_QUIC_PORT),
+            hostname: hostname.to_string(),
+        }])));
+        let peers: Peers = Arc::new(RwLock::new(HashMap::from([(
+            server_addr.ip().to_string(),
+            PeerInfo::default(),
+        )])));
+        (peer_idents, peers)
+    }
+
+    fn request_peer_schema(
+        server_addr: SocketAddr,
+        peer_idents: PeerIdents,
+        peers: Peers,
+        client: PeerGraphqlClient,
+    ) -> Schema<RequestPeerTestQuery, EmptyMutation, EmptySubscription> {
+        Schema::build(
+            RequestPeerTestQuery::new(server_addr),
+            EmptyMutation,
+            EmptySubscription,
+        )
+        .data(peer_idents)
+        .data(peers)
+        .data(client)
+        .finish()
+    }
+
+    /// Builds a schema that sends its request over plain HTTP to the mocked
+    /// peer at `server_addr`, recorded under [`MOCK_PEER_NAME`].
+    fn mock_peer_schema(
+        server_addr: SocketAddr,
+    ) -> Schema<RequestPeerTestQuery, EmptyMutation, EmptySubscription> {
+        let (peer_idents, peers) = recorded_peer_sets(server_addr, MOCK_PEER_NAME);
+        let client = PeerGraphqlClient::plain_http(Arc::clone(&peer_idents), Arc::clone(&peers));
+        request_peer_schema(server_addr, peer_idents, peers, client)
+    }
+
     #[tokio::test]
     async fn test_request_peer_success() {
         crate::test_bootroot::init_crypto();
         let mut server = Server::new_async().await;
+        let server_addr = server.socket_address();
         let _m = server
             .mock("POST", "/graphql")
+            .match_header(
+                "host",
+                format!("{MOCK_PEER_NAME}:{}", server_addr.port()).as_str(),
+            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"data": {"result": "ok"}}"#)
             .create_async()
             .await;
 
-        let server_addr = server.socket_address();
-
-        let schema = Schema::build(
-            RequestPeerTestQuery::new(server_addr),
-            EmptyMutation,
-            EmptySubscription,
-        )
-        .data(reqwest::Client::new())
-        .finish();
+        let schema = mock_peer_schema(server_addr);
 
         let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
 
@@ -1456,15 +1526,7 @@ mod tests {
             .create_async()
             .await;
 
-        let server_addr = server.socket_address();
-
-        let schema = Schema::build(
-            RequestPeerTestQuery::new(server_addr),
-            EmptyMutation,
-            EmptySubscription,
-        )
-        .data(reqwest::Client::new())
-        .finish();
+        let schema = mock_peer_schema(server.socket_address());
 
         let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
         assert_eq!(res.data.to_string(), "null");
@@ -1489,13 +1551,7 @@ mod tests {
             .create_async()
             .await;
 
-        let schema = Schema::build(
-            RequestPeerTestQuery::new(server.socket_address()),
-            EmptyMutation,
-            EmptySubscription,
-        )
-        .data(reqwest::Client::new())
-        .finish();
+        let schema = mock_peer_schema(server.socket_address());
 
         let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
         assert_eq!(res.data.to_string(), "null");
@@ -1506,6 +1562,280 @@ mod tests {
                     == "Peer giganto returned GraphQL errors: peer resolver failed"),
             "expected a peer GraphQL error, got {res:?}"
         );
+    }
+
+    /// The client follows no redirect: a peer answering 308 to another URL
+    /// fails the request, and the redirect target is never asked.
+    #[tokio::test]
+    async fn test_request_peer_follows_no_redirect() {
+        crate::test_bootroot::init_crypto();
+        let mut target = Server::new_async().await;
+        let redirected = target
+            .mock("POST", "/graphql")
+            .expect(0)
+            .create_async()
+            .await;
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("POST", "/graphql")
+            .with_status(308)
+            .with_header("location", &format!("{}/graphql", target.url()))
+            .create_async()
+            .await;
+
+        let schema = mock_peer_schema(server.socket_address());
+
+        let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
+        assert_eq!(res.data.to_string(), "null");
+        assert!(!res.errors.is_empty(), "expected an error, got {res:?}");
+        redirected.assert_async().await;
+    }
+
+    /// The production client sends nothing to a URL that is not `https`.
+    #[tokio::test]
+    async fn production_client_refuses_plain_http() {
+        crate::test_bootroot::init_crypto();
+        let mut server = Server::new_async().await;
+        let server_addr = server.socket_address();
+        let mock = server
+            .mock("POST", "/graphql")
+            .expect(0)
+            .create_async()
+            .await;
+        let (peer_idents, peers) = recorded_peer_sets(server_addr, MOCK_PEER_NAME);
+        let (_tls_tx, tls_watch) = test_tls_watch_for(ClusterNode::Node1, 0);
+        let client = PeerGraphqlClient::new(peer_idents, peers, tls_watch).unwrap();
+
+        let result = client
+            .client()
+            .post(format!(
+                "http://{MOCK_PEER_NAME}:{}/graphql",
+                server_addr.port()
+            ))
+            .send()
+            .await;
+        assert!(result.is_err(), "{result:?}");
+        mock.assert_async().await;
+    }
+
+    // ── Peer GraphQL over TLS ───────────────────────────────────────────
+
+    /// What the TLS test server saw of one connection.
+    struct SeenConnection {
+        sni: Option<String>,
+        client_cert: Option<CertificateDer<'static>>,
+        request_completed: bool,
+    }
+
+    /// A one-connection-at-a-time HTTPS server on `127.0.0.1`, configured
+    /// with the production GraphQL server policy over the `Certs` it presents,
+    /// that answers every request with a fixed GraphQL response.
+    struct TlsTestServer {
+        addr: SocketAddr,
+        seen: Arc<std::sync::Mutex<Vec<SeenConnection>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl TlsTestServer {
+        async fn start(certs: &Certs) -> Self {
+            let config = crate::server::graphql_server_config(certs).unwrap();
+            let acceptor = tokio_rustls::TlsAcceptor::from(config);
+            let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let addr = listener.local_addr().unwrap();
+            let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let task = tokio::spawn({
+                let seen = Arc::clone(&seen);
+                async move {
+                    loop {
+                        let Ok((tcp, _)) = listener.accept().await else {
+                            return;
+                        };
+                        let Ok(mut tls) = acceptor.accept(tcp).await else {
+                            continue;
+                        };
+                        let (_, connection) = tls.get_ref();
+                        let sni = connection.server_name().map(str::to_string);
+                        let client_cert = connection
+                            .peer_certificates()
+                            .and_then(|certs| certs.first())
+                            .map(|cert| cert.clone().into_owned());
+                        let request_completed = answer_one_request(&mut tls).await.is_ok();
+                        seen.lock().unwrap().push(SeenConnection {
+                            sni,
+                            client_cert,
+                            request_completed,
+                        });
+                    }
+                }
+            });
+            Self { addr, seen, task }
+        }
+
+        fn completed_requests(&self) -> usize {
+            self.seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|seen| seen.request_completed)
+                .count()
+        }
+
+        async fn stop(self) {
+            self.task.abort();
+            let _ = self.task.await;
+        }
+    }
+
+    /// Reads one HTTP/1.1 request and answers it with a fixed GraphQL
+    /// response, closing the connection.
+    async fn answer_one_request<S>(stream: &mut S) -> std::io::Result<()>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+        const RESPONSE_BODY: &str = r#"{"data": {"result": "ok"}}"#;
+
+        let mut reader = BufReader::new(&mut *stream);
+        let mut content_length = 0;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).await? == 0 {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
+            let line = line.trim_end();
+            if line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("content-length")
+            {
+                content_length = value
+                    .trim()
+                    .parse()
+                    .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
+            }
+        }
+        let mut body = vec![0; content_length];
+        reader.read_exact(&mut body).await?;
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{RESPONSE_BODY}",
+            RESPONSE_BODY.len()
+        );
+        stream.write_all(response.as_bytes()).await?;
+        stream.flush().await?;
+        stream.shutdown().await
+    }
+
+    fn tls_material(node: ClusterNode, generation: u64) -> Arc<TlsMaterial> {
+        Arc::new(TlsMaterial {
+            certs: Arc::new(bootroot_cluster_certs(node)),
+            cert_pem: Vec::new(),
+            key_pem: Vec::new(),
+            ca_pem: Vec::new(),
+            generation,
+        })
+    }
+
+    fn test_tls_watch_for(
+        node: ClusterNode,
+        generation: u64,
+    ) -> (tokio::sync::watch::Sender<Arc<TlsMaterial>>, TlsWatch) {
+        test_tls_watch(tls_material(node, generation))
+    }
+
+    /// Builds a schema whose `request_peer` goes over `https`, through the
+    /// production client built from `tls_watch`, to the server at
+    /// `server_addr`, recorded under node 1's name.
+    fn tls_peer_schema(
+        server_addr: SocketAddr,
+        tls_watch: TlsWatch,
+    ) -> Schema<RequestPeerTestQuery, EmptyMutation, EmptySubscription> {
+        let (peer_idents, peers) = recorded_peer_sets(
+            server_addr,
+            bootroot_cluster_server_name(ClusterNode::Node1),
+        );
+        let client =
+            PeerGraphqlClient::new(Arc::clone(&peer_idents), Arc::clone(&peers), tls_watch)
+                .unwrap();
+        request_peer_schema(server_addr, peer_idents, peers, client)
+    }
+
+    #[tokio::test]
+    async fn tls_request_reaches_the_peer_presenting_its_recorded_name() {
+        crate::test_bootroot::init_crypto();
+        let server = TlsTestServer::start(&bootroot_cluster_certs(ClusterNode::Node1)).await;
+        let (_tls_tx, tls_watch) = test_tls_watch_for(ClusterNode::Node1, 0);
+        let schema = tls_peer_schema(server.addr, tls_watch);
+
+        let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
+        assert!(res.errors.is_empty(), "{:?}", res.errors);
+        assert_eq!(res.data.to_string(), "{requestPeerSuccess: true}");
+        {
+            let seen = server.seen.lock().unwrap();
+            assert_eq!(seen.len(), 1);
+            assert_eq!(
+                seen.first().and_then(|seen| seen.sni.as_deref()),
+                Some(bootroot_cluster_server_name(ClusterNode::Node1))
+            );
+        }
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn tls_request_is_refused_by_a_peer_with_another_peers_certificate() {
+        crate::test_bootroot::init_crypto();
+        let server = TlsTestServer::start(&bootroot_cluster_certs(ClusterNode::Node2)).await;
+        let (_tls_tx, tls_watch) = test_tls_watch_for(ClusterNode::Node1, 0);
+        let schema = tls_peer_schema(server.addr, tls_watch);
+
+        let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
+        assert_eq!(res.data.to_string(), "null");
+        assert!(
+            res.errors
+                .iter()
+                .any(|err| err.message.starts_with("Peer giganto did not respond")),
+            "expected a connection failure, got {res:?}"
+        );
+        assert_eq!(server.completed_requests(), 0);
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn tls_request_after_a_reload_presents_the_new_client_certificate() {
+        crate::test_bootroot::init_crypto();
+        let server = TlsTestServer::start(&bootroot_cluster_certs(ClusterNode::Node1)).await;
+        let (tls_tx, tls_watch) = test_tls_watch_for(ClusterNode::Node1, 0);
+        let schema = tls_peer_schema(server.addr, tls_watch);
+
+        let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
+        assert!(res.errors.is_empty(), "{:?}", res.errors);
+
+        let node2 = tls_material(ClusterNode::Node2, 1);
+        let node2_cert = node2.certs.certs.first().cloned();
+        tls_tx.send(node2).unwrap();
+
+        let res = schema.execute(Request::new("{ requestPeerSuccess }")).await;
+        assert!(res.errors.is_empty(), "{:?}", res.errors);
+
+        {
+            let seen = server.seen.lock().unwrap();
+            let client_certs: Vec<_> = seen.iter().map(|seen| seen.client_cert.clone()).collect();
+            assert_eq!(
+                client_certs,
+                [
+                    bootroot_cluster_certs(ClusterNode::Node1)
+                        .certs
+                        .first()
+                        .cloned(),
+                    node2_cert,
+                ]
+            );
+        }
+        server.stop().await;
     }
 
     // ── Cluster pagination validation tests ─────────────────────────────

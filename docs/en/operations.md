@@ -85,6 +85,9 @@ subsystem, which applies it with the following observable behavior:
   the certificate and private key do not form a valid pair — the
   previous peer TLS state is kept. The failure is logged and the peer
   subsystem keeps running on the previously installed material.
+- Peer GraphQL requests use the reloaded certificate from the next
+  request on, and the connections the previous client pooled are
+  dropped with it.
 
 Long-lived connection policy:
 

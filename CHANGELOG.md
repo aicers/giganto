@@ -37,6 +37,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   longer stops Giganto. It restores the previous configuration and restarts
   once; failures after store opening retain their existing behavior.
 
+### Security
+
+- Giganto now verifies a peer node's certificate when it sends that peer a
+  GraphQL request, as it already did on peer QUIC connections. The request goes
+  to `https://<name>:<GraphQL port>/graphql`, where `<name>` is the name
+  recorded for the peer (its `peers[].hostname`, or the name it advertised when
+  it connected), resolved by Giganto to the peer's recorded address; the peer's
+  certificate must chain to a CA given with `--ca-certs` and carry that name. A
+  peer address with no recorded name, such as a peer whose `peer_srv_addr` is
+  `0.0.0.0`, is not sent the request, and the refusal is logged at WARN. After a
+  certificate reload, peer GraphQL requests now present the new client
+  certificate; they used to keep presenting the one loaded at startup.
+
 ## [0.34.0] - 2026-10-28
 
 ### Added

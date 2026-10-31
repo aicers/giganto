@@ -858,9 +858,9 @@ mod tests {
             .expect("graceful shutdown");
     }
 
-    /// A client built from the process default provider, as the GraphQL
-    /// client from `create_graphql_client` is, and the GraphQL listener agree
-    /// on the hybrid post-quantum key exchange.
+    /// A client built from the process default provider, as
+    /// `tls_client_config` is, and the GraphQL listener agree on the hybrid
+    /// post-quantum key exchange.
     #[tokio::test]
     async fn graphql_listener_negotiates_hybrid_post_quantum_key_exchange() {
         install_crypto_provider();
