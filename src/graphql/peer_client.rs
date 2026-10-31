@@ -12,7 +12,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use reqwest::dns::{Addrs, Name, Resolve, Resolving};
+use reqwest::{
+    Url,
+    dns::{Addrs, Name, Resolve, Resolving},
+};
 use rustls::pki_types::ServerName;
 use tracing::error;
 
@@ -175,7 +178,7 @@ pub(crate) fn peer_graphql_url(
     scheme: &str,
     idents: &HashSet<PeerIdentity>,
     peer: SocketAddr,
-) -> Result<String, PeerRequestRefusal> {
+) -> Result<Url, PeerRequestRefusal> {
     let ip = peer.ip();
     let canonical = ip.to_canonical();
     let mut names: Vec<&str> = Vec::new();
@@ -195,10 +198,23 @@ pub(crate) fn peer_graphql_url(
         [hostname] => *hostname,
         _ => return Err(PeerRequestRefusal::MoreThanOneIdentity(ip)),
     };
+    let not_dns_name = || PeerRequestRefusal::NotDnsName(ip, hostname.to_owned());
     if !matches!(ServerName::try_from(hostname), Ok(ServerName::DnsName(_))) {
-        return Err(PeerRequestRefusal::NotDnsName(ip, hostname.to_owned()));
+        return Err(not_dns_name());
     }
-    Ok(format!("{scheme}://{hostname}:{}/graphql", peer.port()))
+    // The URL parser reads some names rustls accepts as DNS names, such as
+    // `0x7f000001`, as IPv4 addresses. A request to such a URL would bypass
+    // the resolver and verify the certificate against the address, so only a
+    // URL whose host is still the recorded name is sent.
+    let url = Url::parse(&format!("{scheme}://{hostname}:{}/graphql", peer.port()))
+        .map_err(|_| not_dns_name())?;
+    if !url
+        .domain()
+        .is_some_and(|domain| domain.eq_ignore_ascii_case(hostname))
+    {
+        return Err(not_dns_name());
+    }
+    Ok(url)
 }
 
 /// Resolves a peer's certificate name to the connected IPs it is recorded at.
@@ -275,6 +291,7 @@ mod tests {
     };
 
     use reqwest::dns::{Name, Resolve};
+    use rustls::pki_types::ServerName;
     use tokio::sync::RwLock;
 
     use super::{PeerNameResolver, PeerRequestRefusal, peer_graphql_url};
@@ -320,7 +337,10 @@ mod tests {
     fn url_names_the_recorded_peer_with_the_graphql_port() {
         let idents = HashSet::from([ident(&format!("10.0.0.2:{QUIC_PORT}"), NAME)]);
         let url = peer_graphql_url("https", &idents, graphql_addr("10.0.0.2")).unwrap();
-        assert_eq!(url, format!("https://{NAME}:{GRAPHQL_PORT}/graphql"));
+        assert_eq!(
+            url.as_str(),
+            format!("https://{NAME}:{GRAPHQL_PORT}/graphql")
+        );
     }
 
     #[test]
@@ -370,10 +390,34 @@ mod tests {
     }
 
     #[test]
+    fn url_is_refused_for_a_name_the_url_parser_reads_as_an_ip() {
+        // rustls accepts each as a DNS name; the URL parser reads the first
+        // two as `127.0.0.1` and `0.0.0.0`, and rejects the third as an
+        // invalid IPv4 address.
+        for name in ["0x7f000001", "0x00000000", "a.0x10"] {
+            assert!(matches!(
+                ServerName::try_from(name),
+                Ok(ServerName::DnsName(_))
+            ));
+            let idents = HashSet::from([ident(&format!("10.0.0.2:{QUIC_PORT}"), name)]);
+            let refusal = peer_graphql_url("https", &idents, graphql_addr("10.0.0.2")).unwrap_err();
+            assert_eq!(
+                refusal.to_string(),
+                format!(
+                    "Peer GraphQL request to 10.0.0.2 refused: recorded peer name {name:?} is not a DNS name"
+                ),
+            );
+        }
+    }
+
+    #[test]
     fn url_matches_an_ipv4_mapped_request_ip() {
         let idents = HashSet::from([ident(&format!("127.0.0.1:{QUIC_PORT}"), NAME)]);
         let url = peer_graphql_url("https", &idents, graphql_addr("::ffff:127.0.0.1")).unwrap();
-        assert_eq!(url, format!("https://{NAME}:{GRAPHQL_PORT}/graphql"));
+        assert_eq!(
+            url.as_str(),
+            format!("https://{NAME}:{GRAPHQL_PORT}/graphql")
+        );
     }
 
     #[test]
@@ -387,7 +431,8 @@ mod tests {
         ]);
         let url = peer_graphql_url("https", &idents, graphql_addr("10.0.0.2")).unwrap();
         assert!(
-            url.eq_ignore_ascii_case(&format!("https://{NAME}:{GRAPHQL_PORT}/graphql")),
+            url.as_str()
+                .eq_ignore_ascii_case(&format!("https://{NAME}:{GRAPHQL_PORT}/graphql")),
             "{url}"
         );
     }
