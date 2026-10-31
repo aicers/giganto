@@ -24,7 +24,7 @@ clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", features = ["toml"], default-features = false }
 darling = "0.24"
 futures-util = "0.3"
-giganto-client = { git = "https://github.com/aicers/giganto-client.git", rev = "7c0baab56f8226e9cd43e110e028c12330be3d6d" }
+giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "0.29.1" }
 graphql_client = "0.16"
 humantime-serde = "1"
 libc = "0.2"
