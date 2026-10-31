@@ -11,7 +11,7 @@ use rcgen::{
     KeyPair, KeyUsagePurpose,
 };
 use tempfile::TempDir;
-use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::fmt::{MakeWriter, writer::MutexGuardWriter};
 
 use crate::{
     comm::{to_cert_chain, to_private_key, to_root_cert},
@@ -82,22 +82,11 @@ impl CaptureBuf {
     }
 }
 
-impl std::io::Write for CaptureBuf {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().expect("capture lock").extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 impl<'a> MakeWriter<'a> for CaptureBuf {
-    type Writer = CaptureBuf;
+    type Writer = MutexGuardWriter<'a, Vec<u8>>;
 
     fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
+        self.0.make_writer()
     }
 }
 
@@ -130,10 +119,10 @@ pub(crate) async fn wait_for_log(logs: &CaptureBuf, needle: &str) {
         }
     })
     .await;
+    let contents = logs.contents();
     assert!(
         found.is_ok(),
-        "log never contained {needle:?}; got: {}",
-        logs.contents()
+        "log never contained {needle:?}; got: {contents}"
     );
 }
 
@@ -163,11 +152,11 @@ pub(crate) async fn assert_tls_refused_with_one_warning(
 
     wait_for_log(logs, &format!("TLS handshake from {peer} failed:")).await;
     let warnings = handshake_warnings(logs, peer);
+    let contents = logs.contents();
     assert_eq!(
         warnings.len(),
         1,
-        "exactly one WARN line per refused connection, got: {}",
-        logs.contents()
+        "exactly one WARN line per refused connection, got: {contents}"
     );
     assert!(
         warnings.iter().all(|line| line.contains(cause)),
@@ -700,4 +689,17 @@ pub(crate) fn build_bootroot_duplicate_peer_fixture(
         first_client,
         second_client,
     }
+}
+
+#[tokio::test]
+async fn wait_for_log_waits_for_a_line_logged_later() {
+    let (logs, _guard) = capture_logs();
+    let log_later = async {
+        tokio::task::yield_now().await;
+        tracing::info!("logged after the first check");
+    };
+    tokio::join!(
+        wait_for_log(&logs, "logged after the first check"),
+        log_later
+    );
 }

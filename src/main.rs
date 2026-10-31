@@ -111,19 +111,28 @@ fn create_graphql_client(cert_pem: &[u8], key_pem: &[u8]) -> Result<reqwest::Cli
         .context("failed to build GraphQL client with mTLS support")
 }
 
+/// Installs [`server::server_crypto_provider`] as the process-wide default.
+///
+/// Every TLS configuration poem and reqwest build reads the process default,
+/// so the server policy must be the one in force.
+///
+/// # Errors
+///
+/// Returns an error if a process-wide provider is already installed.
+fn install_tls_policy() -> Result<()> {
+    server::server_crypto_provider()
+        .install_default()
+        .map_err(|_| anyhow!("a process-wide TLS crypto provider is already installed"))
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Every TLS configuration poem and reqwest build reads the process
-    // default, so the server policy must be the one in force.
-    if server::server_crypto_provider().install_default().is_err() {
-        eprintln!("Error: a process-wide TLS crypto provider is already installed");
-        return ExitCode::FAILURE;
-    }
-
     // The one place outside tests that reads the environment for logging.
     let journal_stream = std::env::var_os(logging::JOURNAL_STREAM_ENV);
     let journal = logging::output_is_journal(journal_stream.as_deref());
-    let guard = match logging::init_tracing(journal) {
+    // The policy is installed before tracing, so either failure is reported
+    // on standard error.
+    let guard = match install_tls_policy().and_then(|()| logging::init_tracing(journal)) {
         Ok(guard) => guard,
         Err(error) => {
             eprintln!("Error: {error:?}");
@@ -2007,6 +2016,16 @@ mod tests {
         assert!(
             !re.is_match(&output),
             "stdout should not include file:line numbers, got: {output}"
+        );
+    }
+
+    #[test]
+    fn install_tls_policy_refuses_a_second_provider() {
+        crate::test_bootroot::init_crypto();
+        let error = install_tls_policy().expect_err("a provider is already installed");
+        assert_eq!(
+            format!("{error:?}"),
+            "a process-wide TLS crypto provider is already installed"
         );
     }
 

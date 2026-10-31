@@ -922,6 +922,37 @@ mod tests {
         controller.shutdown().await.expect("graceful shutdown");
     }
 
+    /// Once its handshake has failed, a connection returns an error on every
+    /// later read, write, flush and shutdown, and logs nothing more: the one
+    /// WARN line was written when the handshake failed.
+    #[tokio::test]
+    async fn failed_handshake_stream_keeps_failing_without_logging_again() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (logs, _guard) = capture_logs();
+        let mut stream = GraphqlTlsStream {
+            state: HandshakeState::Failed,
+            peer: SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+        };
+
+        let errors = [
+            stream.read(&mut [0; 1]).await.expect_err("read"),
+            stream.write(b"x").await.expect_err("write"),
+            stream.flush().await.expect_err("flush"),
+            stream.shutdown().await.expect_err("shutdown"),
+        ];
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.kind() == io::ErrorKind::InvalidData)
+        );
+        let contents = logs.contents();
+        assert!(
+            !contents.contains("TLS handshake from"),
+            "no further WARN line, got: {contents}"
+        );
+    }
+
     /// A client that offers only TLS 1.2 is refused, and the refusal is logged
     /// once at WARN with the client's address.
     #[tokio::test]
