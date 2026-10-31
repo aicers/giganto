@@ -1423,11 +1423,13 @@ pub mod tests {
 
     pub(crate) mod fixtures {
         use std::{
+            cell::RefCell,
             collections::{HashMap, HashSet},
             fs,
             future::Future,
+            io::{self, Write},
             net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-            sync::{Arc, OnceLock},
+            sync::{Arc, Mutex as StdMutex, OnceLock},
             time::Duration,
         };
 
@@ -1438,13 +1440,15 @@ pub mod tests {
         use tempfile::TempDir;
         use tokio::sync::{Notify, RwLock, mpsc, oneshot};
         use tokio::time::sleep;
+        use tokio_util::task::AbortOnDropHandle;
         use toml_edit::DocumentMut;
+        use tracing_subscriber::fmt::MakeWriter;
 
         use super::super::request_init_info;
         use super::super::{
-            CancellationToken, IngestSensors, PEER_VERSION_REQ, Peer, PeerCode, PeerConns,
-            PeerIdentity, PeerIdents, PeerInfo, Peers, SharedClientConfig, TaskTracker,
-            server_connection,
+            CancellationToken, IngestSensors, PEER_RETRY_INTERVAL, PEER_VERSION_REQ, Peer,
+            PeerCode, PeerConns, PeerIdentity, PeerIdents, PeerInfo, Peers, SharedClientConfig,
+            TaskTracker, server_connection,
         };
         use crate::comm::peer::{receive_peer_data, response_init_info};
         use crate::server::{Certs, config_client, config_server};
@@ -1464,10 +1468,97 @@ pub mod tests {
         /// attempts, yet far larger than a healthy localhost handshake.
         pub(super) const DIAL_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(3);
         /// Number of bounded dial attempts before a test dial gives up.
-        pub(super) const DIAL_ATTEMPTS: usize = 5;
+        pub(super) const DIAL_ATTEMPTS: u32 = 5;
         /// Pause between dial attempts, giving a stalled runner room to
         /// recover before the next try.
         pub(super) const DIAL_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+        /// Bounds mock readiness and reload-race observations. A full
+        /// `accept_quic_with_retry` cycle allows one handshake budget per
+        /// attempt, the production reconnect delay after the first attempt,
+        /// and a retry pause after every attempt. Add `TEST_TIMEOUT` for the
+        /// protocol handshake and init exchange that readiness also awaits.
+        pub(super) const MOCK_READY_TIMEOUT: Duration = DIAL_ATTEMPT_TIMEOUT
+            .saturating_mul(DIAL_ATTEMPTS)
+            .saturating_add(
+                Duration::from_secs(PEER_RETRY_INTERVAL).saturating_mul(DIAL_ATTEMPTS - 1),
+            )
+            .saturating_add(DIAL_RETRY_INTERVAL.saturating_mul(DIAL_ATTEMPTS))
+            .saturating_add(TEST_TIMEOUT);
+
+        #[derive(Clone, Default)]
+        pub(super) struct SharedLogBuffer(Arc<StdMutex<Vec<u8>>>);
+
+        impl SharedLogBuffer {
+            pub(super) fn contents(&self) -> String {
+                let bytes = self.0.lock().expect("log buffer lock").clone();
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+
+            pub(super) fn contains(&self, needle: &str) -> bool {
+                self.contents().contains(needle)
+            }
+        }
+
+        pub(super) struct SharedLogWriter(Arc<StdMutex<Vec<u8>>>);
+
+        impl Write for SharedLogWriter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("log buffer lock")
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for SharedLogBuffer {
+            type Writer = SharedLogWriter;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                SharedLogWriter(Arc::clone(&self.0))
+            }
+        }
+
+        /// Installs a log-capturing subscriber for the current thread, the way
+        /// `src/cancellation.rs` does, over the dispatcher
+        /// `hold_callsite_interest_open` keeps registered so that a parallel
+        /// test cannot cache one of the callsites asserted on here off. A
+        /// `#[tokio::test]` runs its tasks on the calling thread, so the peer
+        /// tasks spawned below are captured too.
+        pub(super) fn capture_logs() -> (SharedLogBuffer, tracing::subscriber::DefaultGuard) {
+            crate::cancellation::hold_callsite_interest_open();
+            let logs = SharedLogBuffer::default();
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .without_time()
+                .with_target(false)
+                .with_writer(logs.clone())
+                .finish();
+            let guard = tracing::subscriber::set_default(subscriber);
+            (logs, guard)
+        }
+
+        /// Waits until `needle` shows up in the captured log.
+        pub(super) async fn wait_for_log(logs: &SharedLogBuffer, needle: &str) {
+            let fut = async {
+                let mut interval = tokio::time::interval(Duration::from_millis(5));
+                loop {
+                    interval.tick().await;
+                    if logs.contains(needle) {
+                        return;
+                    }
+                }
+            };
+            assert!(
+                tokio::time::timeout(TEST_TIMEOUT, fut).await.is_ok(),
+                "log never contained {needle:?}; got: {}",
+                logs.contents()
+            );
+        }
 
         static INIT: OnceLock<()> = OnceLock::new();
         static CLIENT_CONFIG: OnceLock<ClientConfig> = OnceLock::new();
@@ -1718,7 +1809,7 @@ pub mod tests {
         /// dial. A genuine hang still fails fast because every attempt is
         /// capped at `DIAL_ATTEMPT_TIMEOUT`; the accumulated error is
         /// surfaced in the final panic.
-        async fn retry_dial<T>(
+        pub(super) async fn retry_dial<T>(
             what: &str,
             server_addr: SocketAddr,
             mut attempt: impl AsyncFnMut() -> Result<T, String>,
@@ -1747,12 +1838,6 @@ pub mod tests {
             server_endpoint: Endpoint,
             what: &'static str,
         ) -> Connection {
-            // This is the reconnect delay used by the production
-            // `client_connection` error path. After the first failed QUIC
-            // connection, later server attempts must allow for this delay
-            // before granting the next handshake its full timeout budget.
-            const PRODUCTION_CLIENT_RETRY_INTERVAL: Duration = Duration::from_secs(5);
-
             let server_addr = server_endpoint
                 .local_addr()
                 .expect("server endpoint address");
@@ -1766,7 +1851,7 @@ pub mod tests {
                 let attempt_timeout = if attempt_index == 0 {
                     DIAL_ATTEMPT_TIMEOUT
                 } else {
-                    PRODUCTION_CLIENT_RETRY_INTERVAL + DIAL_ATTEMPT_TIMEOUT
+                    Duration::from_secs(PEER_RETRY_INTERVAL) + DIAL_ATTEMPT_TIMEOUT
                 };
                 let attempt = async {
                     let incoming = server_endpoint
@@ -1796,6 +1881,11 @@ pub mod tests {
         /// on a loaded runner cannot expire quinn's idle timeout and
         /// permanently wedge the fixture.
         ///
+        /// Stage errors are retried only for setup dials. Stages exercising
+        /// the behavior under test must assert success themselves so an error
+        /// fails immediately. Attempt timeouts are retried to tolerate CI
+        /// stalls, which can also hide an intermittent hang in that behavior.
+        ///
         /// The server endpoint's accept queue is shared across attempts, so
         /// an aborted earlier attempt can leave a stale incoming ahead of
         /// this attempt's client. The accept side therefore matches each
@@ -1803,52 +1893,122 @@ pub mod tests {
         /// ignores any other, guaranteeing the returned `server_conn` and
         /// `client_conn` belong to the same handshake rather than being
         /// cross-paired (which would later dead-lock `open_bi`/`accept_bi`).
+        pub(super) async fn paired_connection<C, S>(
+            server_endpoint: &Endpoint,
+            server_addr: SocketAddr,
+            pending: Option<quinn::Incoming>,
+            client_factory: impl FnMut() -> Endpoint,
+            client_stage: impl AsyncFnMut(&Endpoint) -> Result<C, String>,
+            server_stage: impl AsyncFnMut(quinn::Incoming) -> Result<S, String>,
+        ) -> (Endpoint, C, S) {
+            paired_connection_inner(
+                server_endpoint,
+                server_addr,
+                pending,
+                client_factory,
+                client_stage,
+                server_stage,
+                &RefCell::new(Vec::new()),
+            )
+            .await
+        }
+
+        async fn paired_connection_inner<C, S>(
+            server_endpoint: &Endpoint,
+            server_addr: SocketAddr,
+            mut pending: Option<quinn::Incoming>,
+            mut client_factory: impl FnMut() -> Endpoint,
+            mut client_stage: impl AsyncFnMut(&Endpoint) -> Result<C, String>,
+            mut server_stage: impl AsyncFnMut(quinn::Incoming) -> Result<S, String>,
+            tasks: &RefCell<Vec<AbortOnDropHandle<Result<()>>>>,
+        ) -> (Endpoint, C, S) {
+            let mut last_error = String::new();
+            for _ in 0..DIAL_ATTEMPTS {
+                let client_endpoint = client_factory();
+                let client_port = client_endpoint
+                    .local_addr()
+                    .expect("client local address")
+                    .port();
+                let attempt = async {
+                    let accept = async {
+                        loop {
+                            let incoming = match pending.take() {
+                                Some(incoming) => incoming,
+                                None => server_endpoint
+                                    .accept()
+                                    .await
+                                    .ok_or_else(|| "server endpoint closed".to_string())?,
+                            };
+                            if incoming.remote_address().port() != client_port {
+                                incoming.ignore();
+                                continue;
+                            }
+                            return server_stage(incoming).await;
+                        }
+                    };
+                    tokio::try_join!(client_stage(&client_endpoint), accept)
+                };
+                match tokio::time::timeout(DIAL_ATTEMPT_TIMEOUT, attempt).await {
+                    Ok(Ok((client, server))) => return (client_endpoint, client, server),
+                    Ok(Err(error)) => last_error = error,
+                    Err(_) => {
+                        last_error = format!("attempt timed out after {DIAL_ATTEMPT_TIMEOUT:?}");
+                    }
+                }
+                let handles = std::mem::take(&mut *tasks.borrow_mut());
+                for handle in handles {
+                    handle.abort();
+                    if let Err(error) = tokio::time::timeout(TEST_TIMEOUT, handle)
+                        .await
+                        .expect("server task collection timeout")
+                        && error.is_panic()
+                    {
+                        std::panic::resume_unwind(error.into_panic());
+                    }
+                }
+                sleep(DIAL_RETRY_INTERVAL).await;
+            }
+            panic!(
+                "client/server pair at {server_addr} failed after {DIAL_ATTEMPTS} attempts; last error: {last_error}"
+            );
+        }
+
         pub(super) async fn connect_client_server(
             server_endpoint: &Endpoint,
             server_addr: SocketAddr,
         ) -> ConnectedPeers {
-            retry_dial("client/server pair", server_addr, async || {
-                let client_endpoint = init_client();
-                // Bound synchronously, so the source port that identifies
-                // this attempt's client is known before the dial races.
-                let client_port = client_endpoint
-                    .local_addr()
-                    .map_err(|e| format!("client local addr failed: {e}"))?
-                    .port();
-                let connect_fut = async {
-                    client_endpoint
+            connect_client_server_with_pending(server_endpoint, server_addr, None).await
+        }
+
+        pub(super) async fn connect_client_server_with_pending(
+            server_endpoint: &Endpoint,
+            server_addr: SocketAddr,
+            pending: Option<quinn::Incoming>,
+        ) -> ConnectedPeers {
+            let (client_endpoint, client_conn, server_conn) = paired_connection(
+                server_endpoint,
+                server_addr,
+                pending,
+                init_client,
+                async |endpoint: &Endpoint| {
+                    endpoint
                         .connect(server_addr, test_connect_name())
                         .map_err(|e| format!("connect setup failed: {e}"))?
                         .await
                         .map_err(|e| format!("connect failed: {e}"))
-                };
-                let accept_fut = async {
-                    loop {
-                        let incoming = server_endpoint
-                            .accept()
-                            .await
-                            .ok_or_else(|| "server endpoint closed".to_string())?;
-                        // The client binds `[::]:0`, so only the port is
-                        // stable between its `local_addr()` and the source
-                        // address the server observes; the IP differs
-                        // (unspecified vs loopback).
-                        if incoming.remote_address().port() != client_port {
-                            incoming.ignore();
-                            continue;
-                        }
-                        return incoming
-                            .await
-                            .map_err(|e| format!("server accept failed: {e}"));
-                    }
-                };
-                let (server_conn, client_conn) = tokio::try_join!(accept_fut, connect_fut)?;
-                Ok(ConnectedPeers {
-                    client_endpoint,
-                    server_conn,
-                    client_conn,
-                })
-            })
-            .await
+                },
+                async |incoming: quinn::Incoming| {
+                    incoming
+                        .await
+                        .map_err(|e| format!("server accept failed: {e}"))
+                },
+            )
+            .await;
+            ConnectedPeers {
+                client_endpoint,
+                server_conn,
+                client_conn,
+            }
         }
 
         /// Dials the test peer server with a fresh client endpoint per
@@ -1875,31 +2035,69 @@ pub mod tests {
             .await
         }
 
-        /// Accepts connections until one completes the server handshake.
-        /// A retrying dialer (`connect_client_handshake`) may abandon
-        /// earlier attempts, so failed or dead incoming connections are
-        /// skipped instead of unwrapping the first one.
-        pub(super) async fn accept_server_handshake(
-            server_endpoint: Endpoint,
-        ) -> (SendStream, RecvStream) {
-            let mut last_error = String::new();
-            for _ in 0..DIAL_ATTEMPTS {
-                let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-                let server_conn = match incoming.await {
-                    Ok(conn) => conn,
-                    Err(e) => {
-                        last_error = format!("incoming connection failed: {e}");
-                        continue;
-                    }
-                };
-                match server_handshake(&server_conn, PEER_VERSION_REQ).await {
-                    Ok(streams) => return streams,
-                    Err(e) => last_error = format!("server handshake failed: {e}"),
-                }
-            }
-            panic!(
-                "no client dial completed the server handshake after {DIAL_ATTEMPTS} accepts; last error: {last_error}"
-            );
+        pub(super) async fn paired_production_connect(
+            endpoint: &Endpoint,
+            addr: SocketAddr,
+            shared: &SharedClientConfig,
+            identity: &PeerIdentity,
+        ) -> (
+            Endpoint,
+            (Connection, SendStream, RecvStream, u64),
+            Connection,
+        ) {
+            paired_connection(
+                endpoint,
+                addr,
+                None,
+                || Endpoint::client("[::]:0".parse().unwrap()).unwrap(),
+                async |client: &Endpoint| {
+                    Ok(super::super::connect(client, shared, identity)
+                        .await
+                        .expect("production connect must succeed"))
+                },
+                async |incoming: quinn::Incoming| {
+                    let conn = incoming.await.expect("production connect QUIC handshake");
+                    server_handshake(&conn, PEER_VERSION_REQ)
+                        .await
+                        .expect("production connect protocol handshake");
+                    Ok(conn)
+                },
+            )
+            .await
+        }
+
+        pub(super) async fn paired_handshake(
+            endpoint: &Endpoint,
+            addr: SocketAddr,
+        ) -> (
+            Endpoint,
+            (Connection, SendStream, RecvStream),
+            (SendStream, RecvStream),
+        ) {
+            paired_connection(
+                endpoint,
+                addr,
+                None,
+                init_client,
+                async |client: &Endpoint| {
+                    let conn = client
+                        .connect(addr, test_connect_name())
+                        .map_err(|e| e.to_string())?
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let (send, recv) = client_handshake(&conn, PROTOCOL_VERSION)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok((conn, send, recv))
+                },
+                async |incoming: quinn::Incoming| {
+                    let conn = incoming.await.map_err(|e| e.to_string())?;
+                    server_handshake(&conn, PEER_VERSION_REQ)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+            )
+            .await
         }
 
         pub(super) fn assert_peer_info_eq(actual: &PeerInfo, expected: &PeerInfo) {
@@ -1965,16 +2163,61 @@ pub mod tests {
             recv
         }
 
-        pub(super) fn spawn_server_connection(
-            server_endpoint: Endpoint,
+        pub(super) async fn paired_server_connection(
+            endpoint: &Endpoint,
+            addr: SocketAddr,
             peer_conn_info: PeerConns,
             tracker: TaskTracker,
             token: CancellationToken,
-        ) -> tokio::task::JoinHandle<Result<()>> {
-            tokio::spawn(async move {
-                let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-                server_connection(incoming, peer_conn_info, tracker, token).await
-            })
+            handshake: bool,
+        ) -> (
+            Endpoint,
+            Connection,
+            Option<(SendStream, RecvStream)>,
+            tokio::task::JoinHandle<Result<()>>,
+        ) {
+            let tasks = RefCell::new(Vec::new());
+            let (client_endpoint, (conn, streams), ()) = paired_connection_inner(
+                endpoint,
+                addr,
+                None,
+                init_client,
+                async |client: &Endpoint| {
+                    let conn = client
+                        .connect(addr, test_connect_name())
+                        .map_err(|e| e.to_string())?
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let streams = if handshake {
+                        Some(
+                            client_handshake(&conn, PROTOCOL_VERSION)
+                                .await
+                                .map_err(|e| e.to_string())?,
+                        )
+                    } else {
+                        None
+                    };
+                    Ok((conn, streams))
+                },
+                async |incoming: quinn::Incoming| {
+                    let task = tokio::spawn(server_connection(
+                        incoming,
+                        peer_conn_info.clone(),
+                        tracker.clone(),
+                        token.clone(),
+                    ));
+                    tasks.borrow_mut().push(AbortOnDropHandle::new(task));
+                    Ok(())
+                },
+                &tasks,
+            )
+            .await;
+            let handle = tasks
+                .into_inner()
+                .pop()
+                .expect("server task was spawned")
+                .detach();
+            (client_endpoint, conn, streams, handle)
         }
 
         /// Runs the production peer entry task over a TLS watch the test does
@@ -2012,13 +2255,13 @@ pub mod tests {
         }
 
         pub(super) fn spawn_request_init_info_response_server(
-            server_endpoint: Endpoint,
+            streams: (SendStream, RecvStream),
             response_code: PeerCode,
             response_payload: Vec<u8>,
         ) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             let handle = tokio::spawn(async move {
-                let (mut send, mut recv) = accept_server_handshake(server_endpoint).await;
+                let (mut send, mut recv) = streams;
                 let _ = receive_peer_data(&mut recv).await.unwrap();
                 send_peer_code_payload(&mut send, response_code, &response_payload).await;
                 let _ = shutdown_rx.await;
@@ -2027,10 +2270,10 @@ pub mod tests {
         }
 
         pub(super) fn spawn_response_init_info_server(
-            server_endpoint: Endpoint,
+            streams: (SendStream, RecvStream),
         ) -> tokio::task::JoinHandle<Result<PeerInfo>> {
             tokio::spawn(async move {
-                let (mut send, mut recv) = accept_server_handshake(server_endpoint).await;
+                let (mut send, mut recv) = streams;
                 response_init_info(
                     &mut send,
                     &mut recv,
@@ -2149,10 +2392,14 @@ pub mod tests {
         let stale_connecting = stale_client
             .connect(server_addr, test_connect_name())
             .expect("stale client dial setup");
-        // Let the server receive the Initial and queue the incoming first.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let incoming = accept_incoming(&server_endpoint, "stale incoming timeout").await;
+        assert_eq!(
+            incoming.remote_address().port(),
+            stale_client.local_addr().unwrap().port()
+        );
 
-        let peers = connect_client_server(&server_endpoint, server_addr).await;
+        let peers =
+            connect_client_server_with_pending(&server_endpoint, server_addr, Some(incoming)).await;
 
         // The returned server side must belong to the helper's own client,
         // not the stale one queued ahead of it.
@@ -2302,8 +2549,8 @@ pub mod tests {
         let (other_ready_tx, other_ready_rx) = oneshot::channel();
         let (other_shutdown_tx, other_shutdown_rx) = oneshot::channel();
         let other_task = tokio::spawn(async move {
-            let incoming = accept_incoming(&other_endpoint, "other peer accept timeout").await;
-            let connection = incoming.await.unwrap();
+            let connection =
+                accept_quic_with_retry(other_endpoint, "other peer QUIC handshake").await;
             let (mut send, mut recv) = server_handshake(&connection, PEER_VERSION_REQ)
                 .await
                 .unwrap();
@@ -2362,8 +2609,9 @@ pub mod tests {
         )
         .await;
 
-        with_timeout("client connection spawn timeout", other_ready_rx)
+        tokio::time::timeout(MOCK_READY_TIMEOUT, other_ready_rx)
             .await
+            .expect("other peer readiness timeout")
             .expect("other peer did not accept");
 
         token.cancel();
@@ -2389,8 +2637,7 @@ pub mod tests {
             oneshot::channel::<(HashSet<PeerIdentity>, PeerInfo)>();
         let (server_shutdown_tx, server_shutdown_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
-            let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-            let connection = incoming.await.unwrap();
+            let connection = accept_quic_with_retry(server_endpoint, "server QUIC handshake").await;
             let (mut send, mut recv) = server_handshake(&connection, PEER_VERSION_REQ)
                 .await
                 .unwrap();
@@ -2466,8 +2713,9 @@ pub mod tests {
         ));
 
         let (recv_peer_list, recv_sensor_list) =
-            with_timeout("server ready timeout", server_ready_rx)
+            tokio::time::timeout(MOCK_READY_TIMEOUT, server_ready_rx)
                 .await
+                .expect("server readiness timeout")
                 .expect("server ready channel closed");
         let expected_identity = peer_identity("127.0.0.1:1111".parse().unwrap(), "client-node");
         assert!(recv_peer_list.contains(&expected_identity));
@@ -2502,19 +2750,15 @@ pub mod tests {
         let (server_endpoint, server_addr) = setup_server_endpoint();
         let (existing_server_endpoint, existing_addr) = setup_server_endpoint();
 
+        let ConnectedPeers {
+            client_endpoint: _existing_client_endpoint,
+            server_conn: existing_server_conn,
+            client_conn: existing_client_conn,
+        } = connect_client_server(&existing_server_endpoint, existing_addr).await;
         let existing_accept = tokio::spawn(async move {
-            let incoming =
-                accept_incoming(&existing_server_endpoint, "existing accept timeout").await;
-            let connection = incoming.await.unwrap();
-            let (_send, mut recv) = connection.accept_bi().await.unwrap();
+            let (_send, mut recv) = existing_server_conn.accept_bi().await.unwrap();
             receive_peer_data(&mut recv).await.unwrap()
         });
-        let existing_client_endpoint = init_client();
-        let existing_client_conn = existing_client_endpoint
-            .connect(existing_addr, test_connect_name())
-            .unwrap()
-            .await
-            .unwrap();
 
         let peer_conns = Arc::new(RwLock::new(HashMap::from([(
             "existing".to_string(),
@@ -2531,15 +2775,17 @@ pub mod tests {
 
         let token = CancellationToken::new();
         let tracker = TaskTracker::with_token(token.clone());
-        let server_token = token.clone();
-        let server_handle = tokio::spawn(async move {
-            let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-            server_connection(incoming, peer_conn_info, tracker, server_token)
-                .await
-                .unwrap();
-        });
-
-        let mut client = TestClient::new(server_addr).await;
+        let (_endpoint, conn, streams, server_handle) = paired_server_connection(
+            &server_endpoint,
+            server_addr,
+            peer_conn_info,
+            tracker,
+            token.clone(),
+            true,
+        )
+        .await;
+        let (send, recv) = streams.expect("protocol handshake");
+        let mut client = TestClient { send, recv, conn };
         let client_info = peer_info(&["client-sensor"], Some(9001), Some(9002));
         let new_peer = peer_identity("127.0.0.1:3333".parse().unwrap(), "node-new");
         let client_peer_list: HashSet<PeerIdentity> = HashSet::from([new_peer.clone()]);
@@ -2583,7 +2829,9 @@ pub mod tests {
         token.cancel();
         drop(client.conn);
         let server_result = with_timeout("server shutdown timeout", server_handle).await;
-        server_result.expect("server task panicked");
+        server_result
+            .expect("server task panicked")
+            .expect("server task failed");
     }
 
     #[tokio::test]
@@ -2595,18 +2843,15 @@ pub mod tests {
         let (peer_conn_info, _config) = build_peer_conn_info("127.0.0.1:3333".parse().unwrap());
         let token = CancellationToken::new();
         let tracker = TaskTracker::with_token(token.clone());
-        let server_handle =
-            spawn_server_connection(server_endpoint, peer_conn_info, tracker, token);
-
-        let client_endpoint = init_client();
-        let client_conn = with_timeout(
-            "client connect timeout",
-            client_endpoint
-                .connect(server_addr, test_connect_name())
-                .unwrap(),
+        let (_client_endpoint, client_conn, _streams, server_handle) = paired_server_connection(
+            &server_endpoint,
+            server_addr,
+            peer_conn_info,
+            tracker,
+            token,
+            false,
         )
-        .await
-        .unwrap();
+        .await;
         let (mut send, _recv) = client_conn.open_bi().await.unwrap();
         send_handshake(&mut send, &[0xFF]).await.unwrap();
         send.finish().ok();
@@ -2624,18 +2869,15 @@ pub mod tests {
         let (peer_conn_info, _config) = build_peer_conn_info("127.0.0.1:3334".parse().unwrap());
         let token = CancellationToken::new();
         let tracker = TaskTracker::with_token(token.clone());
-        let server_handle =
-            spawn_server_connection(server_endpoint, peer_conn_info, tracker, token);
-
-        let client_endpoint = init_client();
-        let client_conn = with_timeout(
-            "client connect timeout",
-            client_endpoint
-                .connect(server_addr, test_connect_name())
-                .unwrap(),
+        let (_client_endpoint, client_conn, _streams, server_handle) = paired_server_connection(
+            &server_endpoint,
+            server_addr,
+            peer_conn_info,
+            tracker,
+            token,
+            false,
         )
-        .await
-        .unwrap();
+        .await;
         let _ = client_handshake(&client_conn, "99.0.0").await;
 
         let err = server_handle.await.unwrap().unwrap_err();
@@ -2685,23 +2927,15 @@ pub mod tests {
 
         let (server_endpoint, server_actual_addr) = setup_server_endpoint();
 
+        let ConnectedPeers {
+            client_endpoint: _client_endpoint,
+            server_conn,
+            client_conn,
+        } = connect_client_server(&server_endpoint, server_actual_addr).await;
         let server_handle = tokio::spawn(async move {
-            let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-            let server_conn = incoming.await.unwrap();
             let (_server_send, mut server_recv) = server_conn.accept_bi().await.unwrap();
             receive_peer_data(&mut server_recv).await.unwrap()
         });
-
-        let client_endpoint = init_client();
-
-        let client_conn = with_timeout(
-            "client connect timeout",
-            client_endpoint
-                .connect(server_actual_addr, test_connect_name())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
 
         let (mut client_send, _client_recv) = client_conn.open_bi().await.unwrap();
 
@@ -2725,22 +2959,15 @@ pub mod tests {
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
 
+        let ConnectedPeers {
+            client_endpoint: _client_endpoint,
+            server_conn,
+            client_conn,
+        } = connect_client_server(&server_endpoint, server_addr).await;
         let server_handle = tokio::spawn(async move {
-            let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-            let server_conn = incoming.await.unwrap();
             let (_server_send, mut server_recv) = server_conn.accept_bi().await.unwrap();
             receive_peer_data(&mut server_recv).await
         });
-
-        let client_endpoint = init_client();
-        let client_conn = with_timeout(
-            "client connect timeout",
-            client_endpoint
-                .connect(server_addr, test_connect_name())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
         let (mut send, _recv) = client_conn.open_bi().await.unwrap();
 
         let invalid_code: u32 = 0xFFFF_FFFE;
@@ -2833,13 +3060,13 @@ pub mod tests {
         init_crypto();
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
+        let (_endpoint, (_client_conn, mut send, mut recv), streams) =
+            paired_handshake(&server_endpoint, server_addr).await;
         let (server_shutdown_tx, server_handle) = spawn_request_init_info_response_server(
-            server_endpoint,
+            streams,
             PeerCode::UpdatePeerList,
             vec![0xFF, 0xFF, 0xFF],
         );
-
-        let (_client_conn, mut send, mut recv) = connect_client_handshake(server_addr).await;
 
         let err = request_init_info::<PeerInfo>(
             &mut send,
@@ -2864,13 +3091,13 @@ pub mod tests {
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
         let expected = peer_info(&["sensor-1"], Some(9191), Some(9292));
+        let (_endpoint, (_client_conn, mut send, mut recv), streams) =
+            paired_handshake(&server_endpoint, server_addr).await;
         let (server_shutdown_tx, server_handle) = spawn_request_init_info_response_server(
-            server_endpoint,
+            streams,
             PeerCode::UpdatePeerList,
             bincode::serialize(&expected).unwrap(),
         );
-
-        let (_client_conn, mut send, mut recv) = connect_client_handshake(server_addr).await;
 
         let recv_info = request_init_info::<PeerInfo>(
             &mut send,
@@ -2892,13 +3119,13 @@ pub mod tests {
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
         let payload_info = peer_info(&["mismatch-sensor"], Some(9191), Some(9292));
+        let (_endpoint, (_client_conn, mut send, mut recv), streams) =
+            paired_handshake(&server_endpoint, server_addr).await;
         let (server_shutdown_tx, server_handle) = spawn_request_init_info_response_server(
-            server_endpoint,
+            streams,
             PeerCode::UpdateSensorList,
             bincode::serialize(&payload_info).unwrap(),
         );
-
-        let (_client_conn, mut send, mut recv) = connect_client_handshake(server_addr).await;
 
         let err = request_init_info::<PeerInfo>(
             &mut send,
@@ -2919,9 +3146,9 @@ pub mod tests {
         init_crypto();
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
-        let server_handle = spawn_response_init_info_server(server_endpoint);
-
-        let (_client_conn, mut send, _recv) = connect_client_handshake(server_addr).await;
+        let (_endpoint, (_client_conn, mut send, _recv), streams) =
+            paired_handshake(&server_endpoint, server_addr).await;
+        let server_handle = spawn_response_init_info_server(streams);
 
         let request_code: u32 = PeerCode::UpdatePeerList.into();
         send_bytes(&mut send, &request_code.to_le_bytes())
@@ -2942,9 +3169,9 @@ pub mod tests {
         init_crypto();
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
-        let server_handle = spawn_response_init_info_server(server_endpoint);
-
-        let (_client_conn, mut send, _recv) = connect_client_handshake(server_addr).await;
+        let (_endpoint, (_client_conn, mut send, _recv), streams) =
+            paired_handshake(&server_endpoint, server_addr).await;
+        let server_handle = spawn_response_init_info_server(streams);
         let payload = peer_info(&["request-sensor"], Some(7001), Some(7002));
         send_peer_code_payload(
             &mut send,
@@ -3509,19 +3736,25 @@ pub mod tests {
         let (server_endpoint, server_addr) = setup_server_endpoint_with_certs(&server_certs);
         let peer_conn = Arc::new(RwLock::new(HashMap::new()));
 
-        let mut first_client_endpoint =
-            quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
-        first_client_endpoint
-            .set_default_client_config(config_client_for_tests(&first_client_certs));
-        let first_connect = first_client_endpoint
-            .connect(server_addr, &fixture.server_name)
-            .expect("first connect future");
-        let first_incoming = accept_incoming(&server_endpoint, "first server accept timeout").await;
-        let first_server_future = async { first_incoming.await };
-        let (first_server_conn, first_client_conn) =
-            tokio::join!(first_server_future, first_connect);
-        let first_server_conn = first_server_conn.expect("first server connection");
-        let first_client_conn = first_client_conn.expect("first client connection");
+        let (first_client_endpoint, first_client_conn, first_server_conn) = paired_connection(
+            &server_endpoint,
+            server_addr,
+            None,
+            || {
+                let mut endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap()).unwrap();
+                endpoint.set_default_client_config(config_client_for_tests(&first_client_certs));
+                endpoint
+            },
+            async |endpoint: &Endpoint| {
+                endpoint
+                    .connect(server_addr, &fixture.server_name)
+                    .map_err(|e| e.to_string())?
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            async |incoming: quinn::Incoming| incoming.await.map_err(|e| e.to_string()),
+        )
+        .await;
 
         let (_, first_key) = check_for_duplicate_connections(&first_server_conn, peer_conn.clone())
             .await
@@ -3531,20 +3764,25 @@ pub mod tests {
             .await
             .insert(first_key.clone(), first_server_conn.clone());
 
-        let mut second_client_endpoint =
-            quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
-        second_client_endpoint
-            .set_default_client_config(config_client_for_tests(&second_client_certs));
-        let second_connect = second_client_endpoint
-            .connect(server_addr, &fixture.server_name)
-            .expect("second connect future");
-        let second_incoming =
-            accept_incoming(&server_endpoint, "second server accept timeout").await;
-        let second_server_future = async { second_incoming.await };
-        let (second_server_conn, second_client_conn) =
-            tokio::join!(second_server_future, second_connect);
-        let second_server_conn = second_server_conn.expect("second server connection");
-        let second_client_conn = second_client_conn.expect("second client connection");
+        let (second_client_endpoint, second_client_conn, second_server_conn) = paired_connection(
+            &server_endpoint,
+            server_addr,
+            None,
+            || {
+                let mut endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap()).unwrap();
+                endpoint.set_default_client_config(config_client_for_tests(&second_client_certs));
+                endpoint
+            },
+            async |endpoint: &Endpoint| {
+                endpoint
+                    .connect(server_addr, &fixture.server_name)
+                    .map_err(|e| e.to_string())?
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            async |incoming: quinn::Incoming| incoming.await.map_err(|e| e.to_string()),
+        )
+        .await;
 
         let (_, second_key) =
             check_for_duplicate_connections(&second_server_conn, peer_conn.clone())
@@ -3634,27 +3872,19 @@ pub mod tests {
 
         let (server_endpoint, server_addr) = setup_server_endpoint();
 
-        let client_endpoint = init_client();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        let server_task = tokio::spawn(async move {
-            let incoming = accept_incoming(&server_endpoint, "server accept timeout").await;
-            let connection = incoming.await.unwrap();
-            server_handshake(&connection, PEER_VERSION_REQ)
-                .await
-                .unwrap();
-            let _ = ready_rx.await;
-        });
-
         let peer_info = PeerIdentity {
             addr: server_addr,
             hostname: test_connect_name().to_string(),
         };
         let shared_client_config = init_shared_client_config();
-        let (connection, _send, _recv, _gen) =
-            connect(&client_endpoint, &shared_client_config, &peer_info)
-                .await
-                .unwrap();
-        let _ = ready_tx.send(());
+        let (_endpoint, (connection, _send, _recv, _gen), _server_conn) =
+            paired_production_connect(
+                &server_endpoint,
+                server_addr,
+                &shared_client_config,
+                &peer_info,
+            )
+            .await;
 
         let remote = connection.remote_address();
         let remote_ip = remote.ip();
@@ -3664,7 +3894,6 @@ pub mod tests {
         };
         assert_eq!(remote.port(), server_addr.port());
         assert!(is_loopback);
-        server_task.await.unwrap();
     }
 
     #[tokio::test]
@@ -3921,18 +4150,29 @@ pub mod tests {
         // installed with configuration derived from `new_certs`, not just
         // replaced with an arbitrary different Arc.
         let (probe_server_endpoint, probe_addr) = setup_server_endpoint_with_certs(&new_certs);
-        let mut client_endpoint =
-            quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
-        client_endpoint.set_default_client_config((*after).clone());
-        let connect_fut = client_endpoint
-            .connect(probe_addr, test_connect_name_node2())
-            .expect("connect config");
-        let accept_fut = async {
-            let incoming = accept_incoming(&probe_server_endpoint, "probe accept timeout").await;
-            incoming.await.expect("probe server accept")
-        };
-        let (server_conn, client_conn) = tokio::join!(accept_fut, connect_fut);
-        let client_conn = client_conn.expect("new client config must dial new server");
+        let (_client_endpoint, client_conn, server_conn) = paired_connection(
+            &probe_server_endpoint,
+            probe_addr,
+            None,
+            || {
+                let mut endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap()).unwrap();
+                endpoint.set_default_client_config((*after).clone());
+                endpoint
+            },
+            async |endpoint: &Endpoint| {
+                Ok(endpoint
+                    .connect(probe_addr, test_connect_name_node2())
+                    .expect("reloaded client config must start a probe dial")
+                    .await
+                    .expect("reloaded client config must connect to the new server"))
+            },
+            async |incoming: quinn::Incoming| {
+                Ok(incoming
+                    .await
+                    .expect("reloaded config probe QUIC handshake"))
+            },
+        )
+        .await;
         let presented = extract_cert_from_conn(&client_conn).expect("probe server certs");
         assert_eq!(
             leaf(&presented),
@@ -4150,15 +4390,14 @@ pub mod tests {
             ca_pem: Vec::new(),
             generation: 1,
         });
+        let (logs, _guard) = capture_logs();
         tls_tx
             .send(broken_material)
             .expect("broadcast broken material");
 
-        // Give the subsystem time to observe the watch update and decide
-        // the reload, then repeatedly verify that new inbound handshakes
-        // still observe the original server leaf fingerprint.
+        wait_for_log(&logs, "peer TLS reload aborted").await;
+        // Verify that new inbound handshakes still observe the original certificate.
         for _ in 0..8 {
-            tokio::time::sleep(Duration::from_millis(25)).await;
             let probe = TestClient::new(server_addr).await;
             let fp = leaf(&extract_cert_from_conn(&probe.conn).expect("probe peer certs"));
             assert_eq!(
@@ -4204,27 +4443,9 @@ pub mod tests {
             addr: server_addr,
             hostname: test_connect_name().to_string(),
         };
-        let client_endpoint =
-            quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
-
-        // Cycle 1: dial with the initial client config and confirm the
-        // remote peer observes the initial client leaf fingerprint.
-        let accept_1 = async {
-            let incoming = accept_incoming(&server_endpoint, "accept 1").await;
-            let conn = incoming.await.expect("server accept 1");
-            let fp = leaf(&extract_cert_from_conn(&conn).expect("client certs 1"));
-            let _ = server_handshake(&conn, PEER_VERSION_REQ)
-                .await
-                .expect("server handshake 1");
-            (conn, fp)
-        };
-        let dial_1 = async {
-            super::connect(&client_endpoint, &shared, &peer_info)
-                .await
-                .expect("dial 1")
-        };
-        let ((server_conn_1, observed_fp_1), (client_conn_1, _s1, _r1, gen_1)) =
-            tokio::join!(accept_1, dial_1);
+        let (_endpoint_1, (client_conn_1, _s1, _r1, gen_1), server_conn_1) =
+            paired_production_connect(&server_endpoint, server_addr, &shared, &peer_info).await;
+        let observed_fp_1 = leaf(&extract_cert_from_conn(&server_conn_1).expect("client certs 1"));
         assert_eq!(gen_1, 0);
         assert_eq!(
             observed_fp_1,
@@ -4250,22 +4471,9 @@ pub mod tests {
         // Cycle 2: redial and confirm the remote peer observes the new
         // client leaf fingerprint. This is the outbound-reconnect
         // observation the review was asking for.
-        let accept_2 = async {
-            let incoming = accept_incoming(&server_endpoint, "accept 2").await;
-            let conn = incoming.await.expect("server accept 2");
-            let fp = leaf(&extract_cert_from_conn(&conn).expect("client certs 2"));
-            let _ = server_handshake(&conn, PEER_VERSION_REQ)
-                .await
-                .expect("server handshake 2");
-            (conn, fp)
-        };
-        let dial_2 = async {
-            super::connect(&client_endpoint, &shared, &peer_info)
-                .await
-                .expect("dial 2")
-        };
-        let ((server_conn_2, observed_fp_2), (client_conn_2, _s2, _r2, gen_2)) =
-            tokio::join!(accept_2, dial_2);
+        let (_endpoint_2, (client_conn_2, _s2, _r2, gen_2), server_conn_2) =
+            paired_production_connect(&server_endpoint, server_addr, &shared, &peer_info).await;
+        let observed_fp_2 = leaf(&extract_cert_from_conn(&server_conn_2).expect("client certs 2"));
         assert_eq!(gen_2, 1, "second dial must snapshot the bumped generation");
         assert_eq!(
             observed_fp_2,
@@ -4322,24 +4530,9 @@ pub mod tests {
             addr: server_addr,
             hostname: test_connect_name().to_string(),
         };
-        let client_endpoint =
-            quinn::Endpoint::client("[::]:0".parse().expect("client addr")).expect("endpoint");
-        let accept_fut = async {
-            let incoming = accept_incoming(&server_endpoint, "accept after failed reload").await;
-            let conn = incoming.await.expect("server accept");
-            let fp = leaf(&extract_cert_from_conn(&conn).expect("client certs"));
-            let _ = server_handshake(&conn, PEER_VERSION_REQ)
-                .await
-                .expect("server handshake");
-            (conn, fp)
-        };
-        let dial_fut = async {
-            super::connect(&client_endpoint, &shared, &peer_info)
-                .await
-                .expect("dial after failed reload")
-        };
-        let ((server_conn, observed_fp), (client_conn, _s, _r, generation)) =
-            tokio::join!(accept_fut, dial_fut);
+        let (_endpoint, (client_conn, _s, _r, generation), server_conn) =
+            paired_production_connect(&server_endpoint, server_addr, &shared, &peer_info).await;
+        let observed_fp = leaf(&extract_cert_from_conn(&server_conn).expect("client certs"));
         assert_eq!(generation, 0);
         assert_eq!(
             observed_fp,
@@ -4364,14 +4557,6 @@ pub mod tests {
     /// server.
     #[tokio::test]
     async fn client_connection_retries_when_inflight_dial_is_superseded_by_reload() {
-        // A full server-side accept cycle can consume about 35.25 seconds:
-        // 3 seconds for the initial attempt, four subsequent attempts that
-        // each allow the production client's 5-second reconnect delay plus
-        // a fresh 3-second QUIC handshake, and five 50-millisecond retry
-        // intervals. Keep this larger budget local so the shared 10-second
-        // test timeout remains strict for unrelated peer tests.
-        const RELOAD_RACE_TIMEOUT: Duration = Duration::from_secs(40);
-
         init_crypto();
 
         let server_certs = create_certs();
@@ -4455,7 +4640,7 @@ pub mod tests {
             }
         });
 
-        tokio::time::timeout(RELOAD_RACE_TIMEOUT, first_quic_done_rx)
+        tokio::time::timeout(MOCK_READY_TIMEOUT, first_quic_done_rx)
             .await
             .expect("first QUIC handshake exceeded the retry budget")
             .expect("server should accept the first dial");
@@ -4475,7 +4660,7 @@ pub mod tests {
             .send(())
             .expect("release first handshake");
 
-        let observed_fp = tokio::time::timeout(RELOAD_RACE_TIMEOUT, second_dial_observed_rx)
+        let observed_fp = tokio::time::timeout(MOCK_READY_TIMEOUT, second_dial_observed_rx)
             .await
             .expect("post-reload QUIC handshake exceeded the retry budget")
             .expect("client_connection should retry after detecting stale snapshot");
@@ -4688,9 +4873,8 @@ pub mod tests {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::{
             collections::{HashMap, HashSet},
-            io::{self, Write},
             net::SocketAddr,
-            sync::{Arc, Mutex as StdMutex},
+            sync::Arc,
             time::Duration,
         };
 
@@ -4701,22 +4885,23 @@ pub mod tests {
         use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
         use tokio_util::sync::CancellationToken;
         use toml_edit::DocumentMut;
-        use tracing_subscriber::fmt::MakeWriter;
 
         use super::super::{
             PEER_DRAIN_LABEL, PEER_VERSION_REQ, PeerCode, PeerConns, PeerIdentity, PeerInfo, Peers,
             client_connection, receive_peer_data, request_init_info, response_init_info,
-            send_peer_data, server_connection, shutdown_peer, spawn_request_handler,
+            send_peer_data, shutdown_peer, spawn_request_handler,
             update_to_new_peer_list_with_writer,
         };
         use super::fixtures::{
-            ConnectedPeers, PROTOCOL_VERSION, TEST_DRAIN_REPORT_INTERVAL, TEST_TIMEOUT, TempConfig,
-            TestClient, accept_incoming, build_peer_conn_info, build_peer_conn_info_with_sensors,
+            ConnectedPeers, MOCK_READY_TIMEOUT, PROTOCOL_VERSION, TEST_DRAIN_REPORT_INTERVAL,
+            TEST_TIMEOUT, TempConfig, TestClient, accept_incoming, accept_quic_with_retry,
+            build_peer_conn_info, build_peer_conn_info_with_sensors, capture_logs,
             connect_client_handshake, connect_client_server, create_certs, create_node2_certs,
-            init_client, init_crypto, init_shared_client_config, peer_identity, peer_info,
-            run_peer_with_ready, setup_server_endpoint, setup_server_endpoint_with_certs,
-            small_stream_window_client_endpoint, test_connect_name, test_connect_name_node2,
-            wait_for_peer_info, with_timeout,
+            init_client, init_crypto, init_shared_client_config, paired_server_connection,
+            peer_identity, peer_info, retry_dial, run_peer_with_ready, setup_server_endpoint,
+            setup_server_endpoint_with_certs, small_stream_window_client_endpoint,
+            test_connect_name, test_connect_name_node2, wait_for_log, wait_for_peer_info,
+            with_timeout,
         };
         use crate::cancellation::{DrainOutcome, TaskTracker, drain_with_report};
         use crate::comm::peer::Peer;
@@ -4734,81 +4919,6 @@ pub mod tests {
         /// What the peer-identity enqueue path reports when the receive side
         /// will not take an identity.
         const REFUSED_ENQUEUE: &str = "Failed to enqueue peer connection attempt";
-
-        #[derive(Clone, Default)]
-        struct SharedLogBuffer(Arc<StdMutex<Vec<u8>>>);
-
-        impl SharedLogBuffer {
-            fn contents(&self) -> String {
-                let bytes = self.0.lock().expect("log buffer lock").clone();
-                String::from_utf8_lossy(&bytes).into_owned()
-            }
-
-            fn contains(&self, needle: &str) -> bool {
-                self.contents().contains(needle)
-            }
-        }
-
-        struct SharedLogWriter(Arc<StdMutex<Vec<u8>>>);
-
-        impl Write for SharedLogWriter {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.0
-                    .lock()
-                    .expect("log buffer lock")
-                    .extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
-        impl<'a> MakeWriter<'a> for SharedLogBuffer {
-            type Writer = SharedLogWriter;
-
-            fn make_writer(&'a self) -> Self::Writer {
-                SharedLogWriter(Arc::clone(&self.0))
-            }
-        }
-
-        /// Installs a log-capturing subscriber for the current thread, the way
-        /// `src/cancellation.rs` does, over the dispatcher
-        /// `hold_callsite_interest_open` keeps registered so that a parallel
-        /// test cannot cache one of the callsites asserted on here off. A
-        /// `#[tokio::test]` runs its tasks on the calling thread, so the peer
-        /// tasks spawned below are captured too.
-        fn capture_logs() -> (SharedLogBuffer, tracing::subscriber::DefaultGuard) {
-            crate::cancellation::hold_callsite_interest_open();
-            let logs = SharedLogBuffer::default();
-            let subscriber = tracing_subscriber::fmt()
-                .with_ansi(false)
-                .without_time()
-                .with_target(false)
-                .with_writer(logs.clone())
-                .finish();
-            let guard = tracing::subscriber::set_default(subscriber);
-            (logs, guard)
-        }
-
-        /// Waits until `needle` shows up in the captured log.
-        async fn wait_for_log(logs: &SharedLogBuffer, needle: &str) {
-            let fut = async {
-                let mut interval = tokio::time::interval(Duration::from_millis(5));
-                loop {
-                    interval.tick().await;
-                    if logs.contains(needle) {
-                        return;
-                    }
-                }
-            };
-            assert!(
-                tokio::time::timeout(TEST_TIMEOUT, fut).await.is_ok(),
-                "log never contained {needle:?}; got: {}",
-                logs.contents()
-            );
-        }
 
         /// Waits until `predicate` holds for the shared connection map.
         async fn wait_for_conns<F>(label: &'static str, conns: &PeerConns, mut predicate: F)
@@ -4968,17 +5078,17 @@ pub mod tests {
                 if close_tracker {
                     tracker.close().expect("close the peer-local tracker");
                 }
-                let handle = tokio::spawn({
-                    let peer_conn_info = peer_conn_info.clone();
-                    let tracker = tracker.clone();
-                    let token = token.clone();
-                    async move {
-                        let incoming =
-                            accept_incoming(&server_endpoint, "server accept timeout").await;
-                        server_connection(incoming, peer_conn_info, tracker, token).await
-                    }
-                });
-                let mut client = TestClient::new(server_addr).await;
+                let (_endpoint, conn, streams, handle) = paired_server_connection(
+                    &server_endpoint,
+                    server_addr,
+                    peer_conn_info.clone(),
+                    tracker.clone(),
+                    token.clone(),
+                    true,
+                )
+                .await;
+                let (send, recv) = streams.expect("protocol handshake");
+                let mut client = TestClient { send, recv, conn };
                 exchange_init(&mut client).await;
                 // The handler inserts its connection last, so this is what
                 // says it has reached its serve loop.
@@ -5056,8 +5166,8 @@ pub mod tests {
             let (other_endpoint, other_addr) = setup_server_endpoint_with_certs(&other_certs);
             let (other_ready_tx, other_ready_rx) = oneshot::channel();
             let other_task = tokio::spawn(async move {
-                let incoming = accept_incoming(&other_endpoint, "other peer accept timeout").await;
-                let connection = incoming.await.expect("other peer connection");
+                let connection =
+                    accept_quic_with_retry(other_endpoint, "other peer QUIC handshake").await;
                 let (mut send, mut recv) = server_handshake(&connection, PEER_VERSION_REQ)
                     .await
                     .expect("other peer protocol handshake");
@@ -5087,8 +5197,9 @@ pub mod tests {
             let inbound = client.conn.clone();
 
             // Client role: the bootstrap dial reached the other peer.
-            with_timeout("other peer ready timeout", other_ready_rx)
+            tokio::time::timeout(MOCK_READY_TIMEOUT, other_ready_rx)
                 .await
+                .expect("bootstrap readiness timeout")
                 .expect("the bootstrap dial never completed its init exchange");
 
             let peers = harness.cancel_and_join().await;
@@ -5172,12 +5283,16 @@ pub mod tests {
             // The QUIC handshake only completes once the entry task has handed
             // the `Incoming` to a tracked task, so this connection resolving is
             // what says the handler is parked in `server_handshake`.
-            let client = init_client();
-            let _stalled = client
-                .connect(harness.addr, test_connect_name())
-                .expect("dial setup")
-                .await
-                .expect("QUIC handshake");
+            let (_client, _stalled) = retry_dial("stalled inbound", harness.addr, async || {
+                let client = init_client();
+                let conn = client
+                    .connect(harness.addr, test_connect_name())
+                    .map_err(|e| e.to_string())?
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok((client, conn))
+            })
+            .await;
 
             harness.cancel_and_join().await;
         }
@@ -5241,15 +5356,20 @@ pub mod tests {
             let bulky_refs: Vec<&str> = bulky.iter().map(String::as_str).collect();
             let harness = PeerHarness::start(&bulky_refs, HashSet::new()).await;
 
-            let client_endpoint = small_stream_window_client_endpoint();
-            let conn = client_endpoint
-                .connect(harness.addr, test_connect_name())
-                .expect("dial setup")
-                .await
-                .expect("QUIC handshake");
-            let (mut send, mut recv) = client_handshake(&conn, PROTOCOL_VERSION)
-                .await
-                .expect("protocol handshake");
+            let (_client_endpoint, conn, mut send, mut recv) =
+                retry_dial("stalled fan-out", harness.addr, async || {
+                    let endpoint = small_stream_window_client_endpoint();
+                    let conn = endpoint
+                        .connect(harness.addr, test_connect_name())
+                        .map_err(|e| e.to_string())?
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let (send, recv) = client_handshake(&conn, PROTOCOL_VERSION)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok((endpoint, conn, send, recv))
+                })
+                .await;
             request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
                 &mut send,
                 &mut recv,
