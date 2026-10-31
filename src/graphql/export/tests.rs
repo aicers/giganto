@@ -8,7 +8,8 @@ use mockito::Server;
 use tempfile::tempdir;
 
 use super::{
-    ExportFilter, export_file, export_oplog_file, export_statistic_file, to_string_or_empty,
+    ExportClaim, ExportFilter, export_file, export_oplog_file, export_statistic_file,
+    to_string_or_empty,
 };
 use crate::comm::ingest::generation::SequenceGenerator;
 use crate::datetime::DateTime;
@@ -71,7 +72,17 @@ fn export_file_succeeds_with_invalid_data() {
     let iter: Vec<anyhow::Result<(Box<[u8]>, Conn)>> =
         vec![Err(anyhow!("invalid1")), Err(anyhow!("invalid2"))];
 
-    let result = export_file(iter.into_iter(), &filter, "csv", &done_path, &progress_path);
+    let result = export_file(
+        iter.into_iter(),
+        &filter,
+        "csv",
+        ExportClaim {
+            file: fs::File::create(&progress_path).unwrap(),
+            progress_path: progress_path.clone(),
+            done_path: done_path.clone(),
+            remove_on_drop: true,
+        },
+    );
 
     assert!(result.is_ok());
     assert!(done_path.exists());
@@ -86,7 +97,17 @@ fn export_oplog_file_succeeds_with_invalid_data() {
     let iter: Vec<anyhow::Result<(Box<[u8]>, OpLog)>> =
         vec![Err(anyhow!("invalid1")), Err(anyhow!("invalid2"))];
 
-    let result = export_oplog_file(iter.into_iter(), &filter, "csv", &done_path, &progress_path);
+    let result = export_oplog_file(
+        iter.into_iter(),
+        &filter,
+        "csv",
+        ExportClaim {
+            file: fs::File::create(&progress_path).unwrap(),
+            progress_path: progress_path.clone(),
+            done_path: done_path.clone(),
+            remove_on_drop: true,
+        },
+    );
 
     assert!(result.is_ok());
     assert!(done_path.exists());
@@ -114,7 +135,17 @@ fn export_statistic_file_orders_multiple_iterators() {
 
     let progress_path = dir.path().join("stats_progress.csv");
     let done_path = dir.path().join("stats_done.csv");
-    let result = export_statistic_file(iterators, &filter, "csv", &done_path, &progress_path);
+    let result = export_statistic_file(
+        iterators,
+        &filter,
+        "csv",
+        ExportClaim {
+            file: fs::File::create(&progress_path).unwrap(),
+            progress_path: progress_path.clone(),
+            done_path: done_path.clone(),
+            remove_on_drop: true,
+        },
+    );
 
     assert!(result.is_ok());
     assert!(done_path.exists());
@@ -186,6 +217,60 @@ async fn export_rejects_unknown_protocol() {
              ,exportType:"json")
      }"#;
     assert_export_error(query, "Unknown protocol").await;
+}
+
+#[tokio::test]
+async fn export_rejects_unknown_protocol_paths_before_claiming() {
+    let schema = TestSchema::new();
+    let outside = tempdir().unwrap();
+    for protocol in [
+        outside.path().join("missing/x").display().to_string(),
+        outside.path().join("x").display().to_string(),
+        "../x".to_string(),
+    ] {
+        let err = start_fixed(&schema, &protocol, "src1").unwrap_err();
+        assert!(err.message.contains("Unknown protocol"), "{err:?}");
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(schema.export_dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn export_statistics_with_no_matching_records_publishes_empty_file() {
+    let schema = TestSchema::new();
+    let store = schema.db.statistics_store().unwrap();
+    insert_statistics_raw_event(
+        &store,
+        test_event_timestamp_nanos(),
+        "other",
+        1,
+        1,
+        100,
+        1000,
+    );
+
+    let done = download_file(&start_fixed(&schema, "statistics", "src1").unwrap());
+    wait_done(&done).await;
+    assert_eq!(fs::read(&done).unwrap(), b"");
+    assert!(!done.with_extension("csv.dump").exists());
+}
+
+#[tokio::test]
+async fn export_statistics_with_only_invalid_records_publishes_empty_file() {
+    let schema = TestSchema::new();
+    let store = schema.db.statistics_store().unwrap();
+    for core in [0_u32, 1] {
+        let mut key = b"src1\0".to_vec();
+        key.extend_from_slice(&core.to_be_bytes());
+        key.push(0);
+        key.extend_from_slice(&test_event_timestamp_nanos().to_be_bytes());
+        store.append(&key, b"invalid").unwrap();
+    }
+
+    let done = download_file(&start_fixed(&schema, "statistics", "src1").unwrap());
+    wait_done(&done).await;
+    assert_eq!(fs::read(&done).unwrap(), b"");
+    assert!(!done.with_extension("csv.dump").exists());
 }
 
 #[tokio::test]
@@ -1332,8 +1417,8 @@ async fn export_task_is_registered_and_drained() {
         db.clone(),
         &filter,
         "csv".to_string(),
-        done_path.clone(),
-        progress_path.clone(),
+        export_dir.path(),
+        "conn_export",
     )
     .expect("export should be accepted while the tracker is open");
 
@@ -1350,6 +1435,7 @@ async fn export_task_is_registered_and_drained() {
         done_path.exists(),
         "the drain must have waited for the registered export to finalize its output file"
     );
+    assert!(!progress_path.exists());
 }
 
 /// Once the tracker is closed, `export_by_protocol` cannot register new work.
@@ -1385,8 +1471,8 @@ async fn export_after_tracker_closed_registers_nothing() {
         db.clone(),
         &filter,
         "csv".to_string(),
-        done_path.clone(),
-        progress_path.clone(),
+        export_dir.path(),
+        "conn_export",
     )
     .expect("a closed tracker is reported, not surfaced as a request error");
 
@@ -1394,4 +1480,247 @@ async fn export_after_tracker_closed_registers_nothing() {
         !done_path.exists(),
         "no export task should run once the tracker is closed"
     );
+    assert!(!progress_path.exists());
+}
+
+fn fixed_export_time() -> jiff::Zoned {
+    "2024-03-04T05:06:07+00:00[UTC]".parse().unwrap()
+}
+
+fn start_fixed(schema: &TestSchema, protocol: &str, sensor: &str) -> async_graphql::Result<String> {
+    let mut filter = export_filter_base(protocol);
+    filter.sensor_id = sensor.to_string();
+    if protocol == "op_log" {
+        let ts = test_event_timestamp_nanos() + i64::from(sensor == "sensor-b");
+        filter.time = Some(TimeRange {
+            start: Some(DateTime::from_timestamp_nanos(ts)),
+            end: Some(DateTime::from_timestamp_nanos(ts + 1)),
+        });
+    }
+    super::start_export(
+        &schema.db,
+        schema.export_dir.path(),
+        &crate::graphql::NodeName("giganto1".into()),
+        &schema.top_level_tracker,
+        &filter,
+        "csv".into(),
+        &fixed_export_time(),
+    )
+}
+
+fn download_file(download: &str) -> std::path::PathBuf {
+    download.split_once('@').unwrap().0.into()
+}
+
+async fn wait_done(path: &std::path::Path) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !path.is_file() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("export completion");
+}
+
+#[tokio::test]
+async fn exports_claim_unique_paths_concurrently_and_sequentially() {
+    for protocol in ["conn", "op_log", "statistics"] {
+        let schema = TestSchema::new();
+        let ts = test_event_timestamp_nanos();
+        match protocol {
+            "conn" => {
+                let store = schema.db.conn_store().unwrap();
+                insert_conn_raw_event(&store, "sensor-a", ts, ts);
+                insert_conn_raw_event(&store, "sensor-b", ts + 1, ts + 1);
+            }
+            "op_log" => {
+                let store = schema.db.op_log_store().unwrap();
+                let generator = OnceLock::new();
+                insert_op_log_raw_event(&store, "service-a", "sensor-a", ts, &generator);
+                insert_op_log_raw_event(&store, "service-b", "sensor-b", ts + 1, &generator);
+            }
+            _ => {
+                let store = schema.db.statistics_store().unwrap();
+                insert_statistics_raw_event(&store, ts, "sensor-a", 1, 1, 111, 1000);
+                insert_statistics_raw_event(&store, ts + 1, "sensor-b", 1, 1, 222, 2000);
+            }
+        }
+        let control = Arc::new(super::ExportTestControl::new());
+        let registration =
+            super::register_export_test_control(schema.export_dir.path(), Arc::clone(&control));
+        let a = download_file(&start_fixed(&schema, protocol, "sensor-a").unwrap());
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            control.started.notified(),
+        )
+        .await
+        .unwrap();
+        drop(registration);
+        let b = download_file(&start_fixed(&schema, protocol, "sensor-b").unwrap());
+        assert!(b.ends_with(format!("{protocol}_20240304_050607_1.csv")));
+        wait_done(&b).await;
+        control.release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !control.finished.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        wait_done(&a).await;
+        let first = fs::read(&a).unwrap();
+        let second = fs::read(&b).unwrap();
+        assert!(!first.is_empty() && !second.is_empty());
+        assert_ne!(first, second);
+        assert!(String::from_utf8_lossy(&first).contains("sensor-a"));
+        assert!(!String::from_utf8_lossy(&first).contains("sensor-b"));
+        assert!(String::from_utf8_lossy(&second).contains("sensor-b"));
+        assert!(!String::from_utf8_lossy(&second).contains("sensor-a"));
+        let c = download_file(&start_fixed(&schema, protocol, "sensor-b").unwrap());
+        wait_done(&c).await;
+        assert_ne!(a, c);
+        assert_eq!(fs::read(&a).unwrap(), first);
+        assert_eq!(fs::read(&c).unwrap(), second);
+    }
+}
+
+#[tokio::test]
+async fn export_claim_skips_existing_entries_and_exhaustion() {
+    use std::os::unix::fs::symlink;
+    for case in ["done", "progress", "symlink"] {
+        let schema = TestSchema::new();
+        let base = schema.export_dir.path().join("conn_20240304_050607.csv");
+        let progress = base.with_extension("csv.dump");
+        match case {
+            "done" => fs::write(&base, b"original").unwrap(),
+            "progress" => fs::write(&progress, b"original").unwrap(),
+            _ => symlink("missing", &base).unwrap(),
+        }
+        let download = start_fixed(&schema, "conn", "src1").unwrap();
+        let result = download_file(&download);
+        assert!(result.ends_with("conn_20240304_050607_1.csv"));
+        wait_done(&result).await;
+        match case {
+            "done" => assert_eq!(fs::read(&base).unwrap(), b"original"),
+            "progress" => assert_eq!(fs::read(&progress).unwrap(), b"original"),
+            _ => assert!(
+                fs::symlink_metadata(&base)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            ),
+        }
+        if case != "progress" {
+            assert!(!progress.exists());
+        }
+    }
+    let schema = TestSchema::new();
+    for n in 0..1000 {
+        let suffix = if n == 0 {
+            String::new()
+        } else {
+            format!("_{n}")
+        };
+        fs::write(
+            schema
+                .export_dir
+                .path()
+                .join(format!("conn_20240304_050607{suffix}.csv")),
+            b"original",
+        )
+        .unwrap();
+    }
+    assert!(start_fixed(&schema, "conn", "src1").is_err());
+    assert_eq!(
+        fs::read_dir(schema.export_dir.path()).unwrap().count(),
+        1000
+    );
+    for entry in fs::read_dir(schema.export_dir.path()).unwrap() {
+        assert_eq!(fs::read(entry.unwrap().path()).unwrap(), b"original");
+    }
+}
+
+#[tokio::test]
+async fn export_claim_cleanup_and_errors() {
+    let schema = TestSchema::new();
+    let expected = schema.export_dir.path().join("conn_20240304_050607.csv");
+    let token = start_fixed(&schema, "conn", "src1").unwrap();
+    assert_eq!(token, format!("{}@giganto1", expected.display()));
+    wait_done(&expected).await;
+    for poisoned in [false, true] {
+        let schema = TestSchema::new();
+        if poisoned {
+            schema.top_level_tracker.poison_admission_lock();
+        } else {
+            schema.top_level_tracker.close().unwrap();
+        }
+        assert!(start_fixed(&schema, "conn", "src1").is_ok());
+        assert_eq!(fs::read_dir(schema.export_dir.path()).unwrap().count(), 0);
+    }
+    let schema = TestSchema::new();
+    assert!(start_fixed(&schema, "unknown", "src1").is_err());
+    assert_eq!(fs::read_dir(schema.export_dir.path()).unwrap().count(), 0);
+    let bad = schema.export_dir.path().join("file");
+    fs::write(&bad, b"original").unwrap();
+    let err = super::start_export(
+        &schema.db,
+        &bad,
+        &crate::graphql::NodeName("node".into()),
+        &schema.top_level_tracker,
+        &export_filter_base("conn"),
+        "csv".into(),
+        &fixed_export_time(),
+    )
+    .unwrap_err();
+    assert!(format!("{err:?}").contains(&bad.display().to_string()));
+    assert_eq!(fs::read(&bad).unwrap(), b"original");
+}
+
+#[tokio::test]
+async fn export_rename_failure_removes_progress() {
+    let schema = TestSchema::new();
+    let control = Arc::new(super::ExportTestControl::new());
+    let _registration =
+        super::register_export_test_control(schema.export_dir.path(), Arc::clone(&control));
+    let done = download_file(&start_fixed(&schema, "conn", "src1").unwrap());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        control.started.notified(),
+    )
+    .await
+    .unwrap();
+    fs::create_dir(&done).unwrap();
+    control.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !control.finished.load(std::sync::atomic::Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(done.is_dir());
+    assert!(!done.with_extension("csv.dump").exists());
+}
+
+#[test]
+fn export_writer_failure_removes_progress() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+    let store = db.conn_store().unwrap();
+    let ts = test_event_timestamp_nanos();
+    insert_conn_raw_event(&store, "src1", ts, ts);
+    let (from, to) = sensor_bounds("src1");
+    let iter = store.boundary_iter(&from, &to, Direction::Forward);
+    let progress_path = dir.path().join("writer.csv.dump");
+    let done_path = dir.path().join("writer.csv");
+    fs::write(&progress_path, b"").unwrap();
+    let claim = ExportClaim {
+        file: fs::File::open(&progress_path).unwrap(),
+        progress_path: progress_path.clone(),
+        done_path: done_path.clone(),
+        remove_on_drop: true,
+    };
+    assert!(export_file(iter, &export_filter_base("conn"), "csv", claim).is_err());
+    assert!(!progress_path.exists());
+    assert!(!done_path.exists());
 }
