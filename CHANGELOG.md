@@ -49,6 +49,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `0.0.0.0`, is not sent the request, and the refusal is logged at WARN. After a
   certificate reload, peer GraphQL requests now present the new client
   certificate; they used to keep presenting the one loaded at startup.
+- Bumped `libz-sys` from 1.1.30 to 1.1.31 to address RUSTSEC-2026-0418 (its
+  build script writing the build's environment, secrets included, to the build
+  directory).
 
 ## [0.34.0] - 2026-10-28
 
