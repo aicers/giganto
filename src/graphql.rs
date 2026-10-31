@@ -8,6 +8,8 @@ mod log;
 mod netflow;
 pub mod network;
 mod packet;
+#[cfg(feature = "cluster")]
+pub(crate) mod peer_client;
 mod security;
 mod sensor;
 #[cfg(not(feature = "cluster"))]
@@ -217,7 +219,7 @@ pub(crate) fn schema(
     stream_direct_channels: StreamDirectChannels,
     peer_notify: Option<Arc<Notify>>,
     peers: Peers,
-    request_client_pool: reqwest::Client,
+    peer: PeerContext,
     export_path: PathBuf,
     config_update_tx: Sender<ConfigVisible>,
     notify_terminate: Arc<Notify>,
@@ -248,7 +250,6 @@ pub(crate) fn schema(
         .data(pcap_sensors)
         .data(ingest_sensors)
         .data(peers)
-        .data(request_client_pool)
         .data(export_path)
         .data(config_update_tx)
         .data(TerminateNotify(notify_terminate))
@@ -259,12 +260,49 @@ pub(crate) fn schema(
         .data(deletion_coordination)
         .data(runtime_ingest_sensors)
         .data(stream_direct_channels);
+    let schema = peer.add_data(schema);
     let schema = if let Some(peer_notify) = peer_notify {
         schema.data(peer_notify)
     } else {
         schema
     };
     schema.finish()
+}
+
+/// The schema data peer GraphQL requests read: the recorded peer identities
+/// and the client the requests are sent with.
+///
+/// Only a `cluster` build sends peer requests, so without that feature this
+/// carries nothing.
+#[cfg(feature = "cluster")]
+pub(crate) struct PeerContext {
+    pub(crate) idents: crate::comm::peer::PeerIdents,
+    pub(crate) client: peer_client::PeerGraphqlClient,
+}
+
+/// The schema data peer GraphQL requests read, which a build without
+/// `cluster` does not have.
+#[cfg(not(feature = "cluster"))]
+pub(crate) struct PeerContext;
+
+impl PeerContext {
+    /// Adds this data to the schema being built.
+    fn add_data(
+        self,
+        builder: async_graphql::SchemaBuilder<Query, Mutation, EmptySubscription>,
+    ) -> async_graphql::SchemaBuilder<Query, Mutation, EmptySubscription> {
+        #[cfg(feature = "cluster")]
+        {
+            builder.data(self.idents).data(self.client)
+        }
+        #[cfg(not(feature = "cluster"))]
+        {
+            // Consumes the unit value, which `clippy::unused_self` would
+            // otherwise flag in this configuration.
+            let Self = self;
+            builder
+        }
+    }
 }
 
 /// The default page size for connections when neither `first` nor `last` is
@@ -1199,7 +1237,25 @@ pub(crate) mod tests {
         pub(super) runtime_ingest_sensors: RunTimeIngestSensors,
         pub(super) pcap_sensors: PcapSensors,
         pub(super) stream_direct_channels: StreamDirectChannels,
+        /// The recorded peer identities the schema resolves peer names
+        /// through, so a test can record an identity after the schema is
+        /// built.
+        #[cfg(feature = "cluster")]
+        pub(crate) peer_idents: crate::comm::peer::PeerIdents,
     }
+
+    /// The certificate name `new_with_graphql_peer` records for its mock peer.
+    #[cfg(feature = "cluster")]
+    const GRAPHQL_PEER_NAME: &str = "peer.giganto.example.test";
+
+    /// The QUIC port recorded with a mock peer's identity, unrelated to the
+    /// GraphQL port its requests go to.
+    #[cfg(feature = "cluster")]
+    pub(crate) const GRAPHQL_PEER_QUIC_PORT: u16 = 38_383;
+
+    /// The IP the mock peers of `new_with_graphql_peer` and
+    /// `new_with_unrecorded_graphql_peer` are connected at.
+    const GRAPHQL_PEER_IP: &str = "127.0.0.1";
 
     impl TestSchema {
         fn setup(ingest_sensors: IngestSensors, peers: Peers) -> Self {
@@ -1218,7 +1274,18 @@ pub(crate) mod tests {
             let pcap_sensors = new_pcap_sensors();
             let runtime_ingest_sensors = new_runtime_ingest_sensors();
             let stream_direct_channels = new_stream_direct_channels();
-            let request_client_pool = reqwest::Client::new();
+            #[cfg(feature = "cluster")]
+            let peer_idents: crate::comm::peer::PeerIdents = Arc::default();
+            #[cfg(feature = "cluster")]
+            let peer = super::PeerContext {
+                idents: Arc::clone(&peer_idents),
+                client: super::peer_client::PeerGraphqlClient::plain_http(
+                    Arc::clone(&peer_idents),
+                    Arc::clone(&peers),
+                ),
+            };
+            #[cfg(not(feature = "cluster"))]
+            let peer = super::PeerContext;
             let export_dir = tempfile::tempdir().unwrap();
             let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
             let notify_terminate = Arc::new(Notify::new());
@@ -1238,7 +1305,7 @@ pub(crate) mod tests {
                 stream_direct_channels.clone(),
                 peer_notify,
                 peers,
-                request_client_pool,
+                peer,
                 export_dir.path().to_path_buf(),
                 config_update_tx.clone(),
                 notify_terminate,
@@ -1262,6 +1329,8 @@ pub(crate) mod tests {
                 runtime_ingest_sensors,
                 pcap_sensors,
                 stream_direct_channels,
+                #[cfg(feature = "cluster")]
+                peer_idents,
             }
         }
 
@@ -1314,7 +1383,29 @@ pub(crate) mod tests {
             Self::setup_with_node_name(ingest_sensors, peers, "giganto1", peer_notify)
         }
 
+        /// Builds a node with one connected peer at `127.0.0.1`, serving
+        /// GraphQL on `port`, whose identity is recorded under
+        /// [`GRAPHQL_PEER_NAME`].
         pub fn new_with_graphql_peer(port: u16) -> Self {
+            let fixture = Self::new_with_unrecorded_graphql_peer(port);
+            #[cfg(feature = "cluster")]
+            fixture
+                .peer_idents
+                .try_write()
+                .expect("nothing else holds the fixture's fresh identities")
+                .insert(crate::comm::peer::PeerIdentity {
+                    addr: std::net::SocketAddr::new(
+                        GRAPHQL_PEER_IP.parse().expect("a valid IP literal"),
+                        GRAPHQL_PEER_QUIC_PORT,
+                    ),
+                    hostname: GRAPHQL_PEER_NAME.to_string(),
+                });
+            fixture
+        }
+
+        /// Builds a node with one connected peer at `127.0.0.1`, serving
+        /// GraphQL on `port`, with no identity recorded for it.
+        pub fn new_with_unrecorded_graphql_peer(port: u16) -> Self {
             let ingest_sensors = Arc::new(tokio::sync::RwLock::new(
                 CURRENT_GIGANTO_INGEST_SENSORS
                     .into_iter()
@@ -1323,7 +1414,7 @@ pub(crate) mod tests {
             ));
 
             let peers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
-                "127.0.0.1".to_string(),
+                GRAPHQL_PEER_IP.to_string(),
                 PeerInfo {
                     ingest_sensors: PEER_GIGANTO_2_INGEST_SENSORS
                         .into_iter()

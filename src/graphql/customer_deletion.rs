@@ -1405,6 +1405,8 @@ fn now_nanos() -> i64 {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    #[cfg(feature = "cluster")]
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1435,7 +1437,11 @@ mod tests {
         aggregate_deletion_request_statuses, merge_customer_data_deletion_results,
     };
     #[cfg(feature = "cluster")]
+    use crate::comm::peer::PeerIdentity;
+    #[cfg(feature = "cluster")]
     use crate::graphql::StringNumberU32;
+    #[cfg(feature = "cluster")]
+    use crate::graphql::tests::GRAPHQL_PEER_QUIC_PORT;
     use crate::{
         cancellation::{SpawnError, TaskTracker},
         comm::{
@@ -2223,6 +2229,72 @@ mod tests {
             serde_json::json!([local_target, peer_target])
         );
         assert_eq!(result["error"], format!("{endpoint}: peer failure"));
+        peer.assert_async().await;
+    }
+
+    /// A peer known only from its inbound connection is reached by the name
+    /// it advertised, recorded after the schema was built.
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn peer_recorded_after_the_schema_is_built_is_reached_by_name() {
+        const INBOUND_PEER_NAME: &str = "inbound.giganto.example.test";
+        let mut server = Server::new_async().await;
+        let port = server.socket_address().port();
+        let peer = server
+            .mock("POST", "/graphql")
+            .match_header("host", format!("{INBOUND_PEER_NAME}:{port}").as_str())
+            .with_status(200)
+            .with_body(r#"{"data":{"customerDataDeletionResult":null}}"#)
+            .create_async()
+            .await;
+        let schema = TestSchema::new_with_unrecorded_graphql_peer(port);
+        schema.peer_idents.write().await.insert(PeerIdentity {
+            addr: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), GRAPHQL_PEER_QUIC_PORT),
+            hostname: INBOUND_PEER_NAME.to_string(),
+        });
+
+        assert_eq!(
+            customer_data_deletion_result(&schema, 93).await,
+            serde_json::Value::Null
+        );
+        peer.assert_async().await;
+    }
+
+    /// A connected peer with no recorded identity is sent nothing, and the
+    /// refusal names its IP in the error and in one WARN line.
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn peer_without_a_recorded_identity_is_refused() {
+        const REFUSAL: &str =
+            "Peer GraphQL request to 127.0.0.1 refused: no recorded peer identity";
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
+        let mut server = Server::new_async().await;
+        let peer = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let schema = TestSchema::new_with_unrecorded_graphql_peer(server.socket_address().port());
+
+        let response = schema
+            .execute(r#"query { customerDataDeletionResult(customerId: "92") { customerId } }"#)
+            .await;
+        assert_eq!(response.data.to_string(), "null");
+        assert_eq!(
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>(),
+            [REFUSAL]
+        );
+        let contents = logs.contents();
+        let warnings: Vec<_> = contents
+            .lines()
+            .filter(|line| line.contains(" WARN ") && line.contains(REFUSAL))
+            .collect();
+        assert_eq!(warnings.len(), 1, "{contents}");
         peer.assert_async().await;
     }
 

@@ -923,7 +923,8 @@ async fn ingest_exchange(
     })
 }
 
-/// The mTLS GraphQL client, built the way the node builds its own.
+/// An mTLS GraphQL client that reaches the test node by IP, accepting any
+/// server certificate.
 fn graphql_client(pki: &TestPki) -> reqwest::Client {
     let identity = reqwest::Identity::from_pem(
         format!("{}{}", pki.node_cert_pem, pki.node_key_pem).as_bytes(),
