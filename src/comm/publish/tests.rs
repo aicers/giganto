@@ -654,7 +654,7 @@ mod fixtures {
 
     pub(super) fn init_crypto() {
         INIT.get_or_init(|| {
-            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            let _ = crate::server::server_crypto_provider().install_default();
         });
     }
 
@@ -4465,6 +4465,72 @@ async fn publish_server_run_accepts_connection_and_shutdown() {
 
     // Cancelling the token is the whole shutdown signal: the entry task leaves
     // its accept loop, drains its tracker, and only then closes the endpoint.
+    server_handle.shutdown().await;
+}
+
+/// The publish server accepts only X25519MLKEM768: a client that offers only
+/// X25519 is refused, and the refusal is logged once at WARN and not at ERROR.
+#[tokio::test(flavor = "current_thread")]
+async fn publish_server_refuses_x25519_only_client() {
+    crate::cancellation::hold_callsite_interest_open();
+    let (log_capture, _guard) = start_leveled_log_capture();
+    init_crypto();
+
+    let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+    let db =
+        Database::open(temp_dir.path(), &DbOptions::default()).expect("open publish test database");
+    let (peers, peer_idents) = new_peers_data(None);
+    let certs = build_test_certs();
+    let (server_addr, server_handle) = spawn_server(
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        db,
+        new_pcap_sensors(),
+        new_stream_direct_channels(),
+        build_ingest_sensors(),
+        peers,
+        peer_idents,
+        &certs,
+    );
+
+    let mut endpoint =
+        Endpoint::client("[::]:0".parse().expect("client endpoint addr")).expect("client endpoint");
+    endpoint.set_default_client_config(crate::test_bootroot::config_client_x25519_only(&certs));
+    let port = endpoint.local_addr().expect("client local addr").port();
+    let result = tokio::time::timeout(
+        StdDuration::from_secs(5),
+        endpoint
+            .connect(server_addr, NODE1.server_name())
+            .expect("connect future"),
+    )
+    .await
+    .expect("the refused handshake should end promptly");
+    assert!(result.is_err(), "an X25519-only client must be refused");
+
+    let needle = format!("TLS handshake from [::1]:{port} failed:");
+    assert_log_contains(&log_capture, &needle).await;
+    let warnings: Vec<String> = captured_lines_at(&log_capture, "WARN")
+        .into_iter()
+        .filter(|line| line.contains(&needle))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one WARN line per refused connection, got: {warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .all(|line| line.contains("NoKxGroupsInCommon")),
+        "the WARN line must name the missing group, got: {warnings:?}"
+    );
+    assert!(
+        captured_lines_at(&log_capture, "ERROR")
+            .iter()
+            .all(|line| !line.contains(&format!("[::1]:{port}"))),
+        "a refused handshake must not also be logged at ERROR"
+    );
+
+    drop(endpoint);
     server_handle.shutdown().await;
 }
 

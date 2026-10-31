@@ -18,6 +18,10 @@
 - Verify that the client is presenting a client certificate.
 - The `--ca-certs` option provided when starting the server is used to
   verify client certificates, so verify that the certificate chain matches.
+- Look for `TLS handshake from <address> failed: <error>` in the log. It is
+  logged at WARN, so under systemd it is shown by
+  `journalctl -u <unit> -p warning`, not by `-p err`. `NoKxGroupsInCommon` in
+  it means the client does not offer X25519MLKEM768 and must be upgraded.
 
 ## When the cluster does not connect properly
 
@@ -27,6 +31,10 @@
 - Verify that the node certificates and hostname policies meet the
   mutual verification requirements: each `peers[].hostname` must be the
   peer certificate's SAN DNS name.
+- Look for `TLS handshake from <address> failed: <error>` in the log of each
+  node. It is logged at WARN, so under systemd it is shown by
+  `journalctl -u <unit> -p warning`, not by `-p err`. `NoKxGroupsInCommon` in
+  it means the peer at that address does not offer X25519MLKEM768.
 
 ## When the process exits while it was serving
 

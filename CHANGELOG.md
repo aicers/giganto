@@ -8,10 +8,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- Giganto now prefers the hybrid post-quantum key exchange X25519MLKEM768 on
-  the QUIC and GraphQL connections it opens to other Giganto nodes, so they use
-  it instead of X25519. A node that does not support it is still reached with
-  X25519, without an extra round trip.
+- **Breaking.** Giganto's ingest, publish and peer QUIC servers and its GraphQL
+  HTTPS server now accept only TLS 1.3 with the hybrid post-quantum key exchange
+  X25519MLKEM768, so traffic recorded today cannot be decrypted later by a
+  quantum computer. A client that does not offer X25519MLKEM768, or offers only
+  TLS 1.2, is refused at the handshake. Giganto's own connections to other
+  Giganto nodes offer only X25519MLKEM768, so a node that does not support it
+  can neither connect to this release nor be reached by it. Each failed
+  handshake is logged at WARN as `TLS handshake from <address> failed: <error>`;
+  QUIC handshake failures used to be logged at ERROR among other connection
+  failures, and failed GraphQL handshakes were not logged.
 - `updateConfig` now rejects RocksDB options outside their validity ranges:
   `max_open_files` 20 through the process open-file bound, level base 1 through
   262144 MiB, background threads 1 through 128, and subcompactions 1 through 8.

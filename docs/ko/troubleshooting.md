@@ -16,6 +16,11 @@
 
 - 클라이언트 인증서를 함께 제시하고 있는지 확인합니다.
 - 서버 실행 시 전달한 `--ca-certs`가 클라이언트 인증서 검증에 사용되므로, 인증서 체인이 일치하는지 확인합니다.
+- 로그에서 `TLS handshake from <address> failed: <error>`를 확인합니다. 이 기록은
+  WARN 수준이므로 systemd에서는 `-p err`가 아니라
+  `journalctl -u <unit> -p warning`으로 확인합니다. 여기에 `NoKxGroupsInCommon`이
+  있으면 클라이언트가 X25519MLKEM768을 제시하지 않는 것이므로 클라이언트를
+  업그레이드해야 합니다.
 
 ## 클러스터가 정상 연결되지 않을 때
 
@@ -23,6 +28,10 @@
 - peers 간 방화벽 정책과 라우팅을 점검합니다.
 - 노드별 인증서 및 이름 정책이 상호 검증 요구 사항과 맞는지 확인합니다. 각
   `peers[].hostname`은 피어 인증서의 SAN DNS 이름이어야 합니다.
+- 각 노드의 로그에서 `TLS handshake from <address> failed: <error>`를 확인합니다.
+  이 기록은 WARN 수준이므로 systemd에서는 `-p err`가 아니라
+  `journalctl -u <unit> -p warning`으로 확인합니다. 여기에 `NoKxGroupsInCommon`이
+  있으면 해당 주소의 피어가 X25519MLKEM768을 제시하지 않는 것입니다.
 
 ## 동작 중이던 프로세스가 종료될 때
 

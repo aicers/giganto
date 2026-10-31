@@ -111,15 +111,28 @@ fn create_graphql_client(cert_pem: &[u8], key_pem: &[u8]) -> Result<reqwest::Cli
         .context("failed to build GraphQL client with mTLS support")
 }
 
+/// Installs [`server::server_crypto_provider`] as the process-wide default.
+///
+/// Every TLS configuration poem and reqwest build reads the process default,
+/// so the server policy must be the one in force.
+///
+/// # Errors
+///
+/// Returns an error if a process-wide provider is already installed.
+fn install_tls_policy() -> Result<()> {
+    server::server_crypto_provider()
+        .install_default()
+        .map_err(|_| anyhow!("a process-wide TLS crypto provider is already installed"))
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Initialize rustls crypto provider
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-
     // The one place outside tests that reads the environment for logging.
     let journal_stream = std::env::var_os(logging::JOURNAL_STREAM_ENV);
     let journal = logging::output_is_journal(journal_stream.as_deref());
-    let guard = match logging::init_tracing(journal) {
+    // The policy is installed before tracing, so either failure is reported
+    // on standard error.
+    let guard = match install_tls_policy().and_then(|()| logging::init_tracing(journal)) {
         Ok(guard) => guard,
         Err(error) => {
             eprintln!("Error: {error:?}");
@@ -865,9 +878,7 @@ async fn run_generation(
     let mut web_controller: Option<WebController> = match web::serve(
         schema.clone(),
         web_addr,
-        tls.cert_pem.clone(),
-        tls.key_pem.clone(),
-        tls.ca_pem.clone(),
+        Arc::clone(&tls.certs),
         web_shutdown_timeout,
     )
     .await
@@ -1771,9 +1782,7 @@ async fn reload_https_server<S>(
     match web::serve(
         schema.clone(),
         web_addr,
-        current.cert_pem.clone(),
-        current.key_pem.clone(),
-        current.ca_pem.clone(),
+        Arc::clone(&current.certs),
         web_shutdown_timeout,
     )
     .await
@@ -2011,6 +2020,16 @@ mod tests {
     }
 
     #[test]
+    fn install_tls_policy_refuses_a_second_provider() {
+        crate::test_bootroot::init_crypto();
+        let error = install_tls_policy().expect_err("a provider is already installed");
+        assert_eq!(
+            format!("{error:?}"),
+            "a process-wide TLS crypto provider is already installed"
+        );
+    }
+
+    #[test]
     fn test_create_graphql_client_with_invalid_cert() {
         crate::test_bootroot::init_crypto();
         let invalid_cert = b"invalid cert";
@@ -2051,7 +2070,7 @@ mod tests {
 
         fn install_crypto_provider() {
             INSTALL_PROVIDER.call_once(|| {
-                let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+                let _ = crate::server::server_crypto_provider().install_default();
             });
         }
 
@@ -2172,9 +2191,7 @@ mod tests {
             let initial_controller = web::serve(
                 schema.clone(),
                 addr,
-                initial.cert_pem.clone(),
-                initial.key_pem.clone(),
-                initial.ca_pem.clone(),
+                Arc::clone(&initial.certs),
                 Duration::from_secs(30),
             )
             .await
@@ -2239,6 +2256,84 @@ mod tests {
             shutdown_web(web_controller.take()).await;
         }
 
+        /// A reload rebuilds the GraphQL TLS configuration under the same
+        /// policy: an X25519-only client is still refused and logged, and a
+        /// client on the process default negotiates X25519MLKEM768 and sees
+        /// the new server certificate.
+        #[tokio::test]
+        async fn reload_keeps_graphql_server_hybrid_only() {
+            use crate::test_bootroot::{
+                assert_tls_refused_with_one_warning, capture_logs, tls_handshake,
+                x25519_only_tls_client,
+            };
+
+            let (logs, _guard) = capture_logs();
+            let dir = tempdir().expect("tempdir");
+            let (reload_handle, tls_watch, cert_path, key_path, ca_path) = setup(dir.path());
+
+            let initial = tls_reload::get_current_tls_material(&tls_watch);
+            let addr = free_addr();
+            let schema = test_schema();
+            let mut web_controller = Some(
+                web::serve(
+                    schema.clone(),
+                    addr,
+                    Arc::clone(&initial.certs),
+                    Duration::from_secs(30),
+                )
+                .await
+                .expect("initial serve"),
+            );
+
+            rewrite_pki(&cert_path, &key_path, &ca_path);
+            reload_https_server(
+                &reload_handle,
+                &tls_watch,
+                &mut web_controller,
+                &schema,
+                addr,
+                Duration::from_secs(30),
+            )
+            .await;
+            assert!(
+                web_controller.is_some(),
+                "a new web controller should be installed after reload"
+            );
+            let updated = tls_reload::get_current_tls_material(&tls_watch);
+            assert_ne!(
+                initial.cert_pem, updated.cert_pem,
+                "reload should have updated the server cert"
+            );
+
+            assert_tls_refused_with_one_warning(
+                addr,
+                x25519_only_tls_client(),
+                &updated.certs,
+                &logs,
+                "NoKxGroupsInCommon",
+            )
+            .await;
+
+            let (_, accepted) =
+                tls_handshake(addr, rustls::ClientConfig::builder(), &updated.certs).await;
+            let conn = accepted.expect("a default client should complete its handshake");
+            let session = conn.get_ref().1;
+            assert_eq!(
+                session
+                    .negotiated_key_exchange_group()
+                    .map(rustls::crypto::SupportedKxGroup::name),
+                Some(rustls::NamedGroup::X25519MLKEM768),
+            );
+            assert_eq!(
+                session.peer_certificates().and_then(<[_]>::first),
+                updated.certs.certs.first(),
+                "the reloaded server should present the new certificate"
+            );
+
+            drop(conn);
+            shutdown_web(web_controller.take()).await;
+        }
+
         #[tokio::test]
         async fn reload_preserves_controller_on_validation_failure() {
             let dir = tempdir().expect("tempdir");
@@ -2254,9 +2349,7 @@ mod tests {
             let initial_controller = web::serve(
                 schema.clone(),
                 addr,
-                initial.cert_pem.clone(),
-                initial.key_pem.clone(),
-                initial.ca_pem.clone(),
+                Arc::clone(&initial.certs),
                 Duration::from_secs(30),
             )
             .await
@@ -2365,9 +2458,7 @@ mod tests {
             let initial_controller = web::serve(
                 schema.clone(),
                 addr,
-                initial.cert_pem.clone(),
-                initial.key_pem.clone(),
-                initial.ca_pem.clone(),
+                Arc::clone(&initial.certs),
                 Duration::from_secs(30),
             )
             .await
@@ -2437,9 +2528,7 @@ mod tests {
             let live_controller = web::serve(
                 schema.clone(),
                 live_addr,
-                initial.cert_pem.clone(),
-                initial.key_pem.clone(),
-                initial.ca_pem.clone(),
+                Arc::clone(&initial.certs),
                 Duration::from_secs(30),
             )
             .await
@@ -3387,7 +3476,7 @@ mod tests {
 
         fn install_crypto_provider() {
             INSTALL_PROVIDER.call_once(|| {
-                let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+                let _ = crate::server::server_crypto_provider().install_default();
             });
         }
 
@@ -4287,9 +4376,7 @@ mod tests {
             web::serve(
                 test_schema(),
                 web_addr,
-                tls.cert_pem.clone(),
-                tls.key_pem.clone(),
-                tls.ca_pem.clone(),
+                Arc::clone(&tls.certs),
                 Duration::from_secs(30),
             )
             .await
@@ -5154,9 +5241,7 @@ mod tests {
                     web::serve(
                         parking_schema(&signal),
                         web_addr,
-                        tls.cert_pem.clone(),
-                        tls.key_pem.clone(),
-                        tls.ca_pem.clone(),
+                        Arc::clone(&tls.certs),
                         WEB_HOLD_TIMEOUT,
                     )
                     .await

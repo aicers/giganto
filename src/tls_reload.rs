@@ -6,7 +6,7 @@ use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 use crate::comm::{to_cert_chain, to_private_key};
-use crate::server::Certs;
+use crate::server::{Certs, server_crypto_provider};
 
 pub struct CertPaths {
     pub cert_path: String,
@@ -17,10 +17,11 @@ pub struct CertPaths {
 /// Loads TLS material (cert chain, private key, root CA store) from
 /// the file paths specified in `paths`.
 ///
-/// The CA bytes are read once here so downstream consumers can build
-/// listeners from the validated byte stream instead of re-reading the
-/// CA files, which would reopen the TOCTOU window between reload
-/// validation and server restart.
+/// Every server, the GraphQL HTTPS listener included, is built from the
+/// parsed [`Certs`] returned here rather than by re-reading the files,
+/// which would reopen the TOCTOU window between reload validation and
+/// server restart. The PEM bytes are kept only so a reload can tell
+/// whether the material changed.
 ///
 /// # Errors
 ///
@@ -35,12 +36,11 @@ pub fn load_tls_material(paths: &CertPaths) -> Result<TlsMaterial> {
     let (root, ca_pem) = load_root_cert(&paths.ca_certs_paths)?;
 
     // Validate that the certificate and private key form a valid pair
-    // before accepting the material as a reload candidate.
-    let provider = rustls::crypto::CryptoProvider::get_default()
-        .cloned()
-        .expect("rustls crypto provider should be installed at startup");
-    rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
+    // before accepting the material as a reload candidate, and do so
+    // under the policy every server enforces, so a reload cannot accept
+    // material the live configuration would refuse.
+    rustls::ServerConfig::builder_with_provider(Arc::new(server_crypto_provider()))
+        .with_protocol_versions(&[&rustls::version::TLS13])
         .context("failed to configure TLS protocol versions")?
         .with_no_client_auth()
         .with_single_cert(certs.clone(), key.clone_key())
@@ -63,11 +63,11 @@ fn load_root_cert(ca_certs_paths: &[String]) -> Result<(rustls::RootCertStore, V
     let mut root_cert = rustls::RootCertStore::empty();
     let mut combined_pem: Vec<u8> = Vec::new();
 
-    // Use strict `RootCertStore::add` semantics to match the trust
-    // store the poem/rustls HTTPS listener builds at bind time. A
-    // bundle containing any cert the listener would reject must be
-    // rejected here too, so reload validation cannot succeed on
-    // material the new server will refuse to start on.
+    // Use strict `RootCertStore::add` semantics: a bundle containing any
+    // cert that cannot be added is rejected outright rather than served
+    // with a partial trust store. The store built here is the one every
+    // server, the GraphQL HTTPS listener included, verifies clients
+    // against.
     for path in ca_certs_paths {
         let pem = std::fs::read(path)
             .with_context(|| format!("failed to read root certificate file: {path}"))?;
@@ -215,7 +215,7 @@ mod tests {
 
     fn install_crypto_provider() {
         INSTALL_PROVIDER.call_once(|| {
-            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            let _ = crate::server::server_crypto_provider().install_default();
         });
     }
 
@@ -568,7 +568,7 @@ mod listener_reload_contract_tests {
 
     fn install_crypto_provider() {
         INSTALL_PROVIDER.call_once(|| {
-            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            let _ = crate::server::server_crypto_provider().install_default();
         });
     }
 

@@ -1,6 +1,8 @@
 use std::{
     fs,
-    sync::{Arc, OnceLock},
+    net::SocketAddr,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
 };
 
 use quinn::ClientConfig;
@@ -9,6 +11,7 @@ use rcgen::{
     KeyPair, KeyUsagePurpose,
 };
 use tempfile::TempDir;
+use tracing_subscriber::fmt::{MakeWriter, writer::MutexGuardWriter};
 
 use crate::{
     comm::{to_cert_chain, to_private_key, to_root_cert},
@@ -19,8 +22,158 @@ static INIT: OnceLock<()> = OnceLock::new();
 
 pub(crate) fn init_crypto() {
     INIT.get_or_init(|| {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = crate::server::server_crypto_provider().install_default();
     });
+}
+
+/// Returns a deliberately classical client provider that offers only X25519,
+/// the party every Giganto server must refuse.
+pub(crate) fn x25519_only_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    Arc::new(rustls::crypto::CryptoProvider {
+        kx_groups: vec![rustls::crypto::aws_lc_rs::kx_group::X25519],
+        ..rustls::crypto::aws_lc_rs::default_provider()
+    })
+}
+
+/// A rustls client configuration that still needs its roots and identity.
+pub(crate) type TlsClientBuilder =
+    rustls::ConfigBuilder<rustls::ClientConfig, rustls::WantsVerifier>;
+
+/// Returns a TLS 1.3 client builder over [`x25519_only_provider`].
+pub(crate) fn x25519_only_tls_client() -> TlsClientBuilder {
+    rustls::ClientConfig::builder_with_provider(x25519_only_provider())
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("TLS 1.3 client config")
+}
+
+/// Runs one mTLS handshake over TCP to `addr` from a client built on
+/// `config`, presenting `certs` and trusting its root store, with `localhost`
+/// as the server name. Returns the client's local address, which the server
+/// sees as the peer, with the outcome.
+pub(crate) async fn tls_handshake(
+    addr: SocketAddr,
+    config: TlsClientBuilder,
+    certs: &Certs,
+) -> (
+    SocketAddr,
+    std::io::Result<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+) {
+    let config = config
+        .with_root_certificates(certs.root.clone())
+        .with_client_auth_cert(certs.certs.clone(), certs.key.clone_key())
+        .expect("build client TLS config");
+
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+    let tcp = tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("TCP connect");
+    let local = tcp.local_addr().expect("client local addr");
+    let server_name = rustls::pki_types::ServerName::try_from("localhost").expect("server name");
+    (local, connector.connect(server_name, tcp).await)
+}
+
+/// A log buffer a test reads back.
+#[derive(Clone, Default)]
+pub(crate) struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
+
+impl CaptureBuf {
+    pub(crate) fn contents(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().expect("capture lock")).into_owned()
+    }
+}
+
+impl<'a> MakeWriter<'a> for CaptureBuf {
+    type Writer = MutexGuardWriter<'a, Vec<u8>>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.0.make_writer()
+    }
+}
+
+/// Captures this thread's log output until the guard is dropped.
+///
+/// `#[tokio::test]` runs on a current-thread runtime, so the tasks a test
+/// spawns are polled on this thread and their events land in this
+/// thread-local subscriber's buffer.
+pub(crate) fn capture_logs() -> (CaptureBuf, tracing::subscriber::DefaultGuard) {
+    crate::cancellation::hold_callsite_interest_open();
+    let buf = CaptureBuf::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_writer(buf.clone())
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    (buf, guard)
+}
+
+/// Waits, with a bound, until the captured log contains `needle`.
+pub(crate) async fn wait_for_log(logs: &CaptureBuf, needle: &str) {
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut ticker = tokio::time::interval(Duration::from_millis(5));
+        loop {
+            ticker.tick().await;
+            if logs.contents().contains(needle) {
+                return;
+            }
+        }
+    })
+    .await;
+    let contents = logs.contents();
+    assert!(
+        found.is_ok(),
+        "log never contained {needle:?}; got: {contents}"
+    );
+}
+
+/// Returns the captured lines logged at WARN that report a failed TLS
+/// handshake from `peer`.
+pub(crate) fn handshake_warnings(logs: &CaptureBuf, peer: SocketAddr) -> Vec<String> {
+    let needle = format!("TLS handshake from {peer} failed:");
+    logs.contents()
+        .lines()
+        .filter(|line| line.contains(" WARN ") && line.contains(&needle))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Asserts that a TCP TLS client built on `config` is refused by the server
+/// at `addr`, and that the server logs exactly one WARN line naming that
+/// client and containing `cause`.
+pub(crate) async fn assert_tls_refused_with_one_warning(
+    addr: SocketAddr,
+    config: TlsClientBuilder,
+    certs: &Certs,
+    logs: &CaptureBuf,
+    cause: &str,
+) {
+    let (peer, result) = tls_handshake(addr, config, certs).await;
+    assert!(result.is_err(), "the handshake must be refused");
+
+    wait_for_log(logs, &format!("TLS handshake from {peer} failed:")).await;
+    let warnings = handshake_warnings(logs, peer);
+    let contents = logs.contents();
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one WARN line per refused connection, got: {contents}"
+    );
+    assert!(
+        warnings.iter().all(|line| line.contains(cause)),
+        "the WARN line must name {cause}, got: {warnings:?}"
+    );
+}
+
+/// Builds a QUIC client configuration like `config_client`, but over
+/// [`x25519_only_provider`].
+pub(crate) fn config_client_x25519_only(certs: &Certs) -> ClientConfig {
+    let tls_config = x25519_only_tls_client()
+        .with_root_certificates(certs.root.clone())
+        .with_client_auth_cert(certs.certs.clone(), certs.key.clone_key())
+        .expect("client auth cert");
+    ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(tls_config).expect("QUIC client config"),
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -536,4 +689,17 @@ pub(crate) fn build_bootroot_duplicate_peer_fixture(
         first_client,
         second_client,
     }
+}
+
+#[tokio::test]
+async fn wait_for_log_waits_for_a_line_logged_later() {
+    let (logs, _guard) = capture_logs();
+    let log_later = async {
+        tokio::task::yield_now().await;
+        tracing::info!("logged after the first check");
+    };
+    tokio::join!(
+        wait_for_log(&logs, "logged after the first check"),
+        log_later
+    );
 }
