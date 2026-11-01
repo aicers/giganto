@@ -4,7 +4,7 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.35.0] - 2026-11-01
 
 ### Changed
 
@@ -27,6 +27,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   WAL limit, level base, and file size target. Thread counts above the caps
   decrease; `num_of_thread = i32::MIN` no longer reaches undefined C++
   arithmetic. Other clamping matches RocksDB's existing adjustment.
+- Updated `INGEST_VERSION_REQ` to ">=0.27.0,<0.36.0".
+- Updated `PUBLISH_VERSION_REQ` to ">=0.28.0,<0.36.0".
+- Updated `COMPATIBLE_VERSION_REQ` to ">=0.34.0,<0.36.0".
+- Updated `PEER_VERSION_REQ` to ">=0.35.0,<0.36.0".
 
 ### Fixed
 
@@ -1447,7 +1451,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
-[Unreleased]: https://github.com/aicers/giganto/compare/0.34.0...main
+[0.35.0]: https://github.com/aicers/giganto/compare/0.34.0...0.35.0
 [0.34.0]: https://github.com/aicers/giganto/compare/0.33.0...0.34.0
 [0.33.0]: https://github.com/aicers/giganto/compare/0.32.0...0.33.0
 [0.32.0]: https://github.com/aicers/giganto/compare/0.31.0...0.32.0
