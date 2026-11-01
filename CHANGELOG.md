@@ -12,6 +12,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   or overwrite each other.
 - Statistics exports with no matching records or only malformed records now
   complete with an empty file instead of panicking.
+- GraphQL event connections now return empty edges for `first: 0` and `last: 0`,
+  with the corresponding page-info flag reflecting matching records within the
+  cursor and filter bounds.
 
 ## [0.35.0] - 2026-11-01
 
@@ -46,9 +49,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A time series generator subscription no longer sends a record twice when
   moving from replay to realtime and no longer fails to send records that
   arrive late during the subscription.
-- GraphQL event connections now return empty edges for `first: 0` and `last: 0`,
-  with the corresponding page-info flag reflecting matching records within the
-  cursor and filter bounds.
 - An accepted configuration update that prevents the database from opening no
   longer stops Giganto. It restores the previous configuration and restarts
   once; failures after store opening retain their existing behavior.
