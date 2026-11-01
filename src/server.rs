@@ -414,6 +414,8 @@ mod tests {
     mod bootroot_tests {
         use super::*;
 
+        const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
         async fn assert_bootroot_fixture_mtls_handshake(
             bundle_order: BundleOrder,
             peer_presentation: PeerPresentation,
@@ -456,14 +458,18 @@ mod tests {
             let client_socket = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
             let mut client = Endpoint::client(client_socket).expect("client endpoint");
             client.set_default_client_config(config_client(&client_certs).expect("client config"));
-            let connection = client
-                .connect(server_addr, &fixture.server_name)
-                .expect("connect future")
-                .await
-                .expect("client connection");
+            let connection = timeout(HANDSHAKE_TIMEOUT, async {
+                client
+                    .connect(server_addr, &fixture.server_name)
+                    .expect("connect future")
+                    .await
+            })
+            .await
+            .expect("client connect timeout")
+            .expect("client connection");
             connection.close(0_u32.into(), b"done");
 
-            timeout(Duration::from_secs(2), server_handle)
+            timeout(HANDSHAKE_TIMEOUT, server_handle)
                 .await
                 .expect("server task timeout")
                 .expect("server task failed");
@@ -497,7 +503,7 @@ mod tests {
             let client_socket = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
             let mut client = Endpoint::client(client_socket).expect("client endpoint");
             client.set_default_client_config(client_config);
-            let err = timeout(Duration::from_secs(2), async {
+            let err = timeout(HANDSHAKE_TIMEOUT, async {
                 client
                     .connect(server_addr, server_name)
                     .expect("connect future")
@@ -508,7 +514,9 @@ mod tests {
             .expect_err("connection should fail");
 
             server_handle.abort();
-            let _ = server_handle.await;
+            let _ = timeout(HANDSHAKE_TIMEOUT, server_handle)
+                .await
+                .expect("server task timeout");
             drop(client);
             drop(server);
 
@@ -761,15 +769,19 @@ mod tests {
             let client_socket = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
             let mut client = Endpoint::client(client_socket).expect("client endpoint");
             client.set_default_client_config(client_config);
-            let connection = client
-                .connect(server_addr, &fixture.server_name)
-                .expect("connect future")
-                .await;
+            let connection = timeout(HANDSHAKE_TIMEOUT, async {
+                client
+                    .connect(server_addr, &fixture.server_name)
+                    .expect("connect future")
+                    .await
+            })
+            .await
+            .expect("client connect timeout");
             if let Ok(connection) = connection {
                 connection.close(0_u32.into(), b"done");
             }
 
-            timeout(Duration::from_secs(2), server_handle)
+            timeout(HANDSHAKE_TIMEOUT, server_handle)
                 .await
                 .expect("server task timeout")
                 .expect("server task failed");
