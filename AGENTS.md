@@ -571,7 +571,7 @@ Where the crate handles key material or secrets:
     --no-default-features -- --ignored
   ```
 
-## CI requirements
+## Validation
 
 - The `check` and `lint` jobs in `.github/workflows/ci.yml` run the exact
   invocations the shared linting and formatting rules refer to:
