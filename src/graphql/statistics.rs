@@ -39,7 +39,7 @@ use crate::{
 };
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
-const BYTE_TO_BIT: u64 = 8;
+const BYTE_TO_BIT: u128 = 8;
 const STATS_ALLOWED_KINDS: [RawEventKind; 21] = [
     RawEventKind::Conn,
     RawEventKind::Dns,
@@ -363,13 +363,13 @@ fn gen_statistics(
             if latest_key_timestamp == compare_key_timestamp {
                 for (record, count, size) in &value.stats {
                     if allowed_raw_event_kinds.contains(record) {
-                        total_stats
-                            .entry(*record)
-                            .and_modify(|(stats_count, stats_size)| {
-                                *stats_count += count;
-                                *stats_size += size;
-                            })
-                            .or_insert((*count, *size));
+                        let (stats_count, stats_size) = total_stats.entry(*record).or_default();
+                        *stats_count = stats_count
+                            .checked_add(*count)
+                            .ok_or_else(|| anyhow!("statistics count overflow for {record:?}"))?;
+                        *stats_size = stats_size
+                            .checked_add(*size)
+                            .ok_or_else(|| anyhow!("statistics size overflow for {record:?}"))?;
                     }
                 }
                 next_candidate.push(idx);
@@ -399,10 +399,13 @@ fn gen_statistics(
                 ..Default::default()
             };
             if r_type == RawEventKind::Statistics {
-                stats_detail.bps = Some(calculate_ps(latest_stats.period, size * BYTE_TO_BIT)); // convert to bit size
-                stats_detail.pps = Some(calculate_ps(latest_stats.period, count));
+                stats_detail.bps = Some(calculate_ps(
+                    latest_stats.period,
+                    <u128 as From<u64>>::from(size) * BYTE_TO_BIT,
+                )); // convert to bit size
+                stats_detail.pps = Some(calculate_ps(latest_stats.period, count.into()));
             } else {
-                stats_detail.eps = Some(calculate_ps(latest_stats.period, count));
+                stats_detail.eps = Some(calculate_ps(latest_stats.period, count.into()));
             }
             stats_detail_vec.push(stats_detail);
         }
@@ -434,7 +437,7 @@ fn convert_to_stats_allowed_type(input: &str) -> Result<RawEventKind> {
     }
 }
 
-fn calculate_ps(period: u16, len: u64) -> f64 {
+fn calculate_ps(period: u16, len: u128) -> f64 {
     if let (Some(len), Some(period)) = (NumCast::from(len), NumCast::from(period)) {
         let cal_len: f64 = len;
         let cal_period: f64 = period;
@@ -665,6 +668,52 @@ mod tests {
             assert!(detail.eps.is_none());
             assert_eq!(detail.count, Some(StringNumberU64(60)));
             assert_eq!(detail.size, Some(StringNumberU64(120)));
+        }
+    }
+
+    #[test]
+    fn gen_statistics_checks_aggregation_and_calculates_large_rates() {
+        for (first, second, expected_error) in [
+            ((u64::MAX - 1, 0), (1, 0), None),
+            ((0, u64::MAX - 1), (0, 1), None),
+            ((u64::MAX, 0), (1, 0), Some("count overflow")),
+            ((0, u64::MAX), (0, 1), Some("size overflow")),
+            ((1, 1_u64 << 61), (1, 0), None),
+            ((1, 1), (1, 1), None),
+        ] {
+            let schema = TestSchema::new();
+            let store = schema.db.statistics_store().unwrap();
+            for (core, (count, size)) in [first, second].into_iter().enumerate() {
+                insert_statistics_raw_event_kind(
+                    &store,
+                    1_702_272_560,
+                    "src1",
+                    u32::try_from(core).unwrap(),
+                    3,
+                    RawEventKind::Statistics,
+                    count,
+                    size,
+                );
+            }
+            let mut iters = (0..2)
+                .map(|core| get_statistics_iter(&store, core, "src1", None).peekable())
+                .collect();
+            let allowed = STATS_ALLOWED_KINDS.into_iter().collect::<HashSet<_>>();
+            let result = gen_statistics(&mut iters, "src1", false, &allowed);
+            if let Some(message) = expected_error {
+                assert!(result.unwrap_err().message.contains(message));
+            } else {
+                let stats = result.expect("aggregation should succeed");
+                let detail = &stats.stats[0].detail[0];
+                assert_eq!(detail.count, Some(StringNumberU64(first.0 + second.0)));
+                assert_eq!(detail.size, Some(StringNumberU64(first.1 + second.1)));
+                if first == (1, 1_u64 << 61) {
+                    assert_eq!(detail.bps, Some(18_446_744_073_709_551_616.0 / 3.0));
+                } else if first == (1, 1) {
+                    assert_eq!(detail.bps, Some(5.33));
+                    assert_eq!(detail.pps, Some(0.67));
+                }
+            }
         }
     }
 
