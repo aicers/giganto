@@ -69,7 +69,7 @@ use crate::server::{
 use crate::storage::{BoundaryIter, Database, Direction, RawEventStore, StorageKey};
 use crate::tls_reload::{self, TlsWatch};
 
-const PUBLISH_VERSION_REQ: &str = ">=0.28.0,<0.35.0";
+const PUBLISH_VERSION_REQ: &str = ">=0.28.0,<0.36.0";
 /// Names the publish subsystem tracker in the drain progress log.
 const PUBLISH_DRAIN_LABEL: &str = "publish";
 
