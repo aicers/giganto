@@ -44,8 +44,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A time series generator subscription no longer sends a record twice when
   moving from replay to realtime and no longer fails to send records that
   arrive late during the subscription.
-
-
 - An accepted configuration update that prevents the database from opening no
   longer stops Giganto. It restores the previous configuration and restarts
   once; failures after store opening retain their existing behavior.
