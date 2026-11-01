@@ -185,7 +185,6 @@ async fn handle_statistics(
 ) -> Result<Vec<StatisticsRawEvent>> {
     let db = ctx.data::<Database>()?;
     let mut total_stats: Vec<StatisticsRawEvent> = Vec::new();
-    let mut stats_iters: Vec<Peekable<StatisticsIter<'_, Statistics>>> = Vec::new();
 
     // Configure the protocol HashSet for which statistics output is allowed.
     let raw_event_kinds = if let Some(protocols) = protocols {
@@ -200,6 +199,7 @@ async fn handle_statistics(
 
     // Configure statistics results by sensor.
     for sensor in sensors {
+        let mut stats_iters: Vec<Peekable<StatisticsIter<'_, Statistics>>> = Vec::new();
         for core in 0..MAX_CORE_SIZE {
             let stats_iter = get_statistics_iter(&db.statistics_store()?, core, sensor, time);
             let mut peek_stats_iter = stats_iter.peekable();
@@ -522,6 +522,109 @@ mod tests {
             res.data.to_string(),
             "{statistics: [{sensor: \"src 1\", stats: [{detail: [{protocol: \"Statistics\", bps: 24000000.0, pps: 10000.0, count: \"6000000\", size: \"1800000000\"}]}]}]}"
         );
+    }
+
+    #[tokio::test]
+    async fn statistics_latest_is_independent_per_sensor() {
+        let schema = TestSchema::new();
+        let store = schema.db.statistics_store().unwrap();
+        let t1 = FIXED_STATISTICS_TIMESTAMP_NANOS;
+        let t2 = t1 + 1_000_000_000;
+        let t3 = t2 + 1_000_000_000;
+        for (sensor, timestamp, count) in [
+            ("sensor A", t1, 10),
+            ("sensor A", t2, 20),
+            ("sensor A", t3, 30),
+            ("sensor B", t1, 100),
+        ] {
+            insert_statistics_raw_event_kind(
+                &store,
+                timestamp,
+                sensor,
+                0,
+                60,
+                RawEventKind::Statistics,
+                count,
+                0,
+            );
+        }
+
+        for sensors in [["sensor A", "sensor B"], ["sensor B", "sensor A"]] {
+            // Peer requests preserve the supplied sensor processing order.
+            let query = format!(
+                "{{ statistics(sensors: {sensors:?}, requestFromPeer: true) {{
+                    sensor stats {{ timestamp detail {{ protocol count }} }}
+                }} }}"
+            );
+            let res = schema.execute(&query).await;
+            assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+            let expected = sensors.map(|sensor| {
+                let (timestamp, count) = if sensor == "sensor A" {
+                    (t3, "30")
+                } else {
+                    (t1, "100")
+                };
+                serde_json::json!({
+                    "sensor": sensor,
+                    "stats": [{
+                        "timestamp": timestamp.to_string(),
+                        "detail": [{"protocol": "Statistics", "count": count}]
+                    }]
+                })
+            });
+            assert_eq!(
+                res.data.into_json().unwrap(),
+                serde_json::json!({"statistics": expected}),
+                "sensor processing order: {sensors:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn statistics_latest_with_empty_sensor() {
+        let schema = TestSchema::new();
+        let store = schema.db.statistics_store().unwrap();
+        let t1 = FIXED_STATISTICS_TIMESTAMP_NANOS;
+        let t2 = t1 + 1_000_000_000;
+        let t3 = t2 + 1_000_000_000;
+        for (timestamp, count) in [(t1, 10), (t2, 20), (t3, 30)] {
+            insert_statistics_raw_event_kind(
+                &store,
+                timestamp,
+                "populated",
+                0,
+                60,
+                RawEventKind::Statistics,
+                count,
+                0,
+            );
+        }
+
+        for sensors in [["populated", "empty"], ["empty", "populated"]] {
+            let query = format!(
+                "{{ statistics(sensors: {sensors:?}, requestFromPeer: true) {{
+                    sensor stats {{ timestamp detail {{ protocol count }} }}
+                }} }}"
+            );
+            let res = schema.execute(&query).await;
+            assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+            let expected = sensors.map(|sensor| {
+                let stats = if sensor == "empty" {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([{
+                        "timestamp": t3.to_string(),
+                        "detail": [{"protocol": "Statistics", "count": "30"}]
+                    }])
+                };
+                serde_json::json!({"sensor": sensor, "stats": stats})
+            });
+            assert_eq!(
+                res.data.into_json().unwrap(),
+                serde_json::json!({"statistics": expected}),
+                "sensor processing order: {sensors:?}"
+            );
+        }
     }
 
     #[tokio::test]
