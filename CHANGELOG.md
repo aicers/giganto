@@ -23,6 +23,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   before processing or forwarding requests, including when no records exist.
 - Statistics queries now create a fresh iterator for each sensor, so results
   from one sensor are not reused for another.
+- Statistics aggregation now returns explicit errors on count or size overflow,
+  and bit-rate calculations avoid overflow when converting bytes to bits.
 
 ## [0.35.0] - 2026-11-01
 
@@ -57,9 +59,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A time series generator subscription no longer sends a record twice when
   moving from replay to realtime and no longer fails to send records that
   arrive late during the subscription.
-
-- Statistics aggregation now returns explicit errors on count or size overflow,
-  and bit-rate calculations avoid overflow when converting bytes to bits.
 
 - An accepted configuration update that prevents the database from opening no
   longer stops Giganto. It restores the previous configuration and restarts
