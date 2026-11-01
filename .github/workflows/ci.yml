@@ -1,3 +1,21 @@
+# CHANGE FILTER: `changes` classifies the run's diff, and `check`, `schema`,
+# `test` and `coverage` gate on its `docs_only` output, so a change that only
+# touches inert documentation does not build the crate in nine jobs. `lint` is
+# deliberately ungated: it runs markdownlint, the docs build and the shared
+# instruction-block drift check, which are exactly the checks a docs-only
+# change needs.
+#
+# THE GATE IS FAIL-CLOSED. Each gated job's `if:` runs the job whenever the
+# filter did not positively report docs-only, including when the filter itself
+# failed. Without `!cancelled()` a failing `changes` would skip its dependants
+# instead, and GitHub counts a skipped required status check as a pass.
+#
+# `CI Gate` IS THE REQUIRED STATUS CHECK, not the individual jobs. A matrix job
+# skipped at the job level is never expanded, so a docs-only run reports
+# `test` rather than `test (ubuntu-latest, default)`, and a protection rule
+# naming the expanded contexts would wait forever for statuses that never
+# come. `CI Gate` always reports, under one stable name.
+
 name: CI
 
 # TRIGGERS: `push` is scoped to `main`. Without a branch filter it also matches
@@ -18,8 +36,100 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Change Filter
+    runs-on: ubuntu-latest
+    # Scoped to this job alone. `pull-requests: read` is what
+    # dorny/paths-filter needs to list a pull request's files.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.decide.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # a push diffs against its base commit locally
+
+      # A push carries its base in `github.event.before`. That sha is all-zeros
+      # on a branch's first push and can name a commit a force-push discarded,
+      # so establish that it is real and reachable before diffing. Leaving
+      # `sha` empty skips the filter below, which lands on docs_only=false.
+      - name: Resolve the push base
+        id: base
+        if: github.event_name != 'pull_request'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BEFORE}" ] \
+            && [ "${BEFORE}" != '0000000000000000000000000000000000000000' ] \
+            && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null
+          then
+            echo "sha=${BEFORE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Push base missing or unreachable; running the full suite."
+          fi
+
+      # On `pull_request` the action reads the file list from the API and
+      # ignores `base`; on `push` it diffs against the sha resolved above.
+      #
+      # `docs` is the documentation allowlist that AGENTS.md also uses to
+      # define a documentation-only change. `.agent-instructions.toml` is on
+      # it because the pin is read only by the drift check in the ungated
+      # `lint` job. `all` matches every changed file, so its count is the
+      # size of the change.
+      - name: Filter Paths
+        id: filter
+        if: github.event_name == 'pull_request' || steps.base.outputs.sha != ''
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ steps.base.outputs.sha }}
+          filters: |
+            docs:
+              - "docs/**"
+              - "docs-internal/**"
+              - "**/*.md"
+              - "mkdocs.yml"
+              - ".markdownlint*"
+              - ".agent-instructions.toml"
+              - "LICENSE"
+            code:
+              - "src/**"
+              - "tests/**"
+              - "build.rs"
+              - "Cargo.toml"
+              - "Cargo.lock"
+              - "clippy.toml"
+              - "scripts/**"
+              - ".github/workflows/**"
+              - ".github/cache-cargo/**"
+            all:
+              - "**"
+
+      # Docs-only requires every changed file to be on the `docs` allowlist
+      # (its count equals the count of all changed files) and none to be
+      # code. A path on neither list therefore leaves the change not
+      # docs-only, even next to documentation, and runs the full suite.
+      - name: Decide Docs-Only
+        id: decide
+        env:
+          DOCS_COUNT: ${{ steps.filter.outputs.docs_count }}
+          ALL_COUNT: ${{ steps.filter.outputs.all_count }}
+          CODE: ${{ steps.filter.outputs.code }}
+        run: |
+          if [ -n "${ALL_COUNT}" ] && [ "${ALL_COUNT}" -gt 0 ] \
+            && [ "${DOCS_COUNT}" = "${ALL_COUNT}" ] \
+            && [ "${CODE}" != "true" ]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       matrix:
         include:
@@ -112,6 +222,8 @@ jobs:
         uses: aicers/agent-instructions/check-drift@main
   schema:
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     steps:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -125,6 +237,8 @@ jobs:
           --no-default-features -- --ignored
   test:
     runs-on: ${{ matrix.os }}
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       matrix:
         os: [ ubuntu-latest, macOS-latest ]
@@ -164,6 +278,8 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       matrix:
         feature_set: [ default ]
@@ -205,3 +321,41 @@ jobs:
         with:
           files: lcov-${{ matrix.feature_set }}.info
           fail_ci_if_error: true
+
+  # `always()`, deliberately, and not `!cancelled()`: a cancelled run would
+  # otherwise skip this job, and GitHub counts a skipped required check as a
+  # pass. Running through cancellation lets the assertions below see the
+  # cancelled results and report red. `lint` is among the needs although it
+  # is not gated, so that the one required check covers it too.
+  gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    needs: [changes, lint, check, schema, test, coverage]
+    if: ${{ always() }}
+    steps:
+      # A filter that errored is a defect, not a tolerable outcome. The gated
+      # jobs did still run (their `if:` fails closed), but the breakage has to
+      # be visible rather than absorbed.
+      - name: Assert the change filter succeeded
+        if: ${{ needs.changes.result != 'success' }}
+        run: |
+          echo "Change Filter: ${{ needs.changes.result }}" >&2
+          exit 1
+
+      # `skipped` is a pass here, and only here: it is what a gated job
+      # reports on a docs-only change. `cancelled` is not.
+      - name: Assert every job passed or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "${RESULTS}"
+          bad="$(printf '%s' "${RESULTS}" \
+            | jq -r 'to_entries[]
+                     | select(.value.result != "success" and .value.result != "skipped")
+                     | "  \(.key): \(.value.result)"')"
+          if [ -n "${bad}" ]; then
+            echo "Not green:" >&2
+            echo "${bad}" >&2
+            exit 1
+          fi

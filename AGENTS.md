@@ -571,7 +571,7 @@ Where the crate handles key material or secrets:
     --no-default-features -- --ignored
   ```
 
-## CI requirements
+## Validation
 
 - The `check` and `lint` jobs in `.github/workflows/ci.yml` run the exact
   invocations the shared linting and formatting rules refer to:
@@ -592,10 +592,120 @@ Where the crate handles key material or secrets:
     `mkdocs build --strict`, and the shared instruction-block drift check,
     which fails when the generated regions of this file stop matching the
     release `.agent-instructions.toml` pins.
-- Before committing, ensure those pass for the changed files.
-- Before pushing or opening a PR, run what the `test` job does, on the
-  default features and on `--all-features`: `cargo build <flags> --verbose`
-  and `cargo test <flags> --verbose`. CI runs it on both `ubuntu-latest`
-  and `macOS-latest`.
-- The `coverage` job runs `cargo llvm-cov` and uploads to Codecov. It is
+- `Change Filter` (the `changes` job) decides whether a change is
+  documentation-only. For such a change `check`, `schema`, `test` and
+  `coverage` are skipped and `lint` still runs. `CI Gate` passes only when
+  every job passed or was skipped, and is the check branch protection
+  requires.
+- Run local checks on the host's own operating system: macOS on a Mac,
+  Linux on a Linux host. Do not use a container, a virtual machine or
+  another operating system in its place. A CI job or matrix entry that
+  exists only to cover another operating system or platform is left to CI;
+  every other row applies on any host that can run its commands.
+- A change is documentation-only when every changed path matches the
+  `docs` filter of the `changes` job in `.github/workflows/ci.yml` and none
+  matches its `code` filter. For such a change build or test no code. Run
+  markdownlint over the tracked Markdown, as `lint` does:
+
+  ```sh
+  git ls-files -z --cached --others --exclude-standard '*.md' \
+    | xargs -0 markdownlint-cli2
+  ```
+
+  When the change touches `docs/` or `mkdocs.yml`, also build the manual,
+  in the virtualenv the README's "Documentation" section sets up:
+  `scripts/fetch-theme.sh`, then `mkdocs build --strict`.
+- Local test scope. The `test` job's `cargo test` runs about 2,000 tests
+  in five test binaries, and each `test` cell takes 13 to 25 minutes, most
+  of it compiling the crate. For any other change, run these locally
+  before pushing and leave the rest to CI:
+  - Every code change runs formatting and the three `check`
+    configurations' clippy:
+
+    ```sh
+    cargo fmt -- --check --config group_imports=StdExternalCrate
+    cargo clippy --tests -- -D warnings
+    cargo clippy --no-default-features --features benchmark --tests \
+      -- -D warnings
+    cargo clippy --all-features --tests -- -D warnings
+    ```
+
+    The crate's features enable no dependency features, so after the first
+    configuration the other two recheck only this crate. Clippy covers what
+    `cargo check` would report. Commit any change these make to
+    `Cargo.lock`, which `check` rejects.
+  - For each changed `.rs` file under `src/`, the tests under its module
+    path in the `giganto` binary, on the default features:
+    `cargo test --bin giganto <module path>`. A change to
+    `src/storage/migration.rs` runs
+    `cargo test --bin giganto storage::migration::`, and one to
+    `src/graphql/network.rs` or `src/graphql/network/tests.rs` runs
+    `cargo test --bin giganto graphql::network::`. The filter matches a
+    substring.
+  - A change to a file at the root of the module tree, `src/main.rs`,
+    `src/graphql.rs`, `src/comm.rs` or `src/storage.rs`, runs the whole
+    binary's tests unfiltered: `cargo test --bin giganto`. Compiling
+    dominates the cost, those modules' paths already select most of the
+    suite, and `src/main.rs` has tests directly in its `tests` module that
+    no narrower filter reaches.
+  - The tests of the modules that call the changed code, where the change
+    alters their behaviour. Never run `cargo test` without `--bin`,
+    `--lib` or `--test`: the `gen_schema` binary compiles the same modules
+    and runs their unit tests a second time.
+  - For `src/lib.rs`, the `giganto_proc_macro` derive crate:
+    `cargo test --lib`.
+  - The integration tests under `tests/`, which run the built binary as a
+    child process, when they changed or the code they drive did:
+    `cargo test --test journal_output` for start-up output and logging
+    (`src/logging.rs`, argument and configuration handling in
+    `src/main.rs` and `src/settings.rs`), and
+    `cargo test --test runtime_lifecycle` for the process lifecycle
+    (signal handling and `run_lifecycle` in `src/main.rs`,
+    `src/cancellation.rs`, opening and closing the store in
+    `src/storage.rs`).
+  - Every test written or changed in the branch, and every test the issue
+    or the pull request's test plan names.
+  - `--all-features` adds only `storage_diagnostics`. Run the selected
+    tests with `--all-features` as well, as in
+    `cargo test --all-features --bin giganto graphql::statistics::`, only
+    when the change touches code compiled under
+    `#[cfg(feature = "storage_diagnostics")]` (today in `src/storage.rs`,
+    `src/graphql/statistics.rs` and `src/graphql/status.rs`) or code that
+    such code calls. The `benchmark`-only configuration has no `test` job;
+    its clippy line above is all it needs.
+  - The schema check under "GraphQL schema" above when the change touches
+    `src/graphql.rs`, `src/graphql/` or `src/datetime.rs` (the `DateTime`
+    scalar), or moves the `giganto-client` dependency. A local build with
+    the `cluster` feature on (the default features and `--all-features`)
+    regenerates `schema.graphql` through `build.rs`, but reruns that only
+    when `src/graphql.rs` or a file under `src/graphql/` changed, and not
+    in CI, which sets `CI`. A change to `src/datetime.rs` or
+    `giganto-client` therefore needs the explicit
+    `cargo run --bin gen_schema --no-default-features`. Commit the
+    regenerated file.
+  - `biome ci` when the change touches a `.graphql` file.
+
+  A change with no module of its own, such as `Cargo.toml`, `Cargo.lock`,
+  `build.rs`, a workflow or a script, needs only formatting, the clippy
+  lines and the tests in the "every test written or changed" item. An
+  issue that says which tests to run locally overrides this list.
+- Run each `cargo test` as `ulimit -Sn 8096 && cargo test …` in one shell
+  where the soft open-file limit is below 8096 (macOS defaults to 256).
+  The `test` job raises it on every operating system, and a limit raised
+  in a separate call does not carry over.
+- Left to CI: the `test` cells of the other operating system, the full
+  suites, the feature configurations not selected above, `schema` when the
+  GraphQL API is untouched, and the shared instruction-block drift check
+  in `lint`; the generated regions of this file are never edited here.
+  The `coverage` job runs `cargo llvm-cov` and uploads to Codecov. It is
   not expected to be run locally.
+- When a CI job fails, reproduce that failure locally by name, not by
+  rerunning the whole suite: for `check`, rerun that configuration's
+  clippy line; for `test`, rerun the failing tests with that cell's flags,
+  `cargo test <flags> --bin giganto <test name> -- --exact` (or
+  `--test <file>` for an integration test); for `schema`, regenerate the
+  file with `gen_schema` and commit it. A failure only on the other
+  operating system cannot be reproduced here: fix it from the log and let
+  CI confirm.
+- Before requesting review, ensure every CI job passes on the pushed
+  branch.
