@@ -27,7 +27,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use toml_edit::DocumentMut;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     cancellation::{TaskTracker, drain_with_report},
@@ -151,6 +151,10 @@ impl TomlPeers for PeerIdentity {
 #[allow(clippy::module_name_repetitions, clippy::struct_field_names)]
 #[derive(Clone, Debug)]
 pub struct PeerConns {
+    #[cfg(test)]
+    sensor_gate: Option<Arc<TestGate>>,
+    #[cfg(test)]
+    init_gate: Option<Arc<TestGate>>,
     // Key string is the peer dedup key derived from the certificate identity.
     peer_conns: Arc<RwLock<HashMap<String, Connection>>>,
     // `peer_identities` is in sync with config toml's `peers`;
@@ -168,7 +172,19 @@ pub struct PeerConns {
     config_path: String,
 }
 
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct TestGate {
+    arrived: Notify,
+    release: Notify,
+    finished: Notify,
+}
+
 pub struct Peer {
+    #[cfg(test)]
+    sensor_gate: Option<Arc<TestGate>>,
+    #[cfg(test)]
+    init_gate: Option<Arc<TestGate>>,
     client_config: ClientConfig,
     server_config: ServerConfig,
     local_address: SocketAddr,
@@ -192,6 +208,10 @@ impl Peer {
             config_client(certs).expect("client configuration error with cert, key or root");
 
         Ok(Peer {
+            #[cfg(test)]
+            sensor_gate: None,
+            #[cfg(test)]
+            init_gate: None,
             client_config,
             server_config,
             local_address,
@@ -303,6 +323,10 @@ impl Peer {
 
         // A structure of values common to peer connections.
         let peer_conn_info = PeerConns {
+            #[cfg(test)]
+            sensor_gate: self.sensor_gate,
+            #[cfg(test)]
+            init_gate: self.init_gate,
             peer_conns: Arc::new(RwLock::new(HashMap::new())),
             peer_identities: peer_idents,
             peers,
@@ -620,24 +644,21 @@ fn spawn_peer_info_update<T>(
     }
 }
 
-/// Drops this connection's entries from the shared peer state.
-///
-/// Every path out of a connection handler runs this before returning — the
-/// cancellation path as much as the connection-error path — because `Drop`
-/// cannot `.await` and the entry task's drain ends the moment the handlers
-/// return. Both removals are idempotent, so a handler that already cleaned up
-/// on an earlier lap costs nothing here.
+/// Removes peer state only while this connection still owns its registration.
 async fn remove_peer_state(
     peer_conn_info: &PeerConns,
     remote_peer_dedup_key: &str,
     remote_addr: &str,
+    stable_id: usize,
 ) {
-    peer_conn_info
-        .peer_conns
-        .write()
-        .await
-        .remove(remote_peer_dedup_key);
-    peer_conn_info.peers.write().await.remove(remote_addr);
+    let mut connections = peer_conn_info.peer_conns.write().await;
+    if connections
+        .get(remote_peer_dedup_key)
+        .is_some_and(|conn| conn.stable_id() == stable_id)
+    {
+        connections.remove(remote_peer_dedup_key);
+        peer_conn_info.peers.write().await.remove(remote_addr);
+    }
 }
 
 /// How a connection handler's serve loop ended.
@@ -689,8 +710,11 @@ fn spawn_request_handler(
     stream: (SendStream, RecvStream),
     peer_conn_info: &PeerConns,
     remote_addr: &str,
+    dedup_key: &str,
+    stable_id: usize,
 ) {
     let remote = remote_addr.to_string();
+    let dedup_key = dedup_key.to_string();
     let spawned = tracker.spawn(format!("peer-request-{remote_addr}"), {
         let peer_conn_info = peer_conn_info.clone();
         let remote = remote.clone();
@@ -704,6 +728,11 @@ fn spawn_request_handler(
                 peer_conn_info.peer_sender.clone(),
                 peer_conn_info.config_doc.clone(),
                 &peer_conn_info.config_path,
+                peer_conn_info.peer_conns.clone(),
+                &dedup_key,
+                stable_id,
+                #[cfg(test)]
+                peer_conn_info.sensor_gate.clone(),
             )
             .await
             {
@@ -802,11 +831,8 @@ async fn client_connection(
                     }
                 };
 
-                // From here on this handler owns entries under
-                // `remote_peer_dedup_key` and `remote_addr`, so every way out
-                // of the serve call below — cancellation, connection error, or
-                // a clean close — passes through the same removal before the
-                // handler returns or dials again.
+                // The serve call registers state after init; cleanup removes it only
+                // if this connection still owns the registration.
                 let exit = serve_client_connection(
                     &connection,
                     &mut send,
@@ -820,7 +846,13 @@ async fn client_connection(
                     &token,
                 )
                 .await;
-                remove_peer_state(&peer_conn_info, &remote_peer_dedup_key, &remote_addr).await;
+                remove_peer_state(
+                    &peer_conn_info,
+                    &remote_peer_dedup_key,
+                    &remote_addr,
+                    connection.stable_id(),
+                )
+                .await;
                 match exit {
                     Ok(ConnectionExit::Done) => return Ok(()),
                     Err(e) => return Err(e),
@@ -914,14 +946,6 @@ async fn serve_client_connection(
         )
         .await?;
 
-    // Update to the list of received sensors.
-    update_to_new_sensor_list(
-        recv_sensor_list,
-        remote_addr.to_string(),
-        peer_conn_info.peers.clone(),
-    )
-    .await;
-
     // Update to the list of received peers.
     update_to_new_peer_list(
         recv_peer_list,
@@ -945,12 +969,16 @@ async fn serve_client_connection(
         );
     }
 
-    // Update my peer list
-    peer_conn_info
-        .peer_conns
-        .write()
-        .await
-        .insert(remote_peer_dedup_key.to_string(), connection.clone());
+    // Publish the connection and its initial sensor information together.
+    {
+        let mut connections = peer_conn_info.peer_conns.write().await;
+        connections.insert(remote_peer_dedup_key.to_string(), connection.clone());
+        peer_conn_info
+            .peers
+            .write()
+            .await
+            .insert(remote_addr.to_string(), recv_sensor_list);
+    }
 
     loop {
         select! {
@@ -979,7 +1007,7 @@ async fn serve_client_connection(
                     }
                     Ok(s) => s,
                 };
-                spawn_request_handler(tracker, stream, peer_conn_info, remote_addr);
+                spawn_request_handler(tracker, stream, peer_conn_info, remote_addr, remote_peer_dedup_key, connection.stable_id());
             },
             () = peer_conn_info.notify_sensor.notified() => {
                 fan_out_sensor_list(tracker, peer_conn_info, graphql_port, publish_port).await;
@@ -1031,9 +1059,8 @@ async fn server_connection(
             }
         };
 
-    // From here on this handler owns entries under `remote_peer_dedup_key` and
-    // `remote_addr`, so every way out of the serve call below passes through
-    // the same removal before the handler returns.
+    // The serve call registers state after init; cleanup removes it only if
+    // this connection still owns the registration.
     let outcome = serve_server_connection(
         &connection,
         &mut send,
@@ -1045,7 +1072,13 @@ async fn server_connection(
         &token,
     )
     .await;
-    remove_peer_state(&peer_conn_info, &remote_peer_dedup_key, &remote_addr).await;
+    remove_peer_state(
+        &peer_conn_info,
+        &remote_peer_dedup_key,
+        &remote_addr,
+        connection.stable_id(),
+    )
+    .await;
     outcome
 }
 
@@ -1090,13 +1123,11 @@ async fn serve_server_connection(
         )
         .await?;
 
-    // Update to the list of received sensors.
-    update_to_new_sensor_list(
-        recv_sensor_list,
-        remote_addr.to_string(),
-        peer_conn_info.peers.clone(),
-    )
-    .await;
+    #[cfg(test)]
+    if let Some(gate) = &peer_conn_info.init_gate {
+        gate.arrived.notify_one();
+        gate.release.notified().await;
+    }
 
     // Update to the list of received peers.
     update_to_new_peer_list(
@@ -1121,12 +1152,16 @@ async fn serve_server_connection(
         );
     }
 
-    // Update my peer list
-    peer_conn_info
-        .peer_conns
-        .write()
-        .await
-        .insert(remote_peer_dedup_key.to_string(), connection.clone());
+    // Publish the connection and its initial sensor information together.
+    {
+        let mut connections = peer_conn_info.peer_conns.write().await;
+        connections.insert(remote_peer_dedup_key.to_string(), connection.clone());
+        peer_conn_info
+            .peers
+            .write()
+            .await
+            .insert(remote_addr.to_string(), recv_sensor_list);
+    }
 
     loop {
         select! {
@@ -1155,7 +1190,7 @@ async fn serve_server_connection(
                     }
                     Ok(s) => s,
                 };
-                spawn_request_handler(tracker, stream, peer_conn_info, remote_addr);
+                spawn_request_handler(tracker, stream, peer_conn_info, remote_addr, remote_peer_dedup_key, connection.stable_id());
             },
             () = peer_conn_info.notify_sensor.notified() => {
                 fan_out_sensor_list(tracker, peer_conn_info, graphql_port, publish_port).await;
@@ -1173,6 +1208,10 @@ async fn handle_request(
     sender: Sender<PeerIdentity>,
     config_doc: SharedConfigDoc,
     path: &str,
+    peer_conns: Arc<RwLock<HashMap<String, Connection>>>,
+    dedup_key: &str,
+    stable_id: usize,
+    #[cfg(test)] sensor_gate: Option<Arc<TestGate>>,
 ) -> Result<()> {
     let (msg_type, msg_buf) = receive_peer_data(&mut recv).await?;
     match msg_type {
@@ -1192,7 +1231,28 @@ async fn handle_request(
         PeerCode::UpdateSensorList => {
             let update_sensor_list = bincode::deserialize::<PeerInfo>(&msg_buf)
                 .map_err(|e| anyhow!("Failed to deserialize sensor list: {e}"))?;
-            update_to_new_sensor_list(update_sensor_list, remote_addr, peers).await;
+            #[cfg(test)]
+            if let Some(gate) = &sensor_gate {
+                gate.arrived.notify_one();
+                gate.release.notified().await;
+            }
+            {
+                let connections = peer_conns.read().await;
+                if connections
+                    .get(dedup_key)
+                    .is_some_and(|conn| conn.stable_id() == stable_id)
+                {
+                    peers.write().await.insert(remote_addr, update_sensor_list);
+                } else {
+                    debug!("Ignoring sensor update from obsolete peer connection {dedup_key}");
+                }
+                // Keep the stream alive through the stable ID comparison.
+                drop(recv);
+            }
+            #[cfg(test)]
+            if let Some(gate) = &sensor_gate {
+                gate.finished.notify_one();
+            }
         }
     }
     Ok(())
@@ -1382,6 +1442,7 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 async fn update_to_new_sensor_list(
     recv_sensor_list: PeerInfo,
     remote_addr: String,
@@ -1743,6 +1804,8 @@ pub mod tests {
             let doc = "peers = []".parse::<DocumentMut>().unwrap();
             let config = TempConfig::from_doc(&doc);
             let peer_conn_info = PeerConns {
+                sensor_gate: None,
+                init_gate: None,
                 peer_conns,
                 peer_identities: peer_idents,
                 peers,
@@ -2683,6 +2746,8 @@ pub mod tests {
         let config = TempConfig::from_doc(&doc);
 
         let peer_conn_info = PeerConns {
+            sensor_gate: None,
+            init_gate: None,
             peer_conns,
             peer_identities: peer_idents.clone(),
             peers: peers.clone(),
@@ -3009,6 +3074,10 @@ pub mod tests {
             sender,
             Arc::new(Mutex::new(doc)),
             config.path(),
+            Arc::new(RwLock::new(HashMap::new())),
+            "test",
+            server_conn.stable_id(),
+            None,
         )
         .await
         .unwrap_err();
@@ -3045,6 +3114,10 @@ pub mod tests {
             sender,
             Arc::new(Mutex::new(doc)),
             config.path(),
+            Arc::new(RwLock::new(HashMap::new())),
+            "test",
+            server_conn.stable_id(),
+            None,
         )
         .await
         .unwrap_err();
@@ -3988,6 +4061,10 @@ pub mod tests {
                     sender,
                     Arc::new(Mutex::new(doc)),
                     &config_path,
+                    Arc::new(RwLock::new(HashMap::new())),
+                    "test",
+                    server_conn.stable_id(),
+                    None,
                 )
                 .await
                 .unwrap();
@@ -4004,6 +4081,86 @@ pub mod tests {
 
         assert!(peer_list.read().await.contains(&new_peer));
         assert_eq!(receiver.recv().await.unwrap(), new_peer);
+    }
+
+    #[tokio::test]
+    async fn unregistered_sensor_update_is_ignored() {
+        init_crypto();
+        let (endpoint, addr) = setup_server_endpoint();
+        let ConnectedPeers {
+            client_endpoint: _client_endpoint,
+            server_conn,
+            client_conn,
+        } = connect_client_server(&endpoint, addr).await;
+        let (mut send, _recv) = client_conn.open_bi().await.unwrap();
+        send_peer_data(
+            &mut send,
+            PeerCode::UpdateSensorList,
+            peer_info(&["request"], Some(1), Some(2)),
+        )
+        .await
+        .unwrap();
+        send.finish().unwrap();
+        let stream = server_conn.accept_bi().await.unwrap();
+        let (state, _config) = build_peer_conn_info("127.0.0.1:1111".parse().unwrap());
+        handle_request(
+            stream,
+            state.local_address,
+            "127.0.0.1".to_string(),
+            state.peer_identities.clone(),
+            state.peers.clone(),
+            state.peer_sender.clone(),
+            state.config_doc.clone(),
+            &state.config_path,
+            state.peer_conns.clone(),
+            "missing",
+            server_conn.stable_id(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(state.peers.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_server_init_does_not_publish_peer_state() {
+        init_crypto();
+        let (endpoint, addr) = setup_server_endpoint();
+        let (mut state, _config) = build_peer_conn_info("127.0.0.1:1111".parse().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        state.config_path = dir
+            .path()
+            .join("missing.toml")
+            .to_string_lossy()
+            .into_owned();
+        let tracker = TaskTracker::new();
+        let (_client_endpoint, _conn, streams, task) = paired_server_connection(
+            &endpoint,
+            addr,
+            state.clone(),
+            tracker,
+            CancellationToken::new(),
+            true,
+        )
+        .await;
+        let (mut send, mut recv) = streams.unwrap();
+        let peer = PeerIdentity {
+            addr: "127.0.0.1:7001".parse().unwrap(),
+            hostname: "new-peer".to_string(),
+        };
+        let _ = request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+            &mut send,
+            &mut recv,
+            PeerCode::UpdatePeerList,
+            (
+                HashSet::from([peer]),
+                peer_info(&["init"], Some(1), Some(2)),
+            ),
+        )
+        .await;
+        assert!(task.await.unwrap().is_err());
+        assert!(state.peer_conns.read().await.is_empty());
+        assert!(state.peers.read().await.is_empty());
     }
 
     #[tokio::test]
@@ -4035,6 +4192,11 @@ pub mod tests {
             let config_path = config_path.clone();
             async move {
                 let stream = server_conn.accept_bi().await.unwrap();
+                let stable_id = server_conn.stable_id();
+                let connections = Arc::new(RwLock::new(HashMap::from([(
+                    "test".to_string(),
+                    server_conn,
+                )])));
                 handle_request(
                     stream,
                     local_addr,
@@ -4044,6 +4206,10 @@ pub mod tests {
                     sender,
                     Arc::new(Mutex::new(doc)),
                     &config_path,
+                    connections,
+                    "test",
+                    stable_id,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -4888,24 +5054,127 @@ pub mod tests {
 
         use super::super::{
             PEER_DRAIN_LABEL, PEER_VERSION_REQ, PeerCode, PeerConns, PeerIdentity, PeerInfo, Peers,
-            client_connection, receive_peer_data, request_init_info, response_init_info,
-            send_peer_data, shutdown_peer, spawn_request_handler,
+            TestGate, client_connection, receive_peer_data, remove_peer_state, request_init_info,
+            response_init_info, send_peer_data, shutdown_peer, spawn_request_handler,
             update_to_new_peer_list_with_writer,
         };
         use super::fixtures::{
             ConnectedPeers, MOCK_READY_TIMEOUT, PROTOCOL_VERSION, TEST_DRAIN_REPORT_INTERVAL,
             TEST_TIMEOUT, TempConfig, TestClient, accept_incoming, accept_quic_with_retry,
-            build_peer_conn_info, build_peer_conn_info_with_sensors, capture_logs,
-            connect_client_handshake, connect_client_server, create_certs, create_node2_certs,
-            init_client, init_crypto, init_shared_client_config, paired_server_connection,
-            peer_identity, peer_info, retry_dial, run_peer_with_ready, setup_server_endpoint,
-            setup_server_endpoint_with_certs, small_stream_window_client_endpoint,
-            test_connect_name, test_connect_name_node2, wait_for_log, wait_for_peer_info,
-            with_timeout,
+            assert_peer_info_eq, build_peer_conn_info, build_peer_conn_info_with_sensors,
+            capture_logs, connect_client_handshake, connect_client_server, create_certs,
+            create_node2_certs, init_client, init_crypto, init_shared_client_config,
+            paired_server_connection, peer_identity, peer_info, retry_dial, run_peer_with_ready,
+            setup_server_endpoint, setup_server_endpoint_with_certs,
+            small_stream_window_client_endpoint, test_connect_name, test_connect_name_node2,
+            wait_for_log, wait_for_peer_info, with_timeout,
         };
         use crate::cancellation::{DrainOutcome, TaskTracker, drain_with_report};
         use crate::comm::peer::Peer;
         use crate::server::config_server;
+
+        #[tokio::test]
+        async fn stale_sensor_update_does_not_revive_removed_peer() {
+            exercise_stale_sensor_update(false).await;
+        }
+
+        #[tokio::test]
+        async fn stale_sensor_updates_and_cleanup_do_not_replace_reconnected_peer() {
+            exercise_stale_sensor_update(true).await;
+        }
+
+        async fn exercise_stale_sensor_update(reconnect: bool) {
+            init_crypto();
+            let (endpoint, addr) = setup_server_endpoint();
+            let (mut state, _config) = build_peer_conn_info(local_address());
+            let gate = Arc::new(TestGate::default());
+            state.sensor_gate = Some(gate.clone());
+            let tracker = TaskTracker::new();
+            let token = CancellationToken::new();
+            let (_client_endpoint, conn_a, streams, task_a) = paired_server_connection(
+                &endpoint,
+                addr,
+                state.clone(),
+                tracker.clone(),
+                token.clone(),
+                true,
+            )
+            .await;
+            let (mut send, mut recv) = streams.unwrap();
+            let init_a = peer_info(&["init-a"], Some(1), Some(2));
+            request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+                &mut send,
+                &mut recv,
+                PeerCode::UpdatePeerList,
+                (HashSet::new(), init_a),
+            )
+            .await
+            .unwrap();
+            wait_for_conns("A registration", &state, |conns| !conns.is_empty()).await;
+            let (key, id_a) = {
+                let conns = state.peer_conns.read().await;
+                let (key, conn) = conns.iter().next().unwrap();
+                (key.clone(), conn.stable_id())
+            };
+            let ip = "127.0.0.1".to_string();
+            let (mut request, _recv) = conn_a.open_bi().await.unwrap();
+            send_peer_data(
+                &mut request,
+                PeerCode::UpdateSensorList,
+                peer_info(&["request-a"], Some(3), Some(4)),
+            )
+            .await
+            .unwrap();
+            request.finish().unwrap();
+            with_timeout("sensor gate arrival", gate.arrived.notified()).await;
+            conn_a.close(0_u32.into(), b"closed");
+            with_timeout("A cleanup", task_a).await.unwrap().unwrap();
+            assert!(!state.peer_conns.read().await.contains_key(&key));
+            assert!(!state.peers.read().await.contains_key(&ip));
+            if !reconnect {
+                gate.release.notify_one();
+                with_timeout("sensor update completion", gate.finished.notified()).await;
+                assert!(!state.peers.read().await.contains_key(&ip));
+                return;
+            }
+
+            let (_client_endpoint_b, conn_b, streams, task_b) = paired_server_connection(
+                &endpoint,
+                addr,
+                state.clone(),
+                tracker.clone(),
+                token.clone(),
+                true,
+            )
+            .await;
+            let (mut send, mut recv) = streams.unwrap();
+            let init_b = peer_info(&["init-b"], Some(5), Some(6));
+            request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+                &mut send,
+                &mut recv,
+                PeerCode::UpdatePeerList,
+                (HashSet::new(), peer_info(&["init-b"], Some(5), Some(6))),
+            )
+            .await
+            .unwrap();
+            wait_for_conns("B registration", &state, |conns| conns.contains_key(&key)).await;
+            let id_b = state.peer_conns.read().await.get(&key).unwrap().stable_id();
+            assert_ne!(id_a, id_b);
+            gate.release.notify_one();
+            with_timeout("sensor update completion", gate.finished.notified()).await;
+            assert_peer_info_eq(state.peers.read().await.get(&ip).unwrap(), &init_b);
+            remove_peer_state(&state, &key, &ip, id_a).await;
+            assert_eq!(
+                state.peer_conns.read().await.get(&key).unwrap().stable_id(),
+                id_b
+            );
+            assert_peer_info_eq(state.peers.read().await.get(&ip).unwrap(), &init_b);
+            remove_peer_state(&state, &key, &ip, id_b).await;
+            assert!(!state.peer_conns.read().await.contains_key(&key));
+            assert!(!state.peers.read().await.contains_key(&ip));
+            conn_b.close(0_u32.into(), b"closed");
+            with_timeout("B cleanup", task_b).await.unwrap().unwrap();
+        }
 
         /// A dial that shutdown has already made unservable must fail rather
         /// than hang; this caps how long a test waits to find that out.
@@ -4992,13 +5261,22 @@ pub mod tests {
             /// listener, seeded with `sensors` and with `peer_idents` as the
             /// bootstrap peer list.
             async fn start(sensors: &[&str], peer_idents: HashSet<PeerIdentity>) -> Self {
+                Self::start_with_gate(sensors, peer_idents, None).await
+            }
+
+            async fn start_with_gate(
+                sensors: &[&str],
+                peer_idents: HashSet<PeerIdentity>,
+                gate: Option<Arc<super::super::TestGate>>,
+            ) -> Self {
                 init_crypto();
-                let peer = Peer::new(
+                let mut peer = Peer::new(
                     "127.0.0.1:0".parse().expect("peer bind address"),
                     &create_certs(),
                     0,
                 )
                 .expect("peer");
+                peer.init_gate = gate;
                 let ingest_sensors: crate::comm::IngestSensors = Arc::new(RwLock::new(
                     sensors.iter().map(|s| (*s).to_string()).collect(),
                 ));
@@ -5446,7 +5724,14 @@ pub mod tests {
             let stream = with_timeout("request stream timeout", server_conn.accept_bi())
                 .await
                 .expect("accept the request stream");
-            spawn_request_handler(&tracker, stream, &peer_conn_info, BLOCKED_REMOTE);
+            spawn_request_handler(
+                &tracker,
+                stream,
+                &peer_conn_info,
+                BLOCKED_REMOTE,
+                "test",
+                server_conn.stable_id(),
+            );
             let task_name = format!("peer-request-{BLOCKED_REMOTE}");
 
             // The handler has received its frame and taken the only slot, so
@@ -5499,22 +5784,14 @@ pub mod tests {
         /// nobody polls it, so only the explicit close can let that send fail,
         /// and without it the drain — and so the join below — never completes.
         ///
-        /// The park is arranged without a sleep. The test owns the shared
-        /// `peers` map the harness runs on, so holding its write lock stops
-        /// the inbound connection handler in `update_to_new_sensor_list` —
-        /// after it has taken the peer list off the init exchange and before
-        /// it enqueues anything from it. With the handler held there the test
-        /// fills the channel through the entry task's sender and cancels the
-        /// token, neither of which awaits, so the entry task cannot drain a
-        /// slot back before it observes cancellation; releasing the lock then
-        /// walks the handler straight into a send that cannot complete on its
-        /// own.
+        /// The init gate parks the handler before it enqueues the peer list.
         #[tokio::test]
         async fn a_send_parked_during_shutdown_is_released_and_a_later_one_refused() {
             let (logs, _guard) = capture_logs();
-            let harness = PeerHarness::start(&[], HashSet::new()).await;
+            let gate = Arc::new(super::super::TestGate::default());
+            let harness =
+                PeerHarness::start_with_gate(&[], HashSet::new(), Some(gate.clone())).await;
             let peer_sender = harness.peer_sender.clone();
-            let shared_peers = harness.peers.clone();
             let blocked_peer = peer_identity(
                 "127.0.0.1:7004".parse().expect("addr"),
                 "blocked-during-shutdown",
@@ -5527,9 +5804,6 @@ pub mod tests {
             // in for the release the test is after.
             let (_conn, mut send, mut recv) = connect_client_handshake(harness.addr).await;
 
-            // Taken before the init exchange, so the handler cannot get past
-            // the sensor-list update ahead of it.
-            let peers_guard = shared_peers.write().await;
             request_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
                 &mut send,
                 &mut recv,
@@ -5538,8 +5812,7 @@ pub mod tests {
             )
             .await
             .expect("init exchange");
-            // The handler answers only after it has read that peer list, so it
-            // is now parked on the write lock above with the list in hand.
+            with_timeout("init gate arrival", gate.arrived.notified()).await;
 
             // Nothing awaits between here and the cancel: the entry task
             // cannot run, so it can neither hand a slot back nor drain one
@@ -5563,7 +5836,7 @@ pub mod tests {
                 "the handler's next send must have nowhere to go"
             );
             harness.token.cancel();
-            drop(peers_guard);
+            gate.release.notify_one();
 
             // The handler now walks into a send on a full channel the entry
             // task has stopped receiving from. Without `receiver.close()` the
