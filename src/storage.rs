@@ -3814,17 +3814,21 @@ mod tests {
         let sensor = "oplog_longer_sensor";
         register_sensor(&db, sensor);
 
+        // Two hours old sits past the one-hour data retention and inside the
+        // four-hour operation log retention. The margins keep a loaded machine
+        // from carrying the wall clock past either cutoff before the first
+        // pass runs.
         let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
-        let ten_secs_ago = now_nanos - 10_000_000_000;
-        let conn = conn_key(sensor, ten_secs_ago);
-        insert_conn(&db.conn_store().unwrap(), sensor, ten_secs_ago, b"old");
-        let recent_oplog = insert_oplog(&db, ten_secs_ago);
-        let expired_oplog = insert_oplog(&db, now_nanos - 30_000_000_000);
+        let two_hours_ago = now_nanos - 7_200_000_000_000;
+        let conn = conn_key(sensor, two_hours_ago);
+        insert_conn(&db.conn_store().unwrap(), sensor, two_hours_ago, b"old");
+        let recent_oplog = insert_oplog(&db, two_hours_ago);
+        let expired_oplog = insert_oplog(&db, now_nanos - 18_000_000_000_000);
 
         let (cancel, task) = spawn_retention(
             &db,
-            std::time::Duration::from_secs(2),
-            std::time::Duration::from_secs(20),
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(4 * 3600),
         );
 
         wait_until(
@@ -3849,16 +3853,20 @@ mod tests {
         let sensor = "oplog_shorter_sensor";
         register_sensor(&db, sensor);
 
+        // Two hours old sits past the one-hour operation log retention and
+        // inside the four-hour data retention. The margins keep a loaded
+        // machine from carrying the wall clock past either cutoff before the
+        // first pass runs.
         let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
-        let ten_secs_ago = now_nanos - 10_000_000_000;
-        let conn = conn_key(sensor, ten_secs_ago);
-        insert_conn(&db.conn_store().unwrap(), sensor, ten_secs_ago, b"old");
-        let oplog = insert_oplog(&db, ten_secs_ago);
+        let two_hours_ago = now_nanos - 7_200_000_000_000;
+        let conn = conn_key(sensor, two_hours_ago);
+        insert_conn(&db.conn_store().unwrap(), sensor, two_hours_ago, b"old");
+        let oplog = insert_oplog(&db, two_hours_ago);
 
         let (cancel, task) = spawn_retention(
             &db,
-            std::time::Duration::from_secs(20),
-            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(4 * 3600),
+            std::time::Duration::from_secs(3600),
         );
 
         wait_until(
