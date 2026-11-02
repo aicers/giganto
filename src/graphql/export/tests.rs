@@ -221,6 +221,94 @@ fn export_statistic_file_orders_multiple_iterators() {
     assert_eq!(extracted_times, expected);
 }
 
+#[test]
+fn statistics_export_skips_malformed_records_without_losing_readable_records() {
+    // Each tuple is (core, timestamp, readable). Values identify each record.
+    let cases: &[&[(u32, i64, bool)]] = &[
+        &[(0, 1, false), (1, 1, true), (1, 2, true)],
+        &[
+            (0, 1, false),
+            (1, 1, true),
+            (1, 4, true),
+            (2, 2, true),
+            (2, 5, true),
+            (3, 3, true),
+            (3, 10, true),
+            (4, 1, false),
+            (5, 2, false),
+        ],
+        &[
+            (0, 1, false),
+            (1, 1, true),
+            (2, 1, false),
+            (3, 2, true),
+            (4, 1, false),
+            (5, 3, true),
+        ],
+        &[
+            (0, 1, false),
+            (0, 3, true),
+            (0, 4, false),
+            (0, 5, true),
+            (1, 2, true),
+            (2, 4, true),
+            (2, 6, true),
+        ],
+        &[(0, 1, true), (1, 1, true), (0, 2, true), (1, 2, true)],
+    ];
+    for records in cases {
+        let dir = tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let store = db.statistics_store().unwrap();
+        for &(core, timestamp, readable) in *records {
+            if readable {
+                let count = u64::try_from(timestamp).unwrap() * 10 + u64::from(core);
+                insert_statistics_raw_event(&store, timestamp, "src1", core, 7, count, count + 100);
+            } else {
+                let mut key = b"src1\0".to_vec();
+                key.extend_from_slice(&core.to_be_bytes());
+                key.push(0);
+                key.extend_from_slice(&timestamp.to_be_bytes());
+                store.append(&key, b"invalid").unwrap();
+            }
+        }
+        let mut filter = export_filter_base("statistics");
+        filter.sensor_id = "src1".to_string();
+        let progress_path = dir.path().join("progress.dump");
+        let done_path = dir.path().join("done.json");
+        super::process_statistics_export(
+            &store,
+            &filter,
+            "json",
+            ExportClaim {
+                file: fs::File::create(&progress_path).unwrap(),
+                progress_path: progress_path.clone(),
+                done_path: done_path.clone(),
+                remove_on_drop: true,
+            },
+        )
+        .unwrap();
+        assert!(!progress_path.exists());
+        let output = fs::read_to_string(done_path).unwrap();
+        let actual: Vec<serde_json::Value> = output
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let mut expected: Vec<_> = records.iter().filter(|record| record.2).collect();
+        expected.sort_by_key(|record| (record.1, record.0));
+        assert_eq!(actual.len(), expected.len());
+        for (value, &&(core, timestamp, _)) in actual.iter().zip(&expected) {
+            let count = u64::try_from(timestamp).unwrap() * 10 + u64::from(core);
+            assert_eq!(value["time"], format!("0.{timestamp:09}"));
+            assert_eq!(value["sensor"], "src1");
+            assert_eq!(value["core"], core);
+            assert_eq!(value["period"], 7);
+            assert_eq!(value["stats"][0][1], count);
+            assert_eq!(value["stats"][0][2], count + 100);
+        }
+    }
+}
+
 #[tokio::test]
 async fn export_rejects_log_with_addr_filter() {
     let query = r#"
