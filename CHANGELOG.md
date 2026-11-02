@@ -4,6 +4,15 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Results of exports of the same kind started in the same second no longer mix
+  or overwrite each other.
+- Statistics exports with no matching records or only malformed records now
+  complete with an empty file instead of panicking.
+
 ## [0.35.0] - 2026-11-01
 
 ### Changed
@@ -1451,6 +1460,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.35.0...main
 [0.35.0]: https://github.com/aicers/giganto/compare/0.34.0...0.35.0
 [0.34.0]: https://github.com/aicers/giganto/compare/0.33.0...0.34.0
 [0.33.0]: https://github.com/aicers/giganto/compare/0.32.0...0.33.0

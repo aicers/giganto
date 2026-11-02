@@ -4,7 +4,7 @@ mod tests;
 use std::{
     borrow::Cow,
     fmt::Display,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Write,
     iter::Peekable,
     net::IpAddr,
@@ -19,7 +19,7 @@ use std::{
     },
 };
 
-use anyhow::anyhow;
+use anyhow::{Context as _, anyhow};
 use async_graphql::{Context, InputObject, Object, Result};
 use giganto_client::{
     RawEventKind,
@@ -2068,44 +2068,140 @@ impl RawEventFilter for ExportFilter {
     }
 }
 
-fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) -> Result<String> {
-    let db = ctx.data::<Database>()?;
-    let path = ctx.data::<PathBuf>()?;
-    let node_name = ctx.data::<NodeName>()?;
-    let tracker = ctx.data::<TaskTracker>()?;
+struct ExportClaim {
+    file: File,
+    progress_path: PathBuf,
+    done_path: PathBuf,
+    remove_on_drop: bool,
+}
 
-    // set export filename & file path
-    if !path.exists() {
-        fs::create_dir_all(path)?;
+impl ExportClaim {
+    fn claim(dir: &Path, base: &str, extension: &str) -> Result<Self> {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("creating export directory {}", dir.display()))?;
+        for n in 0..1000 {
+            let suffix = if n == 0 {
+                String::new()
+            } else {
+                format!("_{n}")
+            };
+            let done_path = dir.join(format!("{base}{suffix}.{extension}"));
+            let progress_path = dir.join(format!("{base}{suffix}.{extension}.dump"));
+            let file = match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&progress_path)
+            {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| {
+                            format!("creating export progress file {}", progress_path.display())
+                        })
+                        .map_err(Into::into);
+                }
+            };
+            let claim = Self {
+                file,
+                progress_path,
+                done_path,
+                remove_on_drop: true,
+            };
+            match fs::symlink_metadata(&claim.done_path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(claim),
+                Ok(_) => claim.discard()?,
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| {
+                            format!("inspecting export file {}", claim.done_path.display())
+                        })
+                        .map_err(Into::into);
+                }
+            }
+        }
+        Err(anyhow!(
+            "no available export path in {} for {base}.{extension}",
+            dir.display()
+        )
+        .into())
     }
 
+    fn discard(mut self) -> Result<()> {
+        fs::remove_file(&self.progress_path).with_context(|| {
+            format!(
+                "removing export progress file {}",
+                self.progress_path.display()
+            )
+        })?;
+        self.remove_on_drop = false;
+        Ok(())
+    }
+
+    fn rename(mut self) -> Result<String> {
+        fs::rename(&self.progress_path, &self.done_path).with_context(|| {
+            format!(
+                "renaming export progress file {} to {}",
+                self.progress_path.display(),
+                self.done_path.display()
+            )
+        })?;
+        self.remove_on_drop = false;
+        Ok(format!("export file success: {}", self.done_path.display()))
+    }
+}
+
+impl Drop for ExportClaim {
+    fn drop(&mut self) {
+        if self.remove_on_drop
+            && let Err(e) = fs::remove_file(&self.progress_path)
+        {
+            warn!(
+                "Failed to remove export progress file {}: {e}",
+                self.progress_path.display()
+            );
+        }
+    }
+}
+
+fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) -> Result<String> {
+    let now = jiff::Zoned::now();
+    start_export(
+        ctx.data::<Database>()?,
+        ctx.data::<PathBuf>()?,
+        ctx.data::<NodeName>()?,
+        ctx.data::<TaskTracker>()?,
+        filter,
+        export_type,
+        &now,
+    )
+}
+
+fn start_export(
+    db: &Database,
+    path: &Path,
+    node_name: &NodeName,
+    tracker: &TaskTracker,
+    filter: &ExportFilter,
+    export_type: String,
+    now: &jiff::Zoned,
+) -> Result<String> {
     info!(
         "File export request received. Protocol: {}, Sensor: {}, Format: {export_type}",
         filter.protocol, filter.sensor_id
     );
-    let filename = format!(
-        "{}_{}{}.{export_type}",
+    let base = format!(
+        "{}_{}{}",
         filter.protocol,
         filter
             .kind
             .as_ref()
             .map_or(String::new(), |k| format!("{k}_")),
-        jiff::Zoned::now().strftime("%Y%m%d_%H%M%S"),
-    );
-    let export_progress_path = path.join(format!("{filename}.dump").replace(' ', ""));
-    let export_done_path = path.join(filename.replace(' ', ""));
-    let download_path = format!("{}@{}", export_done_path.display(), node_name.0);
-
-    export_by_protocol(
-        tracker,
-        db.clone(),
-        filter,
-        export_type,
-        export_done_path,
-        export_progress_path,
-    )?;
-
-    Ok(download_path)
+        now.strftime("%Y%m%d_%H%M%S")
+    )
+    .replace(' ', "");
+    let done_path = export_by_protocol(tracker, db.clone(), filter, export_type, path, &base)?;
+    Ok(format!("{}@{}", done_path.display(), node_name.0))
 }
 
 #[Object]
@@ -2192,7 +2288,7 @@ impl ExportQuery {
 ///
 /// Permitted loss and cleanup: the task ignores its cancellation token on
 /// purpose — an accepted export runs to completion and is only ever waited on,
-/// never cancelled, so no partial-file cleanup branch is owed here. New exports
+/// never cancelled. The claim cleans up partial output on failure. New exports
 /// stop arriving because web-first shutdown stops the web server accepting
 /// requests, not because this path refuses them; a `SpawnError` here therefore
 /// only happens in the narrow window where the tracker is already closed, and
@@ -2202,20 +2298,22 @@ fn export_by_protocol(
     db: Database,
     filter: &ExportFilter,
     export_type: String,
-    export_done_path: PathBuf,
-    export_progress_path: PathBuf,
-) -> Result<()> {
+    path: &Path,
+    base: &str,
+) -> Result<PathBuf> {
     let filter = filter.clone();
     let protocol = filter.protocol.as_str();
 
     macro_rules! spawn_export {
-        ($store_method:ident, $process_fn:ident) => {
+        ($store_method:ident, $process_fn:ident) => {{
+            let claim = ExportClaim::claim(path, base, &export_type)?;
+            let done_path = claim.done_path.clone();
             // The token is ignored: an accepted export is waited on by the
             // drain, never cancelled, so it runs to completion.
-            tracker.spawn("export", move |_cancel| async move {
+            let spawn_result = tracker.spawn("export", move |_cancel| async move {
                 #[cfg(test)]
                 let _finished_guard = {
-                    let control = export_done_path.parent().and_then(|destination| {
+                    let control = claim.done_path.parent().and_then(|destination| {
                         export_test_controls()
                             .lock()
                             .expect("lock")
@@ -2232,25 +2330,21 @@ fn export_by_protocol(
                     }
                 };
 
+                let owned_claim = claim;
                 if let Ok(store) = db.$store_method() {
-                    match $process_fn(
-                        &store,
-                        &filter,
-                        &export_type,
-                        &export_done_path,
-                        &export_progress_path,
-                    ) {
+                    match $process_fn(&store, &filter, &export_type, owned_claim) {
                         Ok(result) => info!("{}", result),
                         Err(e) => error!("Failed to export file: {:?}", e),
                     }
                 } else {
                     error!("Failed to open db store");
                 }
-            })
-        };
+            });
+            (spawn_result, done_path)
+        }};
     }
 
-    let spawn_result = match protocol {
+    let (spawn_result, done_path) = match protocol {
         "conn" => spawn_export!(conn_store, process_export),
         "dns" => spawn_export!(dns_store, process_export),
         "malformed_dns" => spawn_export!(malformed_dns_store, process_export),
@@ -2303,15 +2397,14 @@ fn export_by_protocol(
         error!("Failed to register export task for draining: {e}");
     }
 
-    Ok(())
+    Ok(done_path)
 }
 
 fn process_export<T, N>(
     store: &RawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
-    export_done_path: &Path,
-    export_progress_path: &Path,
+    claim: ExportClaim,
 ) -> Result<String>
 where
     T: DeserializeOwned + Display + EventFilter + JsonOutput<N> + Send + Serialize,
@@ -2330,21 +2423,14 @@ where
         .build();
 
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-    export_file(
-        iter,
-        filter,
-        export_type,
-        export_done_path,
-        export_progress_path,
-    )
+    export_file(iter, filter, export_type, claim)
 }
 
 fn process_oplog_export(
     store: &RawEventStore<'_, OpLog>,
     filter: &(impl RawEventFilter + TimestampKeyExtractor),
     export_type: &str,
-    export_done_path: &Path,
-    export_progress_path: &Path,
+    claim: ExportClaim,
 ) -> Result<String> {
     // OpLog uses timestamp-prefix key format: [timestamp:8][sequence_number:8]
     let key_builder = StorageKey::timestamp_builder();
@@ -2357,21 +2443,14 @@ fn process_oplog_export(
         .build();
 
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-    export_oplog_file(
-        iter,
-        filter,
-        export_type,
-        export_done_path,
-        export_progress_path,
-    )
+    export_oplog_file(iter, filter, export_type, claim)
 }
 
 fn process_statistics_export(
     store: &RawEventStore<Statistics>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
-    export_done_path: &Path,
-    export_progress_path: &Path,
+    claim: ExportClaim,
 ) -> Result<String> {
     let mut iter_vec = Vec::new();
     for core in 0..MAX_CORE_SIZE {
@@ -2392,29 +2471,20 @@ fn process_statistics_export(
             iter_vec.push(iter);
         }
     }
-    export_statistic_file(
-        iter_vec,
-        filter,
-        export_type,
-        export_done_path,
-        export_progress_path,
-    )
+    export_statistic_file(iter_vec, filter, export_type, claim)
 }
 
 fn export_file<I, T, N>(
     iter: I,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
-    done_path: &Path,
-    progress_path: &Path,
+    mut claim: ExportClaim,
 ) -> Result<String>
 where
     I: Iterator<Item = anyhow::Result<(Box<[u8]>, T)>> + Send,
     T: Display + EventFilter + JsonOutput<N> + Serialize,
     N: Serialize,
 {
-    // export file open
-    let mut writer = File::create(progress_path)?;
     let mut invalid_data_cnt: u32 = 0;
 
     // check filter condition & write file
@@ -2424,26 +2494,23 @@ where
             continue;
         }
         let (key, value) = item.expect("not error value");
-        write_filtered_data_to_file(filter, export_type, &key, &value, &mut writer)?;
+        write_filtered_data_to_file(filter, export_type, &key, &value, &mut claim.file)?;
     }
     if invalid_data_cnt > 1 {
         warn!("Failed to read database or invalid data #{invalid_data_cnt}");
     }
-    fs::rename(progress_path, done_path)?;
-    Ok(format!("export file success: {}", done_path.display()))
+    claim.rename()
 }
 
 fn export_oplog_file<I>(
     iter: I,
     filter: &impl RawEventFilter,
     export_type: &str,
-    done_path: &Path,
-    progress_path: &Path,
+    mut claim: ExportClaim,
 ) -> Result<String>
 where
     I: Iterator<Item = anyhow::Result<(Box<[u8]>, OpLog)>> + Send,
 {
-    let mut writer = File::create(progress_path)?;
     let mut invalid_data_cnt: u32 = 0;
 
     for item in iter {
@@ -2452,24 +2519,20 @@ where
             continue;
         }
         let (key, value) = item.expect("not error value");
-        write_oplog_data_to_file(filter, export_type, &key, &value, &mut writer)?;
+        write_oplog_data_to_file(filter, export_type, &key, &value, &mut claim.file)?;
     }
     if invalid_data_cnt > 1 {
         warn!("Failed to read database or invalid data #{invalid_data_cnt}");
     }
-    fs::rename(progress_path, done_path)?;
-    Ok(format!("export file success: {}", done_path.display()))
+    claim.rename()
 }
 
 fn export_statistic_file(
     mut statistics_vec: Vec<Peekable<BoundaryIter<'_, Statistics>>>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
-    done_path: &Path,
-    progress_path: &Path,
+    mut claim: ExportClaim,
 ) -> Result<String> {
-    let mut writer = File::create(progress_path)?;
-
     // store the first value of all iters in a comparison vector.
     let mut iter_next_values = Vec::with_capacity(statistics_vec.len());
     let mut invalid_data_cnt: u32 = 0;
@@ -2492,7 +2555,7 @@ fn export_statistic_file(
         }
     }
 
-    loop {
+    while !iter_next_values.is_empty() {
         // select the value and index with the smallest timestamp.
         let (min_index, (key, value)) = iter_next_values.iter().enumerate().fold(
             (0, (&iter_next_values[0].0, &iter_next_values[0].1)),
@@ -2506,7 +2569,7 @@ fn export_statistic_file(
             },
         );
 
-        write_filtered_data_to_file(filter, export_type, key, value, &mut writer)?;
+        write_filtered_data_to_file(filter, export_type, key, value, &mut claim.file)?;
 
         // change the value of the selected iter to the following value.
         if let Some(iter) = statistics_vec.get_mut(min_index) {
@@ -2531,18 +2594,12 @@ fn export_statistic_file(
                 }
             }
         }
-
-        // if all iters have no value, end file writing.
-        if iter_next_values.is_empty() {
-            break;
-        }
     }
 
     if invalid_data_cnt > 1 {
         warn!("Failed to read database or invalid data #{invalid_data_cnt}");
     }
-    fs::rename(progress_path, done_path)?;
-    Ok(format!("export file success: {}", done_path.display()))
+    claim.rename()
 }
 
 fn write_filtered_data_to_file<T, N>(
