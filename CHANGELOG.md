@@ -21,6 +21,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   customer deletion.
 - GraphQL queries, searches, and exports now reject malformed IP range bounds
   before processing or forwarding requests, including when no records exist.
+- Statistics queries now create a fresh iterator for each sensor, so results
+  from one sensor are not reused for another.
 
 ## [0.35.0] - 2026-11-01
 
