@@ -2661,7 +2661,7 @@ pub mod tests {
         let (dummy_server_endpoint, dummy_addr) = setup_server_endpoint();
         let ConnectedPeers {
             client_endpoint: _dummy_client_endpoint,
-            server_conn: _dummy_server_conn,
+            server_conn: dummy_server_conn,
             client_conn: dummy_client_conn,
         } = connect_client_server(&dummy_server_endpoint, dummy_addr).await;
 
@@ -2735,6 +2735,15 @@ pub mod tests {
             })
         })
         .await;
+
+        let (code, buf) = with_timeout("existing peer update timeout", async {
+            let (_send, mut recv) = dummy_server_conn.accept_bi().await.unwrap();
+            receive_peer_data(&mut recv).await.unwrap()
+        })
+        .await;
+        assert_eq!(code, PeerCode::UpdatePeerList);
+        let list: HashSet<PeerIdentity> = bincode::deserialize(&buf).unwrap();
+        assert!(list.contains(&peer_identity(server_addr, test_connect_name())));
 
         let _ = server_shutdown_tx.send(());
         token.cancel();
@@ -4145,10 +4154,8 @@ pub mod tests {
             "successful reload must adopt the published material generation"
         );
 
-        // Confirm the swapped client config can actually dial a server that
-        // holds the new certificate material. This proves the slot was
-        // installed with configuration derived from `new_certs`, not just
-        // replaced with an arbitrary different Arc.
+        // Confirm the swapped client config presents the new client certificate
+        // when connecting to a server using the new material.
         let (probe_server_endpoint, probe_addr) = setup_server_endpoint_with_certs(&new_certs);
         let (_client_endpoint, client_conn, server_conn) = paired_connection(
             &probe_server_endpoint,
@@ -4179,7 +4186,12 @@ pub mod tests {
             leaf(&new_certs.certs),
             "swapped client config must observe the new server leaf fingerprint"
         );
-        drop(server_conn);
+        let presented_client = extract_cert_from_conn(&server_conn).expect("probe client certs");
+        assert_eq!(
+            leaf(&presented_client),
+            leaf(&new_certs.certs),
+            "swapped client config must present the new client certificate"
+        );
     }
 
     #[tokio::test]
@@ -4286,6 +4298,8 @@ pub mod tests {
         assert_eq!(leaf(&pre_peer_certs), leaf(&initial_certs.certs),);
         drop(pre);
 
+        let (logs, _guard) = capture_logs();
+
         // Push genuinely different TLS material through the watch channel.
         let new_material = Arc::new(crate::tls_reload::TlsMaterial {
             certs: Arc::new(new_certs.clone()),
@@ -4298,37 +4312,29 @@ pub mod tests {
             .send(new_material)
             .expect("broadcast reload material");
 
-        // Post-reload: the server now presents `new_certs`, whose SAN is
-        // the node2 identity. Probe with the matching SNI until the
-        // subsystem converges to the new leaf fingerprint.
-        for _ in 0..20 {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            let client_endpoint = init_client();
-            let Ok(connecting) = client_endpoint.connect(server_addr, test_connect_name_node2())
-            else {
-                continue;
-            };
-            let Ok(conn) = connecting.await else {
-                continue;
-            };
-            let probe_certs = extract_cert_from_conn(&conn).expect("peer certs probe");
-            if leaf(&probe_certs) == leaf(&new_certs.certs) {
-                drop(conn);
-                token_handle.cancel();
-                with_timeout("peer shutdown", peer_handle)
-                    .await
-                    .expect("peer task join")
-                    .expect("peer task result");
-                return;
-            }
-        }
-        panic!("peer server did not converge to new leaf fingerprint within timeout");
+        wait_for_log(&logs, "peer TLS state reloaded; generation 1").await;
+        retry_dial("post-reload probe", server_addr, async || {
+            let endpoint = init_client();
+            let conn = endpoint
+                .connect(server_addr, test_connect_name_node2())
+                .expect("probe dial setup")
+                .await
+                .expect("probe connection");
+            let certs = extract_cert_from_conn(&conn).expect("peer certs probe");
+            assert_eq!(leaf(&certs), leaf(&new_certs.certs));
+            Ok::<_, String>(())
+        })
+        .await;
+        token_handle.cancel();
+        with_timeout("peer shutdown", peer_handle)
+            .await
+            .expect("peer task join")
+            .expect("peer task result");
     }
 
     /// Failed reloads must leave the live peer server endpoint serving the
-    /// previously installed certificate, so that both new inbound
-    /// handshakes and a subsequent outbound reconnect continue to observe
-    /// the last-known-good TLS state.
+    /// previously installed certificate for new inbound handshakes. Outbound
+    /// behavior is checked by `connect_preserves_client_leaf_on_failed_reload`.
     #[tokio::test]
     async fn run_preserves_previous_server_cert_on_failed_reload() {
         init_crypto();
@@ -4722,6 +4728,7 @@ pub mod tests {
         let config = TempConfig::from_str("peers = []");
         let config_path = config.path().to_string();
 
+        let (logs, _guard) = capture_logs();
         let (ready_tx, ready_rx) = oneshot::channel();
         let peer_handle = tokio::spawn(peer.run_with_ready(
             ingest_sensors,
@@ -4739,33 +4746,19 @@ pub mod tests {
             .await
             .expect("peer ready");
 
-        // Probe with the post-reload SAN. If the subsystem had discarded
-        // the watch value via `mark_unchanged()`, the listener would
-        // still serve `initial_certs` and the post-reload SNI would
-        // either fail to validate or yield the wrong leaf fingerprint.
-        let mut converged = false;
-        for _ in 0..20 {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            let client_endpoint = init_client();
-            let Ok(connecting) = client_endpoint.connect(server_addr, test_connect_name_node2())
-            else {
-                continue;
-            };
-            let Ok(conn) = connecting.await else {
-                continue;
-            };
-            let probe_certs = extract_cert_from_conn(&conn).expect("peer certs probe");
-            if leaf(&probe_certs) == leaf(&new_certs.certs) {
-                converged = true;
-                drop(conn);
-                break;
-            }
-        }
-        assert!(
-            converged,
-            "peer subsystem must apply a post-spawn watch update at startup instead of \
-             discarding it via mark_unchanged()",
-        );
+        wait_for_log(&logs, "peer TLS state reloaded; generation 1").await;
+        retry_dial("startup reload probe", server_addr, async || {
+            let endpoint = init_client();
+            let conn = endpoint
+                .connect(server_addr, test_connect_name_node2())
+                .expect("probe dial setup")
+                .await
+                .expect("probe connection");
+            let certs = extract_cert_from_conn(&conn).expect("peer certs probe");
+            assert_eq!(leaf(&certs), leaf(&new_certs.certs));
+            Ok::<_, String>(())
+        })
+        .await;
 
         token_handle.cancel();
         with_timeout("peer shutdown", peer_handle)
@@ -4817,6 +4810,7 @@ pub mod tests {
         let config = TempConfig::from_str("peers = []");
         let config_path = config.path().to_string();
 
+        let (logs, _guard) = capture_logs();
         let (ready_tx, ready_rx) = oneshot::channel();
         let peer_handle = tokio::spawn(peer.run_with_ready(
             ingest_sensors,
@@ -4834,26 +4828,8 @@ pub mod tests {
             .await
             .expect("peer ready");
 
-        // The startup TLS apply runs in the peer task right after the
-        // `ready` send, so poll the shared state until the apply lands.
-        // A leaf-fingerprint-only check would have left
-        // `applied_generation` at 0 forever; the generation-based check
-        // must adopt the published generation 1.
-        let mut applied = false;
-        for _ in 0..40 {
-            if super::current_applied_generation(&shared_client_config) == 1 {
-                applied = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        assert!(
-            applied,
-            "CA-only reload published before `Peer::run()` first observed the \
-             watch must still be applied at startup, but applied_generation \
-             stayed at {} (expected 1)",
-            super::current_applied_generation(&shared_client_config),
-        );
+        wait_for_log(&logs, "peer TLS state reloaded; generation 1").await;
+        assert_eq!(super::current_applied_generation(&shared_client_config), 1);
 
         token_handle.cancel();
         with_timeout("peer shutdown", peer_handle)
@@ -5158,7 +5134,9 @@ pub mod tests {
         }
 
         /// With a peer connection in each role, cancellation closes both and
-        /// both handlers return before the entry task does.
+        /// both handlers return before the entry task does. Role-specific cleanup
+        /// is tested by `client_role_cancellation_removes_peer_state` and
+        /// `a_cancelled_connection_handler_removes_its_state`.
         #[tokio::test]
         async fn cancellation_ends_connection_handlers_in_both_roles() {
             init_crypto();
@@ -5210,12 +5188,56 @@ pub mod tests {
                 .await
                 .expect("other peer task join");
 
-            // ... and both handlers cleaned their shared state up on the way
-            // out.
+            // Both handlers have ended and the shared peer map is empty.
             assert!(
                 peers.read().await.is_empty(),
-                "both handlers should have removed their peers entries"
+                "both handlers should have ended and peers should be empty"
             );
+        }
+
+        /// The outbound client handler removes its peer state on cancellation.
+        #[tokio::test]
+        async fn client_role_cancellation_removes_peer_state() {
+            init_crypto();
+            let (endpoint, addr) = setup_server_endpoint_with_certs(&create_node2_certs());
+            let (ready_tx, ready_rx) = oneshot::channel();
+            let mock = tokio::spawn(async move {
+                let connection = accept_quic_with_retry(endpoint, "mock peer QUIC handshake").await;
+                let (mut send, mut recv) = server_handshake(&connection, PEER_VERSION_REQ)
+                    .await
+                    .expect("mock handshake");
+                response_init_info::<(HashSet<PeerIdentity>, PeerInfo)>(
+                    &mut send,
+                    &mut recv,
+                    PeerCode::UpdatePeerList,
+                    (HashSet::new(), PeerInfo::default()),
+                )
+                .await
+                .expect("mock init exchange");
+                ready_tx.send(()).expect("mock readiness receiver");
+                connection.closed().await;
+            });
+            let harness = PeerHarness::start(
+                &[],
+                HashSet::from([peer_identity(addr, test_connect_name_node2())]),
+            )
+            .await;
+            tokio::time::timeout(MOCK_READY_TIMEOUT, ready_rx)
+                .await
+                .expect("mock readiness timeout")
+                .expect("mock init completed");
+            wait_for_peer_info("client peer state timeout", &harness.peers, |peers| {
+                peers.contains_key(&addr.ip().to_string())
+            })
+            .await;
+            let peers = harness.cancel_and_join().await;
+            assert!(
+                peers.read().await.is_empty(),
+                "client handler must remove peer state"
+            );
+            with_timeout("mock shutdown", mock)
+                .await
+                .expect("mock task join");
         }
 
         /// A request task still holding a half-delivered frame when

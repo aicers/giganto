@@ -731,7 +731,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn bootroot_pem_bundle_missing_client_certificate_has_no_peer_identity() {
+        async fn bootroot_pem_bundle_missing_client_certificate_is_rejected_at_handshake() {
             init_crypto();
 
             let fixture = build_bootroot_chain_fixture(
