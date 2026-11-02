@@ -3621,6 +3621,9 @@ async fn cancelling_a_request_handler_releases_it_mid_frame() {
 /// test taking `ACK_INTERVAL_TIME` to run. The client's keep-alive is shorter
 /// than the idle timeout, so advancing in steps below it keeps the connection
 /// up across the jump instead of letting one side time the other out.
+/// Resume before both QUIC reads: an idle paused runtime auto-advances timers,
+/// which can time out the first read before the ACK arrives or let the
+/// no-ACK-after-cancel check pass without actually waiting for network I/O.
 #[tokio::test]
 async fn ack_interval_acknowledges_a_batch_below_the_count_threshold() {
     let db_dir = tempfile::tempdir().expect("create ingest temp dir");
