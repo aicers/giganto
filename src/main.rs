@@ -7078,10 +7078,6 @@ mod tests {
             let notify_terminate = Arc::new(Notify::new());
             let process = test_process_context(dir.path(), Arc::clone(&notify_terminate));
             let mut settings = test_settings(dir.path());
-            // The sensor has to name the listener before the generation binds
-            // it, and an ephemeral port is only known afterwards.
-            let [ingest_addr] = free_udp_addrs::<1>();
-            settings.config.visible.ingest_srv_addr = ingest_addr;
             // One event per acknowledgement, so a single batch is enough to
             // get a reply back and the test needs no second sync point.
             settings.config.visible.ack_transmission = 1;
@@ -7105,6 +7101,16 @@ mod tests {
                         &["Ingest listening on", "Database cleanup completed."],
                     )
                     .await;
+                    // The sensor learns the ephemeral address after the
+                    // generation binds the listener.
+                    let output = captured(&logs);
+                    let ingest_addr: SocketAddr = output
+                        .split("Ingest listening on ")
+                        .nth(1)
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .expect("ingest readiness log should contain an address")
+                        .parse()
+                        .expect("ingest readiness address should be valid");
 
                     // Bound on IPv4 because the listener is: quinn will not
                     // send from a v6 socket to a v4 peer.
@@ -7356,6 +7362,8 @@ mod tests {
                     let support_ingest_ready = format!("Ingest listening on {support_ingest_addr}");
                     let support_publish_ready =
                         format!("Publish listening on {support_publish_addr}");
+                    // Wait for all support ports to be bound before selecting
+                    // the target ports, so the two nodes cannot pick the same port.
                     wait_for_logs(
                         &logs,
                         &[
