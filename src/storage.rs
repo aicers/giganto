@@ -3828,7 +3828,7 @@ mod tests {
         let (cancel, task) = spawn_retention(
             &db,
             std::time::Duration::from_secs(3600),
-            std::time::Duration::from_secs(4 * 3600),
+            std::time::Duration::from_hours(4),
         );
 
         wait_until(
@@ -3865,7 +3865,7 @@ mod tests {
 
         let (cancel, task) = spawn_retention(
             &db,
-            std::time::Duration::from_secs(4 * 3600),
+            std::time::Duration::from_hours(4),
             std::time::Duration::from_secs(3600),
         );
 
