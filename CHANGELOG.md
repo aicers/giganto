@@ -12,6 +12,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   or overwrite each other.
 - Statistics exports with no matching records or only malformed records now
   complete with an empty file instead of panicking.
+- GraphQL event connections now return empty edges for `first: 0` and `last: 0`,
+  with the corresponding page-info flag reflecting matching records within the
+  cursor and filter bounds.
 
 ## [0.35.0] - 2026-11-01
 
