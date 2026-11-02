@@ -71,6 +71,11 @@ impl CustomerDeletionCoordinator {
         Self::default()
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_idle(&self) -> bool {
+        *self.lock_activity() == Activity::Idle
+    }
+
     /// Claims the store for `customer_id`'s deletion until the returned guard
     /// is dropped.
     ///
