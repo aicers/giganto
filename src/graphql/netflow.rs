@@ -342,6 +342,22 @@ mod tests {
         storage::{KeyExtractor, RawEventStore},
     };
 
+    #[tokio::test]
+    async fn ip_range_rejects_netflow_bounds_with_stored_records() {
+        let schema = TestSchema::new();
+        insert_netflow5_raw_event(&schema.db.netflow5_store().unwrap(), "src1", 1, 0, 1);
+        insert_netflow9_raw_event(&schema.db.netflow9_store().unwrap(), "src1", 1);
+        for field in ["netflow5RawEvents", "netflow9RawEvents"] {
+            crate::graphql::tests::assert_invalid_ip_ranges(
+                &schema,
+                field,
+                "",
+                "{ edges { node { time } } }",
+            )
+            .await;
+        }
+    }
+
     #[test]
     fn millis_to_secs_formats_three_fractional_digits() {
         for (millis, expected) in [

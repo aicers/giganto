@@ -112,7 +112,9 @@ pub struct TimeRange {
 /// - Omitting `end` means the range is unbounded above.
 #[derive(InputObject, Serialize, Clone)]
 pub struct IpRange {
+    #[graphql(validator(ip))]
     pub start: Option<String>,
+    #[graphql(validator(ip))]
     pub end: Option<String>,
 }
 
@@ -1203,7 +1205,7 @@ pub(crate) mod tests {
     use std::net::IpAddr;
     use std::sync::Arc;
 
-    use async_graphql::EmptySubscription;
+    use async_graphql::{EmptySubscription, Request, Variables, value};
     use serde::{Deserialize, Serialize};
     use tokio::sync::{Notify, mpsc};
 
@@ -1221,6 +1223,7 @@ pub(crate) mod tests {
         peer::{PeerInfo, Peers},
     };
     use crate::datetime::DateTime;
+    use crate::graphql::network::tests::insert_conn_raw_event;
     use crate::graphql::{IpRange, Mutation, PortRange, Query};
     use crate::settings::{ConfigVisible, Settings};
     use crate::storage::{Database, DbOptions, deletion_coordination::CustomerDeletionCoordinator};
@@ -1447,6 +1450,107 @@ pub(crate) mod tests {
             let request: async_graphql::Request = query.into();
             self.schema.execute(request).await
         }
+    }
+
+    pub(crate) async fn assert_invalid_ip_ranges(
+        schema: &TestSchema,
+        field: &str,
+        extra_filter: &str,
+        selection: &str,
+    ) {
+        for address in ["origAddr", "respAddr"] {
+            for bound in ["start", "end"] {
+                for invalid in ["not-an-ip", "192.0.2.256", "2001:db8::xyz", ""] {
+                    let query = format!(
+                        "query($ip: String!) {{ {field}(filter: {{ sensor: \"src1\", \
+                         {extra_filter} {address}: {{ {bound}: $ip }} }}) {selection} }}"
+                    );
+                    let response = schema
+                        .schema
+                        .execute(
+                            Request::new(query.clone())
+                                .variables(Variables::from_value(value!({"ip": invalid}))),
+                        )
+                        .await;
+                    assert_eq!(response.errors.len(), 1, "{query}: {response:?}");
+                    assert!(
+                        response.errors[0].message.contains("invalid ip"),
+                        "{query}: {response:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ip_range_rejects_invalid_query_bounds_with_empty_and_populated_stores() {
+        let schema = TestSchema::new();
+        for populated in [false, true] {
+            if populated {
+                insert_conn_raw_event(&schema.db.conn_store().unwrap(), "src1", 1);
+            }
+            for (field, extra, selection) in [
+                ("connRawEvents", "", "{ edges { node { time } } }"),
+                ("networkRawEvents", "", "{ edges { node { __typename } } }"),
+                (
+                    "searchConnRawEvents",
+                    "times: [\"1970-01-01T00:00:00.000000001Z\"]",
+                    "",
+                ),
+                ("netflow5RawEvents", "", "{ edges { node { time } } }"),
+                ("netflow9RawEvents", "", "{ edges { node { time } } }"),
+                (
+                    "secuLogRawEvents",
+                    "kind: \"device\"",
+                    "{ edges { node { time } } }",
+                ),
+            ] {
+                assert_invalid_ip_ranges(&schema, field, extra, selection).await;
+            }
+        }
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn ip_range_rejects_invalid_bounds_before_cluster_forwarding() {
+        let mut server = mockito::Server::new_async().await;
+        let peer = server
+            .mock("POST", "/graphql")
+            .expect(0)
+            .create_async()
+            .await;
+        let schema = TestSchema::new_with_graphql_peer(server.socket_address().port());
+        for (field, extra, selection) in [
+            ("connRawEvents", "", "{ edges { node { time } } }"),
+            ("networkRawEvents", "", "{ edges { node { __typename } } }"),
+            ("searchConnRawEvents", "times: []", ""),
+            ("netflow5RawEvents", "", "{ edges { node { time } } }"),
+            ("netflow9RawEvents", "", "{ edges { node { time } } }"),
+            (
+                "secuLogRawEvents",
+                "kind: \"device\"",
+                "{ edges { node { time } } }",
+            ),
+            ("export", "protocol: \"conn\"", ""),
+        ] {
+            for address in ["origAddr", "respAddr"] {
+                for bound in ["start", "end"] {
+                    let (sensor, args) = if field == "export" {
+                        ("sensorId", ", exportType: \"json\"")
+                    } else {
+                        ("sensor", "")
+                    };
+                    let query = format!(
+                        "{{ {field}(filter: {{ {sensor}: \"src 2\", {extra} \
+                         {address}: {{ {bound}: \"invalid\" }} }}{args}) {selection} }}"
+                    );
+                    let response = schema.execute(&query).await;
+                    assert_eq!(response.errors.len(), 1, "{query}: {response:?}");
+                    assert!(response.errors[0].message.contains("invalid ip"));
+                }
+            }
+        }
+        peer.assert_async().await;
     }
 
     #[test]
