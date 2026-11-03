@@ -2229,6 +2229,7 @@ impl ExportQuery {
         export_type: String,
         filter: ExportFilter,
     ) -> Result<String> {
+        super::validate_key_time_range(filter.time.as_ref())?;
         if !ADDRESS_PROTOCOL.contains(&filter.protocol.as_str()) {
             // check sysmon type/log type/time_series/statistics filter format
             if filter.orig_addr.is_some()
