@@ -84,6 +84,8 @@ const INGEST_VERSION_REQ: &str = ">=0.27.0,<0.36.0";
 const INGEST_DRAIN_LABEL: &str = "ingest";
 
 // Keep the connection alive until its update is applied so its stable ID cannot be reused.
+// This assumes stable_id() is the Arc address, as in quinn 0.11.x; quinn does
+// not document that guarantee, so recheck it when upgrading quinn.
 type SensorInfo = (String, DateTime, ConnState, bool, quinn::Connection);
 
 static GENERATOR: OnceLock<Arc<SequenceGenerator>> = OnceLock::new();
@@ -1622,6 +1624,7 @@ async fn apply_sensor_update(
             }
         }
         ConnState::Disconnected => {
+            // Always clean up the connection set, even if the sensor was deleted.
             if let Some(connections) = live_connections.get_mut(&sensor_key) {
                 connections.remove(&connection_id);
                 if connections.is_empty() {
@@ -1630,15 +1633,19 @@ async fn apply_sensor_update(
             }
             {
                 let mut runtime_sensors = runtime_ingest_sensors.write().await;
+                // A missing runtime entry may mean customer deletion; do not
+                // recreate its sensor-store row with a late disconnect.
                 if runtime_sensors.contains_key(&sensor_key) {
                     if sensor_store.insert(&sensor_key, time_val).is_err() {
                         error!("Failed to append sensor store");
                     }
+                    // Keep the runtime entry until the last connection leaves.
                     if !live_connections.contains_key(&sensor_key) {
                         runtime_sensors.remove(&sensor_key);
                     }
                 }
             }
+            // Clean up the pcap list even when the runtime entry is absent.
             if is_pcap_sensor {
                 let mut pcap_sensors = pcap_sensors.write().await;
                 if let Some(connections) = pcap_sensors.get_mut(&sensor_key) {
@@ -1670,6 +1677,8 @@ async fn check_sensors_conn(
     notify_sensor: Option<Arc<Notify>>,
     token: CancellationToken,
 ) -> Result<()> {
+    // The main loop and shutdown drain must share this set: disconnects in
+    // the drain can refer to connections registered before cancellation.
     let mut live_connections = HashMap::new();
     let mut itv = time::interval(time::Duration::from_secs(SENSOR_INTERVAL));
     itv.reset();

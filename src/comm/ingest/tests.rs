@@ -3306,6 +3306,18 @@ async fn overlapping_real_pcap_connections_keep_live_publish_connection() {
         },
     )
     .await;
+    wait_until(
+        "pcap A runtime entry applied",
+        std::time::Duration::from_secs(2),
+        || async {
+            server
+                .runtime_ingest_sensors
+                .read()
+                .await
+                .contains_key(sensor)
+        },
+    )
+    .await;
     let a_id = server
         .pcap_sensors
         .read()
