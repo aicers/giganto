@@ -8,9 +8,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- Statistics exports preserve readable records when other selected records cannot
-  be decoded.
-
 - Results of exports of the same kind started in the same second no longer mix
   or overwrite each other.
 - Statistics exports with no matching records or only malformed records now
@@ -28,6 +25,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   from one sensor are not reused for another.
 - Statistics aggregation now returns explicit errors on count or size overflow,
   and bit-rate calculations avoid overflow when converting bytes to bits.
+- Statistics exports preserve readable records when other selected records cannot
+  be decoded.
 
 ## [0.35.0] - 2026-11-01
 
