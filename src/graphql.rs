@@ -914,21 +914,31 @@ where
 struct ChildReaper {
     child: Option<tokio::process::Child>,
     tracker: TaskTracker,
+    #[cfg(test)]
+    wait_result: Option<tokio::sync::oneshot::Sender<std::io::Result<std::process::ExitStatus>>>,
 }
 
 impl Drop for ChildReaper {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
+            #[cfg(test)]
+            let wait_result = self.wait_result.take();
             let spawned = self
                 .tracker
                 .spawn("pcap-tcpdump-reaper", |_token| async move {
-                    // `kill()` sends `SIGKILL` and then `wait()`s, reaping the child
-                    // rather than merely signalling it. The token is ignored on
-                    // purpose: cancellation must not abandon the child mid-reap.
-                    if let Err(e) = child.kill().await {
+                    // Ignore cancellation while killing and reaping the child.
+                    let result = match child.start_kill() {
+                        Ok(()) => child.wait().await,
+                        Err(e) => Err(e),
+                    };
+                    if let Err(e) = &result {
                         tracing::warn!(
                             "failed to reap tcpdump child after a PCAP request was cancelled: {e}"
                         );
+                    }
+                    #[cfg(test)]
+                    if let Some(sender) = wait_result {
+                        let _ = sender.send(result);
                     }
                 });
             if let Err(e) = spawned {
@@ -1016,6 +1026,8 @@ async fn write_run_tcpdump(
     let mut reaper = ChildReaper {
         child: Some(child),
         tracker: reaper_tracker,
+        #[cfg(test)]
+        wait_result: None,
     };
 
     // Read tcpdump's output to EOF, then wait for it to exit. Both awaits are
@@ -1219,8 +1231,6 @@ pub(crate) mod tests {
     const PEER_GIGANTO_2_INGEST_SENSORS: [&str; 3] = ["src2", "src 2", "ingest src 2"];
 
     pub struct TestSchema {
-        pub _dir: tempfile::TempDir, // to prevent the data directory from being deleted while the test is running
-        pub export_dir: tempfile::TempDir, // keep export directory alive for tests
         pub db: Database,
         pub schema: Schema,
         /// The sender installed in the schema, exposed so tests can fill the
@@ -1245,6 +1255,8 @@ pub(crate) mod tests {
         /// built.
         #[cfg(feature = "cluster")]
         pub(crate) peer_idents: crate::comm::peer::PeerIdents,
+        pub export_dir: tempfile::TempDir, // keep export directory alive for tests
+        pub _dir: tempfile::TempDir,       // keep the data directory alive for tests
     }
 
     /// The certificate name `new_with_graphql_peer` records for its mock peer.
@@ -1774,12 +1786,10 @@ pub(crate) mod tests {
     /// racing the millisecond-scale `tcpdump` runs the happy-path test uses.
     ///
     /// The assertion after the drain uses no polling: because `drain` awaits the
-    /// reaper task, which `wait()`s on the child, the pid must already be gone
-    /// once `drain` returns. A child that was only signalled (not awaited) would
-    /// linger as a zombie, for which `kill(pid, 0)` still returns `0`.
+    /// reaper task, its wait result is already in the channel when drain returns.
     #[tokio::test]
     async fn child_reaper_reaping_is_awaited_by_tracker_drain() {
-        use std::time::Duration;
+        use std::{os::unix::process::ExitStatusExt, time::Duration};
 
         use crate::cancellation::TaskTracker;
 
@@ -1802,7 +1812,9 @@ pub(crate) mod tests {
         // Dropping the reaper registers the kill-and-reap on the tracker, exactly
         // as the dropped PCAP request future does at the graceful-shutdown
         // timeout.
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
         drop(ChildReaper {
+            wait_result: Some(sender),
             child: Some(child),
             tracker: tracker.clone(),
         });
@@ -1820,11 +1832,11 @@ pub(crate) mod tests {
             "the reaper must finish within the drain, got {outcome:?}"
         );
 
-        assert_eq!(
-            unsafe { libc::kill(pid, 0) },
-            -1,
-            "after the tracker drain the child must be killed and reaped, leaving no zombie"
-        );
+        let status = receiver
+            .try_recv()
+            .expect("reaper wait result must be ready")
+            .expect("reaper wait must succeed");
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
     }
 
     #[test]

@@ -1643,6 +1643,17 @@ mod tests {
         }
     }
 
+    async fn wait_for_claim_release(coordination: &CustomerDeletionCoordinator) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !coordination.is_idle() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "customer deletion claim was not released"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     #[test]
     fn validates_and_deduplicates_service_fqdns() {
         let result = validate_service_fqdn_list(vec![
@@ -2516,6 +2527,7 @@ mod tests {
         assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
 
         let completed = wait_for_terminal_job(&schema.db, 42).await;
+        wait_for_claim_release(&schema.deletion_coordination).await;
         assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
         assert_eq!(completed.service_fqdn_list, [target]);
         assert!(completed.requested_at >= before);
@@ -2724,6 +2736,7 @@ mod tests {
         assert!(!series_present(&schema.db, "7"));
         assert!(series_present(&schema.db, "70"));
 
+        wait_for_claim_release(&schema.deletion_coordination).await;
         put_series(&schema.db, &["8"]);
         let response = schema
             .execute(&delete_customer_data_with_series_mutation(&[], &["8"], 113))
@@ -3697,6 +3710,8 @@ mod tests {
             wait_for_terminal_job(&schema.db, 300).await.status,
             CustomerDataDeletionStatus::Succeeded
         );
+
+        wait_for_claim_release(&schema.deletion_coordination).await;
 
         // The store goes back to whoever asks next, so the customer that was
         // turned away is taken now.

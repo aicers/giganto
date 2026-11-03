@@ -1476,6 +1476,15 @@ async fn export_after_tracker_closed_registers_nothing() {
     )
     .expect("a closed tracker is reported, not surfaced as a request error");
 
+    assert_eq!(tracker.pending_count(), 0);
+    assert!(matches!(
+        tracker
+            .drain(Duration::from_secs(5))
+            .await
+            .expect("drain closed tracker"),
+        crate::cancellation::DrainOutcome::Drained
+    ));
+
     assert!(
         !done_path.exists(),
         "no export task should run once the tracker is closed"
