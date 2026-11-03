@@ -15,6 +15,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - GraphQL event connections now return empty edges for `first: 0` and `last: 0`,
   with the corresponding page-info flag reflecting matching records within the
   cursor and filter bounds.
+- Overlapping connections of the same pcap sensor no longer send pcap extraction
+  requests to a disconnected connection after either connection disconnects.
+  A disconnected connection also no longer re-records a sensor removed by
+  customer deletion.
 
 ## [0.35.0] - 2026-11-01
 
