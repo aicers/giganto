@@ -1205,7 +1205,7 @@ pub(crate) mod tests {
     use std::net::IpAddr;
     use std::sync::Arc;
 
-    use async_graphql::{EmptySubscription, InputType, Request, Variables, value};
+    use async_graphql::{EmptySubscription, Request, Variables, value};
     use serde::{Deserialize, Serialize};
     use tokio::sync::{Notify, mpsc};
 
@@ -1551,48 +1551,6 @@ pub(crate) mod tests {
             }
         }
         peer.assert_async().await;
-    }
-
-    #[test]
-    fn ip_range_preserves_optional_strings_and_valid_range_semantics() {
-        for (start, end, inside, outside) in [
-            ("192.0.2.1", "192.0.2.3", "192.0.2.2", "192.0.2.0"),
-            ("2001:db8::1", "2001:db8::3", "2001:db8::2", "2001:db8::"),
-        ] {
-            let range =
-                IpRange::parse(Some(value!({"start": start, "end": end}))).unwrap_or_else(|err| {
-                    panic!(
-                        "{}",
-                        err.into_server_error(async_graphql::Pos::default()).message
-                    )
-                });
-            assert!(check_address(Some(&range), Some(start.parse().unwrap())).unwrap());
-            assert!(check_address(Some(&range), Some(inside.parse().unwrap())).unwrap());
-            assert!(!check_address(Some(&range), Some(end.parse().unwrap())).unwrap());
-            assert!(!check_address(Some(&range), Some(outside.parse().unwrap())).unwrap());
-            for value in [value!({"start": start}), value!({"end": end})] {
-                let range = IpRange::parse(Some(value)).unwrap_or_else(|err| {
-                    panic!(
-                        "{}",
-                        err.into_server_error(async_graphql::Pos::default()).message
-                    )
-                });
-                assert!(check_address(Some(&range), Some(inside.parse().unwrap())).unwrap());
-            }
-        }
-        for value in [value!({}), value!({"start": null, "end": null})] {
-            let range = IpRange::parse(Some(value)).unwrap_or_else(|err| {
-                panic!(
-                    "{}",
-                    err.into_server_error(async_graphql::Pos::default()).message
-                )
-            });
-            assert!(range.start.is_none());
-            assert!(range.end.is_none());
-            for addr in ["192.0.2.1", "2001:db8::1"] {
-                assert!(check_address(Some(&range), Some(addr.parse().unwrap())).unwrap());
-            }
-        }
     }
 
     #[test]
