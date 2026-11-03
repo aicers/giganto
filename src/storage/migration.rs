@@ -627,6 +627,7 @@ mod tests {
         let db = DB::open_cf_descriptors(&db_opts, db_path, cfs).unwrap();
         Database {
             db: std::sync::Arc::new(db),
+            append_unique_max_probes: super::super::APPEND_UNIQUE_MAX_PROBES,
         }
     }
 
