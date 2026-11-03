@@ -820,6 +820,36 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn statistics_returns_graphql_errors_on_aggregation_overflow() {
+        for (first, second, expected_error) in [
+            ((u64::MAX, 0), (1, 0), "count overflow"),
+            ((0, u64::MAX), (0, 1), "size overflow"),
+        ] {
+            let schema = TestSchema::new();
+            let store = schema.db.statistics_store().unwrap();
+            for (core, (count, size)) in [first, second].into_iter().enumerate() {
+                insert_statistics_raw_event_kind(
+                    &store,
+                    FIXED_STATISTICS_TIMESTAMP_NANOS,
+                    "src1",
+                    u32::try_from(core).unwrap(),
+                    60,
+                    RawEventKind::Statistics,
+                    count,
+                    size,
+                );
+            }
+
+            let response = schema
+                .execute("{ statistics(sensors: [\"src1\"]) { sensor } }")
+                .await;
+            assert_eq!(response.errors.len(), 1, "{response:?}");
+            assert!(response.errors[0].message.contains(expected_error));
+            assert!(response.data.into_json().unwrap().is_null());
+        }
+    }
+
     #[test]
     fn convert_to_stats_allowed_type_rejects_invalid() {
         let res = convert_to_stats_allowed_type("not-a-protocol");
