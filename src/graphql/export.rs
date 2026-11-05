@@ -2536,12 +2536,12 @@ fn export_statistic_file(
     // store the first value of all iters in a comparison vector.
     let mut iter_next_values = Vec::with_capacity(statistics_vec.len());
     let mut invalid_data_cnt: u32 = 0;
-    for iter in &mut statistics_vec {
+    statistics_vec.retain_mut(|iter| {
         loop {
             match iter.next() {
                 Some(Ok(item)) => {
                     iter_next_values.push(item);
-                    break;
+                    break true;
                 }
                 Some(Err(_)) => {
                     // deserialize fail
@@ -2549,11 +2549,11 @@ fn export_statistic_file(
                 }
                 None => {
                     // No value to call with the iterator.
-                    break;
+                    break false;
                 }
             }
         }
-    }
+    });
 
     while !iter_next_values.is_empty() {
         // select the value and index with the smallest timestamp.
