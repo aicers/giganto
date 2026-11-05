@@ -852,10 +852,7 @@ mod listener_reload_contract_tests {
         use std::sync::Arc;
 
         use tempfile::tempdir;
-        use tokio::{
-            sync::{Notify, watch},
-            time::sleep,
-        };
+        use tokio::sync::{Notify, watch};
 
         use crate::comm::{
             new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
@@ -864,6 +861,7 @@ mod listener_reload_contract_tests {
         use crate::storage::{Database, DbOptions};
         use crate::tls_reload::TlsMaterial;
 
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
         install_crypto_provider();
         let set_a = build_cert_set();
         let set_b = build_cert_set();
@@ -916,9 +914,6 @@ mod listener_reload_contract_tests {
             })
         };
 
-        // Let the server bind and drain the watch channel's initial value.
-        sleep(Duration::from_millis(200)).await;
-
         let client_a = client_endpoint(&set_a.client);
         let pre_reload_conn = try_connect(&client_a, server_addr)
             .await
@@ -941,24 +936,7 @@ mod listener_reload_contract_tests {
             }))
             .expect("broadcast refreshed material");
 
-        // Poll until the listener's select arm has actually applied the
-        // new config. Proof-by-handshake: once a set-B-trusting client can
-        // handshake, the arm has fired and `set_server_config` ran.
-        let mut applied = false;
-        for _ in 0..40 {
-            sleep(Duration::from_millis(50)).await;
-            let probe = client_endpoint(&set_b.client);
-            if let Ok(conn) = try_connect(&probe, server_addr).await {
-                conn.close(0u32.into(), b"probe");
-                probe.wait_idle().await;
-                applied = true;
-                break;
-            }
-        }
-        assert!(
-            applied,
-            "ingest listener did not apply refreshed TLS material via tls_watch.changed()"
-        );
+        crate::test_bootroot::wait_for_log(&logs, "Ingest listener: server config reloaded").await;
 
         let client_b = client_endpoint(&set_b.client);
         let post_reload_conn = try_connect(&client_b, server_addr)
@@ -1006,7 +984,7 @@ mod listener_reload_contract_tests {
         use std::sync::Arc;
 
         use tempfile::tempdir;
-        use tokio::{sync::watch, time::sleep};
+        use tokio::sync::watch;
 
         use crate::comm::{
             new_ingest_sensors, new_pcap_sensors, new_peers_data, new_stream_direct_channels,
@@ -1014,6 +992,7 @@ mod listener_reload_contract_tests {
         use crate::storage::{Database, DbOptions};
         use crate::tls_reload::TlsMaterial;
 
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
         install_crypto_provider();
         let set_a = build_cert_set();
         let set_b = build_cert_set();
@@ -1064,8 +1043,6 @@ mod listener_reload_contract_tests {
             })
         };
 
-        sleep(Duration::from_millis(200)).await;
-
         let client_a = client_endpoint(&set_a.client);
         let pre_reload_conn = try_connect(&client_a, server_addr)
             .await
@@ -1085,21 +1062,7 @@ mod listener_reload_contract_tests {
             }))
             .expect("broadcast refreshed material");
 
-        let mut applied = false;
-        for _ in 0..40 {
-            sleep(Duration::from_millis(50)).await;
-            let probe = client_endpoint(&set_b.client);
-            if let Ok(conn) = try_connect(&probe, server_addr).await {
-                conn.close(0u32.into(), b"probe");
-                probe.wait_idle().await;
-                applied = true;
-                break;
-            }
-        }
-        assert!(
-            applied,
-            "publish listener did not apply refreshed TLS material via tls_watch.changed()"
-        );
+        crate::test_bootroot::wait_for_log(&logs, "Publish listener: server config reloaded").await;
 
         let client_b = client_endpoint(&set_b.client);
         let post_reload_conn = try_connect(&client_b, server_addr)
@@ -1151,7 +1114,7 @@ mod listener_reload_contract_tests {
         use std::{fs, sync::Arc};
 
         use tempfile::tempdir;
-        use tokio::{sync::Notify, time::sleep};
+        use tokio::sync::Notify;
 
         use crate::comm::{
             new_ingest_sensors, new_pcap_sensors, new_runtime_ingest_sensors,
@@ -1160,6 +1123,7 @@ mod listener_reload_contract_tests {
         use crate::storage::{Database, DbOptions};
         use crate::tls_reload::{CertPaths, ReloadHandle, load_tls_material};
 
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
         install_crypto_provider();
 
         let bundle_a = build_cert_set_with_pems();
@@ -1226,8 +1190,6 @@ mod listener_reload_contract_tests {
             })
         };
 
-        sleep(Duration::from_millis(200)).await;
-
         let client_a = client_endpoint(&set_a.client);
         let pre_reload_conn = try_connect(&client_a, server_addr)
             .await
@@ -1257,25 +1219,12 @@ mod listener_reload_contract_tests {
         reload_trigger.notify_one();
         reload_task.await.expect("reload task");
 
-        // The listener's `tls_watch.changed()` arm should now fire and
-        // apply the refreshed `ServerConfig`. Prove it by polling until a
-        // set-B-trusting client can handshake.
-        let mut applied = false;
-        for _ in 0..40 {
-            sleep(Duration::from_millis(50)).await;
-            let probe = client_endpoint(&set_b.client);
-            if let Ok(conn) = try_connect(&probe, server_addr).await {
-                conn.close(0u32.into(), b"probe");
-                probe.wait_idle().await;
-                applied = true;
-                break;
-            }
-        }
-        assert!(
-            applied,
-            "full chain (Notify -> ReloadHandle::reload -> watch -> listener) did not \
-             rotate ingest listener TLS state"
-        );
+        crate::test_bootroot::wait_for_log(&logs, "Ingest listener: server config reloaded").await;
+
+        let client_b = client_endpoint(&set_b.client);
+        let post_reload_conn = try_connect(&client_b, server_addr)
+            .await
+            .expect("set B client should handshake once the listener applied the reload");
 
         // Stale trust must fail now that set B is in effect — rules out
         // any possibility that the old config lingered.
@@ -1297,6 +1246,10 @@ mod listener_reload_contract_tests {
         );
 
         pre_reload_conn.close(0u32.into(), b"done");
+        post_reload_conn.close(0u32.into(), b"done");
+        timeout(TEST_HANG_GUARD, client_b.wait_idle())
+            .await
+            .expect("client B endpoint did not become idle before the test hang guard");
         timeout(TEST_HANG_GUARD, client_a.wait_idle())
             .await
             .expect("client A endpoint did not become idle before the test hang guard");
@@ -1319,7 +1272,7 @@ mod listener_reload_contract_tests {
         use std::{fs, sync::Arc};
 
         use tempfile::tempdir;
-        use tokio::{sync::Notify, time::sleep};
+        use tokio::sync::Notify;
 
         use crate::comm::{
             new_ingest_sensors, new_pcap_sensors, new_peers_data, new_stream_direct_channels,
@@ -1327,6 +1280,7 @@ mod listener_reload_contract_tests {
         use crate::storage::{Database, DbOptions};
         use crate::tls_reload::{CertPaths, ReloadHandle, load_tls_material};
 
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
         install_crypto_provider();
 
         let bundle_a = build_cert_set_with_pems();
@@ -1389,8 +1343,6 @@ mod listener_reload_contract_tests {
             })
         };
 
-        sleep(Duration::from_millis(200)).await;
-
         let client_a = client_endpoint(&set_a.client);
         let pre_reload_conn = try_connect(&client_a, server_addr)
             .await
@@ -1414,22 +1366,12 @@ mod listener_reload_contract_tests {
         reload_trigger.notify_one();
         reload_task.await.expect("reload task");
 
-        let mut applied = false;
-        for _ in 0..40 {
-            sleep(Duration::from_millis(50)).await;
-            let probe = client_endpoint(&set_b.client);
-            if let Ok(conn) = try_connect(&probe, server_addr).await {
-                conn.close(0u32.into(), b"probe");
-                probe.wait_idle().await;
-                applied = true;
-                break;
-            }
-        }
-        assert!(
-            applied,
-            "full chain (Notify -> ReloadHandle::reload -> watch -> listener) did not \
-             rotate publish listener TLS state"
-        );
+        crate::test_bootroot::wait_for_log(&logs, "Publish listener: server config reloaded").await;
+
+        let client_b = client_endpoint(&set_b.client);
+        let post_reload_conn = try_connect(&client_b, server_addr)
+            .await
+            .expect("set B client should handshake once the listener applied the reload");
 
         let client_a_stale = client_endpoint(&set_a.client);
         let err = try_connect(&client_a_stale, server_addr)
@@ -1447,6 +1389,10 @@ mod listener_reload_contract_tests {
         );
 
         pre_reload_conn.close(0u32.into(), b"done");
+        post_reload_conn.close(0u32.into(), b"done");
+        timeout(TEST_HANG_GUARD, client_b.wait_idle())
+            .await
+            .expect("client B endpoint did not become idle before the test hang guard");
         timeout(TEST_HANG_GUARD, client_a.wait_idle())
             .await
             .expect("client A endpoint did not become idle before the test hang guard");
