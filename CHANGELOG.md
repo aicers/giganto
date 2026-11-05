@@ -8,6 +8,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Fixed disconnected peers retaining sensor information or overwriting
+  reconnected peers’ information, causing sensor lookups and requests to go to
+  a disconnected peer.
 - Results of exports of the same kind started in the same second no longer mix
   or overwrite each other.
 - Statistics exports with no matching records or only malformed records now
