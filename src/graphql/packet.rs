@@ -130,6 +130,7 @@ async fn handle_packets(
 }
 
 async fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
+    super::validate_key_time_bounds(filter.get_range_end_key())?;
     let db = ctx.data::<Database>()?;
     let store = db.packet_store()?;
 
@@ -192,6 +193,7 @@ impl PacketQuery {
     }
 
     async fn pcap(&self, ctx: &Context<'_>, filter: PacketFilter) -> Result<Pcap> {
+        super::validate_key_time_bounds(filter.get_range_end_key())?;
         info!(
             "PCAP extraction request received. Sensor: {}, Time range: {:?}",
             filter.sensor, filter.packet_time

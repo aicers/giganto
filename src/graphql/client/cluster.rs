@@ -531,6 +531,7 @@ macro_rules! paged_events_in_cluster {
      $response_data_type:path,
      $field_name:ident
      $(, with_extra_query_args ($($query_arg:tt := $query_arg_from:expr),* ))? ) => {{
+        crate::graphql::validate_key_time_bounds(crate::storage::KeyExtractor::get_range_end_key(&$filter))?;
         crate::graphql::validate_pagination_args($after.as_ref(), $before.as_ref(), $first.as_ref(), $last.as_ref())?;
         if crate::graphql::client::cluster::is_current_giganto_in_charge($ctx, &$sensor).await {
             $handler($ctx, $filter, $after, $before, $first, $last).await

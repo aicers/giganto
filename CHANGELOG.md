@@ -8,6 +8,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- GraphQL queries and exports reject time filter bounds outside the signed i64
+  nanosecond range.
+
 - Results of exports of the same kind started in the same second no longer mix
   or overwrite each other.
 - Statistics exports with no matching records or only malformed records now
