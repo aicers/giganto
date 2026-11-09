@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use rustls::pki_types::CertificateDer;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 
@@ -72,7 +72,7 @@ fn load_root_cert(ca_certs_paths: &[String]) -> Result<(rustls::RootCertStore, V
         let pem = std::fs::read(path)
             .with_context(|| format!("failed to read root certificate file: {path}"))?;
 
-        let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
+        let certs: Vec<CertificateDer> = CertificateDer::pem_slice_iter(&pem)
             .collect::<Result<_, _>>()
             .with_context(|| format!("invalid PEM-encoded certificate: {path}"))?;
 
@@ -251,6 +251,70 @@ mod tests {
         };
         let result = load_tls_material(&paths);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn load_root_cert_rejects_empty_paths_and_missing_file() {
+        assert!(load_root_cert(&[]).is_err());
+        let dir = tempdir().expect("tempdir");
+        let missing = dir
+            .path()
+            .join("missing.pem")
+            .to_str()
+            .expect("path")
+            .to_owned();
+        assert!(load_root_cert(&[missing]).is_err());
+    }
+
+    #[test]
+    fn load_root_cert_rejects_invalid_bundles() {
+        let dir = tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        let paths = [ca_path.to_str().expect("path").to_owned()];
+        let cert = generate_self_signed();
+        let valid_path = dir.path().join("valid.pem");
+        fs::write(&valid_path, cert.cert.pem()).expect("write valid ca");
+        let multiple_paths = [
+            valid_path.to_str().expect("path").to_owned(),
+            paths[0].clone(),
+        ];
+        for invalid in [
+            "",
+            "not a certificate",
+            "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n",
+            "-----BEGIN CERTIFICATE-----\n@@@@\n-----END CERTIFICATE-----\n",
+            "-----BEGIN CERTIFICATE-----\nAAAA\n",
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+        ] {
+            fs::write(&ca_path, invalid).expect("write invalid ca");
+            assert!(load_root_cert(&paths).is_err());
+            assert!(load_root_cert(&multiple_paths).is_err());
+        }
+        for invalid in [
+            "-----BEGIN CERTIFICATE-----\n@@@@\n-----END CERTIFICATE-----\n",
+            "-----BEGIN CERTIFICATE-----\nAAAA\n",
+        ] {
+            let mixed = format!("{}{invalid}", cert.cert.pem());
+            fs::write(&ca_path, mixed).expect("write malformed mixed bundle");
+            assert!(load_root_cert(&paths).is_err());
+        }
+    }
+
+    #[test]
+    fn load_root_cert_loads_multiple_certificates_and_files() {
+        let dir = tempdir().expect("tempdir");
+        let first = generate_self_signed();
+        let second = generate_self_signed();
+        let bundle = format!("{}{}", first.cert.pem(), second.cert.pem());
+        let mut paths = Vec::new();
+        for name in ["first.pem", "second.pem"] {
+            let path = dir.path().join(name);
+            fs::write(&path, &bundle).expect("write bundle");
+            paths.push(path.to_str().expect("path").to_owned());
+        }
+        let (root, pem) = load_root_cert(&paths).expect("load bundles");
+        assert_eq!(root.len(), 4);
+        assert_eq!(pem, bundle.repeat(2).as_bytes());
     }
 
     #[test]

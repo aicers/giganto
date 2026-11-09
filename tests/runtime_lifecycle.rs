@@ -39,7 +39,7 @@ use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
     KeyPair, KeyUsagePurpose,
 };
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
 use tokio::time::{Instant, sleep};
 
 // ---------------------------------------------------------------------------
@@ -735,15 +735,13 @@ fn assert_clean_shutdown(node: &Node) {
 // ---------------------------------------------------------------------------
 
 fn certs_from_pem(pem: &str) -> Vec<CertificateDer<'static>> {
-    rustls_pemfile::certs(&mut pem.as_bytes())
+    CertificateDer::pem_slice_iter(pem.as_bytes())
         .collect::<Result<Vec<_>, _>>()
         .expect("read the certificate chain")
 }
 
 fn key_from_pem(pem: &str) -> PrivateKeyDer<'static> {
-    rustls_pemfile::private_key(&mut pem.as_bytes())
-        .expect("read the private key")
-        .expect("the key file should hold a private key")
+    PrivateKeyDer::from_pem_slice(pem.as_bytes()).expect("read the private key")
 }
 
 /// Opens one bounded mTLS connection and returns the presented server leaf's
