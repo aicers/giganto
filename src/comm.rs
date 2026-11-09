@@ -10,7 +10,10 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use quinn::Connection;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{
+    CertificateDer, PrivateKeyDer,
+    pem::{PemObject, SectionKind},
+};
 use tokio::sync::{RwLock, mpsc::UnboundedSender};
 #[cfg(test)]
 use tracing::warn;
@@ -37,7 +40,7 @@ pub type StreamDirectChannels = Arc<RwLock<StreamDirectChannelMap>>;
 /// * The PEM input cannot be parsed (invalid certificate chain)
 /// * The parsed certificate chain is empty (empty certificate chain)
 pub(crate) fn to_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> {
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut &*pem)
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(pem)
         .collect::<Result<_, _>>()
         .context("invalid certificate chain")?;
     if certs.is_empty() {
@@ -47,12 +50,16 @@ pub(crate) fn to_cert_chain(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>> 
 }
 
 pub(crate) fn to_private_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
-    match rustls_pemfile::read_one(&mut &*pem)
+    // Preserve the first recognized block policy; ECHCONFIG was not recognized
+    // by the previous parser and must still be skipped.
+    match <(SectionKind, Vec<u8>)>::pem_slice_iter(pem)
+        .find(|item| !matches!(item, Ok((SectionKind::EchConfigList, _))))
+        .transpose()
         .context("cannot parse private key")?
         .ok_or_else(|| anyhow!("empty private key"))?
     {
-        rustls_pemfile::Item::Pkcs1Key(key) => Ok(key.into()),
-        rustls_pemfile::Item::Pkcs8Key(key) => Ok(key.into()),
+        (SectionKind::RsaPrivateKey, key) => Ok(PrivateKeyDer::Pkcs1(key.into())),
+        (SectionKind::PrivateKey, key) => Ok(PrivateKeyDer::Pkcs8(key.into())),
         _ => Err(anyhow!("unknown private key format")),
     }
 }
@@ -70,7 +77,7 @@ pub(crate) fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCert
         let pem = std::fs::read(path)
             .with_context(|| format!("failed to read root certificate file: {path}"))?;
 
-        let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
+        let certs: Vec<CertificateDer> = CertificateDer::pem_slice_iter(&pem)
             .collect::<Result<_, _>>()
             .with_context(|| format!("invalid PEM-encoded certificate: {path}"))?;
 
@@ -257,6 +264,62 @@ mod tests {
     }
 
     #[test]
+    fn test_to_private_key_empty() {
+        let err = to_private_key(b"").expect_err("empty key must fail");
+        assert_eq!(err.to_string(), "empty private key");
+    }
+
+    #[test]
+    fn test_to_private_key_malformed() {
+        for pem in [
+            b"-----BEGIN PRIVATE KEY-----\n@@@@\n-----END PRIVATE KEY-----\n".as_slice(),
+            b"-----BEGIN RSA PRIVATE KEY-----\nAAAA\n",
+        ] {
+            let err = to_private_key(pem).expect_err("malformed key must fail");
+            assert_eq!(err.to_string(), "cannot parse private key");
+        }
+    }
+
+    #[test]
+    fn test_to_private_key_rejects_unsupported_first_block() {
+        let cert = generate_test_cert();
+        let key_pem = cert.signing_key.serialize_pem();
+        for prefix in [
+            cert.cert.pem(),
+            "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n".into(),
+            "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n".into(),
+        ] {
+            let pem = format!("{prefix}{key_pem}");
+            let err =
+                to_private_key(pem.as_bytes()).expect_err("first block must be a supported key");
+            assert_eq!(err.to_string(), "unknown private key format");
+        }
+    }
+
+    #[test]
+    fn test_to_private_key_skips_unrecognized_blocks() {
+        let cert = generate_test_cert();
+        for label in ["UNKNOWN", "ECHCONFIG"] {
+            let pem = format!(
+                "-----BEGIN {label}-----\nAAAA\n-----END {label}-----\n{}",
+                cert.signing_key.serialize_pem()
+            );
+            let key = to_private_key(pem.as_bytes()).expect("unrecognized block must be skipped");
+            assert!(matches!(key, PrivateKeyDer::Pkcs8(_)));
+        }
+    }
+
+    #[test]
+    fn test_to_private_key_uses_first_key() {
+        let cert = generate_test_cert();
+        let key_pem = cert.signing_key.serialize_pem();
+        let pem =
+            format!("{key_pem}-----BEGIN PRIVATE KEY-----\n@@@@\n-----END PRIVATE KEY-----\n");
+        let key = to_private_key(pem.as_bytes()).expect("trailing blocks must be ignored");
+        assert!(matches!(key, PrivateKeyDer::Pkcs8(_)));
+    }
+
+    #[test]
     fn test_to_private_key_pkcs8_der_matches() {
         let cert = generate_test_cert();
         let pem = cert.signing_key.serialize_pem();
@@ -298,7 +361,7 @@ gk8wqEpSd+WAAbO1LQBAyBjZWqqrpw7828tkUf7a\n\
         let paths = vec![cert_path.to_string_lossy().into_owned()];
         assert_root_cert_len(paths.as_ref(), 1);
 
-        let parsed_der = rustls_pemfile::certs(&mut pem.as_bytes())
+        let parsed_der = CertificateDer::pem_slice_iter(pem.as_bytes())
             .next()
             .expect("pem should contain a cert")
             .expect("cert should parse");
