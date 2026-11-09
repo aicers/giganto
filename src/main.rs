@@ -11,7 +11,7 @@ mod test_bootroot;
 mod tls_reload;
 mod web;
 
-use std::{ops::ControlFlow, process::ExitCode, sync::Arc, time::Duration};
+use std::{io, ops::ControlFlow, process::ExitCode, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
@@ -34,7 +34,6 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::{
     cancellation::{ObservedHandle, TaskTracker, drain_with_report},
@@ -121,18 +120,24 @@ async fn main() -> ExitCode {
         .ok()
         .map(|(soft, _)| soft);
     let result = run(args, RocksDbLimits::new(soft_limit)).await;
-    if let Err(error) = &result {
-        // Under the journal, the plain `Error: …` text on stderr would be
-        // stored as several entries at priority 6.
+    let final_error = result.as_ref().err().and_then(|error| {
         if journal {
-            error!("{error:#}");
+            Some(format!("{error:#}"))
         } else {
             eprintln!("Error: {error:?}");
+            None
         }
-    }
-    // Dropping the guard writes out every event still queued, so it has to
-    // happen before the process exits.
-    drop(guard);
+    });
+    // Guard shutdown is best-effort with internal timeouts; queued writes might
+    // not complete after a timeout. A full queue may drop events while running,
+    // and blocked stdout can block exit, including the direct exit writes.
+    logging::finish_logging(
+        guard.guard,
+        &guard.counter,
+        journal,
+        io::stdout(),
+        final_error.as_deref(),
+    );
     if result.is_ok() {
         ExitCode::SUCCESS
     } else {
@@ -145,11 +150,14 @@ async fn main() -> ExitCode {
 ///
 /// Help and version requests are printed as clap prints them, under the
 /// journal too: that output is not logging. Every other error is a usage
-/// error: under the journal it is logged as one ERROR event, since clap's
+/// error: under the journal it is written directly as one ERROR line, since clap's
 /// plain text on stderr would be stored at priority 6, and the process exits
 /// with clap's usage status; elsewhere clap prints it and exits as it always
-/// has. Either way `guard` is dropped first, so nothing logged is lost.
-fn refuse_command_line(error: &clap::Error, journal: bool, guard: WorkerGuard) -> ExitCode {
+/// has. Guard shutdown is best-effort with internal timeouts; queued writes
+/// might not complete after a timeout. A full queue may drop events while
+/// running, and blocked stdout can block exit. Shutdown runs before clap exits,
+/// since `error.exit()` skips destructors.
+fn refuse_command_line(error: &clap::Error, journal: bool, guard: logging::Logging) -> ExitCode {
     use clap::error::ErrorKind;
 
     if journal
@@ -160,11 +168,16 @@ fn refuse_command_line(error: &clap::Error, journal: bool, guard: WorkerGuard) -
     {
         // `render` styles nothing that `Display` writes, and clap ends its
         // message with a line feed the event's own line ends.
-        error!("{}", error.render().to_string().trim_end());
-        drop(guard);
+        logging::finish_logging(
+            guard.guard,
+            &guard.counter,
+            journal,
+            io::stdout(),
+            Some(error.render().to_string().trim_end()),
+        );
         return ExitCode::from(USAGE_EXIT_STATUS);
     }
-    drop(guard);
+    logging::finish_logging(guard.guard, &guard.counter, journal, io::stdout(), None);
     error.exit();
 }
 

@@ -6,8 +6,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.35.1] - 2026-11-12
 
+### Added
+
+- An exit warning reports the count of log events that could not be queued.
+  This count does not represent total log loss.
+
 ### Fixed
 
+- The final failure-reason line could be missing from the journal when output
+  was backed up. It is now written directly, even with `RUST_LOG` turned off.
 - Results of exports of the same kind started in the same second no longer mix
   or overwrite each other.
 - Statistics exports with no matching records or only malformed records now
