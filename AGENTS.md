@@ -528,6 +528,12 @@ Where the crate handles key material or secrets:
   finds nothing, and fails after the tag has already been pushed.
 <!-- END shared:changelog -->
 
+## Language
+
+- Code comments: English.
+- Commit messages: English.
+- GitHub issue and pull request bodies, and comments on them: English.
+
 ## Build requirements
 
 - libpcap, and Clang and LLVM for the `rocksdb` crate. CI installs
