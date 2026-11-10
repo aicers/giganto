@@ -3,7 +3,14 @@ Represents an event extracted from the BOOTP protocol.
 """
 type BootpRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -149,7 +156,14 @@ Represents an event extracted from a session.
 """
 type ConnRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -368,7 +382,14 @@ Represents an event extracted from the DCE-RPC protocol.
 """
 type DceRpcRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -477,7 +498,14 @@ Represents an event extracted from the DHCP protocol.
 """
 type DhcpRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -682,7 +710,14 @@ Represents an event extracted from the DNS protocol.
 """
 type DnsRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -1101,7 +1136,14 @@ Represents an event extracted from the FTP protocol.
 """
 type FtpRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -1200,7 +1242,14 @@ Represents an event extracted from the HTTP protocol.
 """
 type HttpRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -1367,7 +1416,14 @@ Represents an event extracted from the ICMP protocol.
 """
 type IcmpRawEvent {
 	"""
-	Time the event started transmitting from a sensor
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -1531,7 +1587,14 @@ Represents an event extracted from the Kerberos protocol.
 """
 type KerberosRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -1654,7 +1717,14 @@ Represents an event extracted from the LDAP protocol.
 """
 type LdapRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -1809,7 +1879,14 @@ Represents an event for malformed DNS traffic.
 """
 type MalformedDnsRawEvent {
 	"""
-	Time the event started transmitting from a sensor
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -1944,7 +2021,14 @@ Represents an event extracted from the MQTT protocol.
 """
 type MqttRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -2288,7 +2372,14 @@ Represents an event extracted from the NFS protocol.
 """
 type NfsRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -2383,7 +2474,14 @@ Represents an event extracted from the NTLM protocol.
 """
 type NtlmRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -2934,7 +3032,14 @@ Represents an event extracted from the RADIUS protocol.
 """
 type RadiusRawEvent {
 	"""
-	Time the event started transmitting from a sensor
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -3077,7 +3182,14 @@ Represents an event extracted from the RDP protocol.
 """
 type RdpRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -3322,7 +3434,14 @@ Represents an event extracted from the SMB protocol.
 """
 type SmbRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -3453,7 +3572,14 @@ Represents an event extracted from the SMTP protocol.
 """
 type SmtpRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -3568,7 +3694,14 @@ Represents an event extracted from the SSH protocol.
 """
 type SshRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
@@ -3828,7 +3961,14 @@ Represents an event extracted from the TLS protocol.
 """
 type TlsRawEvent {
 	"""
-	Start Time
+	Event Time
+	
+	The timestamp the sensor sent with this event. The event is stored under
+	this time, and the `time` range of a query filter matches it. Since 0.26.0
+	sensors send the time they created the event, not the session start time,
+	which is `startTime`; events stored before 0.26.0 keep the session start
+	time here. When a different event of the same kind from the same sensor
+	already holds this time, the event is stored at the next free nanosecond.
 	"""
 	time: DateTime!
 	"""
