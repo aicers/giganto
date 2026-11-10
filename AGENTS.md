@@ -5,11 +5,6 @@ contributing to the `giganto` project (Rust Edition). Read this carefully
 before generating code.
 
 <!-- BEGIN shared:workflow -->
-## Language
-
-- Code, comments, commit messages, PR descriptions, and issues are written
-  in English.
-
 ## Commit messages
 
 - Title: preferably under 50 characters, start with an imperative verb
@@ -532,6 +527,12 @@ Where the crate handles key material or secrets:
   job builds the notes by finding the heading that matches the tag: it
   finds nothing, and fails after the tag has already been pushed.
 <!-- END shared:changelog -->
+
+## Language
+
+- Code comments: English.
+- Commit messages: English.
+- GitHub issue and pull request bodies, and comments on them: English.
 
 ## Build requirements
 
