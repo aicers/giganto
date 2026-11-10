@@ -1579,6 +1579,59 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn independent_query_paths_reject_out_of_range_key_time_bounds() {
+        let schema = TestSchema::new();
+        let queries = [
+            r"query($time: TimeRange) {
+                opLogRawEvents(filter: { time: $time }) {
+                    edges { node { time } }
+                }
+            }",
+            r#"query($time: TimeRange) {
+                statistics(sensors: ["src1"], time: $time) { sensor }
+            }"#,
+            r#"query($time: TimeRange) {
+                pcap(filter: {
+                    sensor: "src1"
+                    requestTime: "1970-01-01T00:00:00Z"
+                    packetTime: $time
+                }) { parsedPcap }
+            }"#,
+            r#"query($time: TimeRange) {
+                periodicTimeSeries(filter: { id: "1", time: $time }) {
+                    edges { node { start } }
+                }
+            }"#,
+        ];
+
+        for query in queries {
+            for bound in ["start", "end"] {
+                for timestamp in [
+                    "1677-09-21T00:12:43.145224191Z",
+                    "2262-04-11T23:47:16.854775808Z",
+                ] {
+                    let response = schema
+                        .schema
+                        .execute(Request::new(query).variables(Variables::from_json(
+                            serde_json::json!({ "time": { (bound): timestamp } }),
+                        )))
+                        .await;
+                    assert_eq!(
+                        response.errors.len(),
+                        1,
+                        "{query}, {bound}: {timestamp}: {response:?}"
+                    );
+                    assert_eq!(
+                        response.errors[0].message,
+                        format!("time filter {bound} is outside the i64 nanosecond range"),
+                        "{query}, {bound}: {timestamp}: {response:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn export_accepts_valid_and_missing_key_time_bounds() {
         let schema = TestSchema::new();
         for time in [
