@@ -28,6 +28,9 @@
 - peers 간 방화벽 정책과 라우팅을 점검합니다.
 - 노드별 인증서 및 이름 정책이 상호 검증 요구 사항과 맞는지 확인합니다. 각
   `peers[].hostname`은 피어 인증서의 SAN DNS 이름이어야 합니다.
+- Publish 릴레이는 서비스 포트와 관계없이 대상 IP 주소로 피어 이름을 찾습니다.
+  해당 IP에 기록된 이름이 없거나 서로 다른 이름이 여러 개이면 릴레이가 연결할 수
+  없습니다. ASCII 영문자의 대소문자만 다른 이름은 같은 이름으로 취급합니다.
 - 각 노드의 로그에서 `TLS handshake from <address> failed: <error>`를 확인합니다.
   이 기록은 WARN 수준이므로 systemd에서는 `-p err`가 아니라
   `journalctl -u <unit> -p warning`으로 확인합니다. 여기에 `NoKxGroupsInCommon`이

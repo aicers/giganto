@@ -31,6 +31,10 @@
 - Verify that the node certificates and hostname policies meet the
   mutual verification requirements: each `peers[].hostname` must be the
   peer certificate's SAN DNS name.
+- Publish relays look up the peer name by target IP address, regardless of the
+  service port. The relay cannot connect if no name is recorded for that IP or
+  if multiple distinct names are recorded; names differing only in ASCII letter
+  case count as one name.
 - Look for `TLS handshake from <address> failed: <error>` in the log of each
   node. It is logged at WARN, so under systemd it is shown by
   `journalctl -u <unit> -p warning`, not by `-p err`. `NoKxGroupsInCommon` in

@@ -47,7 +47,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the sensor sent with the event, under which the event is stored and
   filtered. Most of these types described it as the session start time, which
   it has not been for events stored since 0.26.0; that is `startTime`.
-
 ## [0.35.0] - 2026-11-01
 
 ### Changed
