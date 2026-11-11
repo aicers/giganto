@@ -6,15 +6,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.35.1] - 2026-11-12
 
-### Added
-
-- An exit warning reports the count of log events that could not be queued.
-  This count does not represent total log loss.
-
 ### Fixed
 
 - The final failure-reason line could be missing from the journal when output
   was backed up. It is now written directly, even with `RUST_LOG` turned off.
+- When the process exits with a failure, the final error line stating why could
+  be missing from the journal if log output was backed up. The final error line
+  is now written directly instead of through the log filter, so it also appears
+  with `RUST_LOG=off`.
 - Results of exports of the same kind started in the same second no longer mix
   or overwrite each other.
 - Statistics exports with no matching records or only malformed records now
@@ -39,6 +38,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the sensor sent with the event, under which the event is stored and
   filtered. Most of these types described it as the session start time, which
   it has not been for events stored since 0.26.0; that is `startTime`.
+
+### Added
+
+- An exit warning reports the count of log events that could not be queued.
+  This count does not represent total log loss.
 
 ## [0.35.0] - 2026-11-01
 

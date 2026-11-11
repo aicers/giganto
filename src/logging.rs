@@ -22,9 +22,7 @@ use std::{
 use anyhow::{Context, Result};
 use nix::sys::stat::fstat;
 use tracing::{Level, Metadata, error, metadata::LevelFilter};
-use tracing_appender::non_blocking::{
-    DEFAULT_BUFFERED_LINES_LIMIT, ErrorCounter, NonBlockingBuilder, WorkerGuard,
-};
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     EnvFilter, Layer, Registry,
     fmt::{self, MakeWriter},
@@ -121,7 +119,7 @@ fn matches_journal_stream(
 }
 
 /// Initializes the tracing subscriber, which writes to standard output through
-/// a non-blocking writer, and returns its guard and rejected-event counter.
+/// a non-blocking writer, and returns its guard.
 ///
 /// With `journal`, each event is written as one journal line without a
 /// timestamp or ANSI codes, and the panic hook is replaced by one that logs a
@@ -138,17 +136,11 @@ fn matches_journal_stream(
 /// # Errors
 ///
 /// Returns an error if a global subscriber has already been set.
-pub(crate) fn init_tracing(journal: bool) -> Result<Logging> {
-    init_tracing_to(journal, io::stdout(), DEFAULT_BUFFERED_LINES_LIMIT)
+pub(crate) fn init_tracing(journal: bool) -> Result<WorkerGuard> {
+    init_tracing_to(journal, io::stdout())
 }
 
-/// The worker lifetime and count of events rejected by its queue.
-pub(crate) struct Logging {
-    pub(crate) guard: WorkerGuard,
-    pub(crate) counter: ErrorCounter,
-}
-
-/// Initializes tracing with a caller-provided worker writer and queue limit.
+/// Initializes tracing with a caller-provided worker writer.
 ///
 /// # Errors
 ///
@@ -156,12 +148,8 @@ pub(crate) struct Logging {
 pub(crate) fn init_tracing_to(
     journal: bool,
     writer: impl Write + Send + 'static,
-    buffer_limit: usize,
-) -> Result<Logging> {
-    let (writer, guard) = NonBlockingBuilder::default()
-        .buffered_lines_limit(buffer_limit)
-        .finish(writer);
-    let counter = writer.error_counter();
+) -> Result<WorkerGuard> {
+    let (writer, guard) = tracing_appender::non_blocking(writer);
     let layer: Box<dyn Layer<Registry> + Send + Sync> = if journal {
         fmt::Layer::default()
             .without_time()
@@ -184,41 +172,27 @@ pub(crate) fn init_tracing_to(
     if journal {
         panic::set_hook(Box::new(log_panic));
     }
-    Ok(Logging { guard, counter })
+    Ok(guard)
 }
 
-/// Attempts worker shutdown, then directly writes the final journal error and
-/// any queue-rejection count. Output errors do not affect the caller's status.
+/// Attempts worker shutdown, then directly writes the final journal error.
+/// Output errors do not affect the caller's status.
 pub(crate) fn finish_logging(
     guard: WorkerGuard,
-    counter: &ErrorCounter,
     journal: bool,
     mut direct: impl Write,
     final_error: Option<&str>,
 ) {
     drop(guard);
     if let Some(message) = final_error.filter(|_| journal) {
-        write_exit_line(&mut direct, Level::ERROR, true, message);
-    }
-    let dropped = counter.dropped_lines();
-    if dropped > 0 {
-        write_exit_line(
-            &mut direct,
-            Level::WARN,
-            journal,
-            &format!("log events dropped because the output queue was full or closed: {dropped}"),
-        );
+        write_exit_line(&mut direct, message);
     }
 }
 
-fn write_exit_line(direct: &mut impl Write, level: Level, journal: bool, message: &str) {
+fn write_exit_line(direct: &mut impl Write, message: &str) {
     const TARGET: &str = "giganto";
-    let event = format!("{:>5} {TARGET}: {message}\n", level.as_str());
-    let line = if journal {
-        journal_line(level, event.as_bytes())
-    } else {
-        event.into_bytes()
-    };
+    let event = format!("ERROR {TARGET}: {message}\n");
+    let line = journal_line(Level::ERROR, event.as_bytes());
     let _ = direct.write_all(&line);
     let _ = direct.flush();
 }
@@ -359,12 +333,13 @@ mod tests {
     };
 
     use tracing::{Level, debug, error, info, warn};
+    use tracing_appender::non_blocking::WorkerGuard;
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::{
-        FileId, JOURNAL_STREAM_ENV, JournalLine, JournalWriter, Logging, finish_logging,
-        init_tracing, init_tracing_to, journal_line, matches_journal_stream, output_is_journal,
-        panic_message, write_exit_line,
+        FileId, JOURNAL_STREAM_ENV, JournalLine, JournalWriter, finish_logging, init_tracing,
+        init_tracing_to, journal_line, matches_journal_stream, output_is_journal, panic_message,
+        write_exit_line,
     };
 
     /// Marks the child process that sets up logging and runs a test body.
@@ -623,7 +598,7 @@ mod tests {
 
     /// Sets logging up in the child as `main` does, returning the guard the
     /// child drops before it returns.
-    fn init_child_logging() -> Logging {
+    fn init_child_logging() -> WorkerGuard {
         init_tracing(output_is_journal(
             env::var_os(JOURNAL_STREAM_ENV).as_deref(),
         ))
@@ -702,136 +677,40 @@ mod tests {
         }
     }
 
-    fn blocked_shutdown(journal: bool, overflow: bool) {
-        let output = SharedOutput::default();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (gate_tx, gate_rx) = mpsc::channel();
-        let logging = init_tracing_to(
-            journal,
-            GatedWriter {
-                output: output.clone(),
-                started: started_tx,
-                gate: Some(gate_rx),
-            },
-            4,
-        )
-        .unwrap();
-        info!(target: "giganto", "blocked event");
-        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        if overflow {
-            for n in 0..7 {
-                info!(target: "giganto", "queued event {n}");
-            }
-            assert_eq!(logging.counter.dropped_lines(), 3);
-        }
-        finish_logging(
-            logging.guard,
-            &logging.counter,
-            journal,
-            output.clone(),
-            if overflow {
-                None
-            } else {
-                Some("final failure")
-            },
-        );
-        assert_eq!(
-            logging.counter.dropped_lines(),
-            if overflow { 3 } else { 0 }
-        );
-        let expected = if overflow {
-            format!(
-                "{} WARN giganto: log events dropped because the output queue was full or closed: 3\n",
-                if journal { "<4>" } else { "" }
-            )
-        } else {
-            "<3>ERROR giganto: final failure\n".to_owned()
-        };
-        assert_eq!(output.snapshot(), expected.as_bytes());
-        gate_tx.send(()).unwrap();
-    }
-
     #[test]
     fn final_error_bypasses_blocked_worker() {
-        if is_child() {
-            blocked_shutdown(true, false);
-            return;
-        }
-        run_in_child_process("final_error_bypasses_blocked_worker", &Journal::Unset, None);
-    }
-
-    #[test]
-    fn full_queue_reports_exact_journal_count() {
-        if is_child() {
-            blocked_shutdown(true, true);
-            return;
-        }
-        run_in_child_process(
-            "full_queue_reports_exact_journal_count",
-            &Journal::Unset,
-            None,
-        );
-    }
-
-    #[test]
-    fn full_queue_reports_exact_plain_count() {
-        if is_child() {
-            blocked_shutdown(false, true);
-            return;
-        }
-        run_in_child_process(
-            "full_queue_reports_exact_plain_count",
-            &Journal::Unset,
-            None,
-        );
-    }
-
-    #[test]
-    fn zero_dropped_has_no_warning() {
         if is_child() {
             let output = SharedOutput::default();
             let (started_tx, started_rx) = mpsc::channel();
             let (gate_tx, gate_rx) = mpsc::channel();
-            gate_tx.send(()).unwrap();
-            let logging = init_tracing_to(
+            let guard = init_tracing_to(
                 true,
                 GatedWriter {
                     output: output.clone(),
                     started: started_tx,
                     gate: Some(gate_rx),
                 },
-                4,
             )
             .unwrap();
-            for n in 0..3 {
-                info!(target: "giganto", "event {n}");
-            }
+            info!(target: "giganto", "blocked event");
             started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            finish_logging(logging.guard, &logging.counter, true, output.clone(), None);
-            assert_eq!(logging.counter.dropped_lines(), 0);
-            assert_eq!(output.snapshot(),
-                b"<6> INFO giganto: event 0\n<6> INFO giganto: event 1\n<6> INFO giganto: event 2\n");
+            finish_logging(guard, true, output.clone(), Some("final failure"));
+            assert_eq!(output.snapshot(), b"<3>ERROR giganto: final failure\n");
+            gate_tx.send(()).unwrap();
             return;
         }
-        run_in_child_process("zero_dropped_has_no_warning", &Journal::Unset, None);
+        run_in_child_process("final_error_bypasses_blocked_worker", &Journal::Unset, None);
     }
 
     #[test]
     fn final_error_bypasses_filter() {
         if is_child() {
             let output = SharedOutput::default();
-            let logging = init_tracing_to(true, output.clone(), 4).unwrap();
+            let guard = init_tracing_to(true, output.clone()).unwrap();
             for _ in 0..8 {
                 error!(target: "giganto", "filtered event");
             }
-            finish_logging(
-                logging.guard,
-                &logging.counter,
-                true,
-                output.clone(),
-                Some("final failure"),
-            );
-            assert_eq!(logging.counter.dropped_lines(), 0);
+            finish_logging(guard, true, output.clone(), Some("final failure"));
             assert_eq!(output.snapshot(), b"<3>ERROR giganto: final failure\n");
             return;
         }
@@ -839,19 +718,26 @@ mod tests {
     }
 
     #[test]
-    fn direct_error_escaping_and_warning_bytes() {
+    fn direct_error_escaping() {
         let mut output = Vec::new();
-        write_exit_line(&mut output, Level::ERROR, true, "a\nb\0c");
+        write_exit_line(&mut output, "a\nb\0c");
         assert_eq!(output, b"<3>ERROR giganto: a\\nb\\0c\n");
-        for (journal, prefix) in [(true, "<4>"), (false, "")] {
-            output.clear();
-            write_exit_line(
-                &mut output,
-                Level::WARN,
-                journal,
-                "log events dropped because the output queue was full or closed: 3",
-            );
-            assert_eq!(output, format!("{prefix} WARN giganto: log events dropped because the output queue was full or closed: 3\n").as_bytes());
+    }
+
+    struct NotifyingWriter {
+        output: SharedOutput,
+        written: mpsc::Sender<()>,
+    }
+
+    impl Write for NotifyingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let size = self.output.write(bytes)?;
+            self.written.send(()).unwrap();
+            Ok(size)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.output.flush()
         }
     }
 
@@ -859,11 +745,20 @@ mod tests {
     fn direct_error_matches_fmt_layer() {
         if is_child() {
             let output = SharedOutput::default();
-            let logging = init_tracing_to(true, output.clone(), 4).unwrap();
+            let (written_tx, written_rx) = mpsc::channel();
+            let guard = init_tracing_to(
+                true,
+                NotifyingWriter {
+                    output: output.clone(),
+                    written: written_tx,
+                },
+            )
+            .unwrap();
             error!(target: "giganto", "{}", "same\nline");
-            finish_logging(logging.guard, &logging.counter, true, output.clone(), None);
+            written_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            finish_logging(guard, true, output.clone(), None);
             let mut direct = Vec::new();
-            write_exit_line(&mut direct, Level::ERROR, true, "same\nline");
+            write_exit_line(&mut direct, "same\nline");
             assert_eq!(direct, b"<3>ERROR giganto: same\\nline\n");
             assert_eq!(output.snapshot(), direct);
             return;

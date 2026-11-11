@@ -131,13 +131,7 @@ async fn main() -> ExitCode {
     // Guard shutdown is best-effort with internal timeouts; queued writes might
     // not complete after a timeout. A full queue may drop events while running,
     // and blocked stdout can block exit, including the direct exit writes.
-    logging::finish_logging(
-        guard.guard,
-        &guard.counter,
-        journal,
-        io::stdout(),
-        final_error.as_deref(),
-    );
+    logging::finish_logging(guard, journal, io::stdout(), final_error.as_deref());
     if result.is_ok() {
         ExitCode::SUCCESS
     } else {
@@ -157,7 +151,11 @@ async fn main() -> ExitCode {
 /// might not complete after a timeout. A full queue may drop events while
 /// running, and blocked stdout can block exit. Shutdown runs before clap exits,
 /// since `error.exit()` skips destructors.
-fn refuse_command_line(error: &clap::Error, journal: bool, guard: logging::Logging) -> ExitCode {
+fn refuse_command_line(
+    error: &clap::Error,
+    journal: bool,
+    guard: tracing_appender::non_blocking::WorkerGuard,
+) -> ExitCode {
     use clap::error::ErrorKind;
 
     if journal
@@ -167,17 +165,17 @@ fn refuse_command_line(error: &clap::Error, journal: bool, guard: logging::Loggi
         )
     {
         // `render` styles nothing that `Display` writes, and clap ends its
-        // message with a line feed the event's own line ends.
+        // message with a line feed. The direct write appends its own, so trim
+        // the trailing whitespace to avoid an escaped literal `\n` at the end.
         logging::finish_logging(
-            guard.guard,
-            &guard.counter,
+            guard,
             journal,
             io::stdout(),
             Some(error.render().to_string().trim_end()),
         );
         return ExitCode::from(USAGE_EXIT_STATUS);
     }
-    logging::finish_logging(guard.guard, &guard.counter, journal, io::stdout(), None);
+    logging::finish_logging(guard, journal, io::stdout(), None);
     error.exit();
 }
 
