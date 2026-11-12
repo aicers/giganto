@@ -103,10 +103,11 @@ pub struct TimeRange {
     start: Option<DateTime>,
     end: Option<DateTime>,
 }
+
 fn validate_key_time_bounds((start, end): (Option<DateTime>, Option<DateTime>)) -> Result<()> {
     for (name, bound) in [("start", start), ("end", end)] {
         if bound.is_some_and(|time| time.timestamp_nanos_opt().is_none()) {
-            return Err(format!("time filter {name} is outside the i64 nanosecond range").into());
+            return Err(format!("time filter {name} must be between 1677-09-21T00:12:43.145224192Z and 2262-04-11T23:47:16.854775807Z inclusive").into());
         }
     }
     Ok(())
@@ -1550,7 +1551,11 @@ pub(crate) mod tests {
                         };
                         let response = schema.execute(&query).await;
                         assert_eq!(response.errors.len(), 1, "{query}: {response:?}");
-                        assert!(response.errors[0].message.contains("i64 nanosecond range"));
+                        assert!(
+                            response.errors[0]
+                                .message
+                                .contains("1677-09-21T00:12:43.145224192Z")
+                        );
                         assert_eq!(schema.top_level_tracker.pending_count(), 0);
                         assert_eq!(
                             std::fs::read_dir(schema.export_dir.path()).unwrap().count(),
@@ -1574,6 +1579,18 @@ pub(crate) mod tests {
                 );
                 let response = schema.execute(&query).await;
                 assert!(response.errors.is_empty(), "{query}: {response:?}");
+                // Negative bounds have a separate key-ordering issue.
+                if populated && !time.contains("1677-") {
+                    let edges = &response.data.into_json().unwrap()["connRawEvents"]["edges"];
+                    let expected = usize::from(!time.contains("start: \"2262-"));
+                    assert_eq!(edges.as_array().unwrap().len(), expected, "{query}");
+                    if expected == 1 {
+                        assert_eq!(
+                            edges[0]["node"]["time"],
+                            "1970-01-01T00:00:00.000000001+00:00"
+                        );
+                    }
+                }
             }
         }
     }
@@ -1623,7 +1640,9 @@ pub(crate) mod tests {
                     );
                     assert_eq!(
                         response.errors[0].message,
-                        format!("time filter {bound} is outside the i64 nanosecond range"),
+                        format!(
+                            "time filter {bound} must be between 1677-09-21T00:12:43.145224192Z and 2262-04-11T23:47:16.854775807Z inclusive"
+                        ),
                         "{query}, {bound}: {timestamp}: {response:?}"
                     );
                 }
