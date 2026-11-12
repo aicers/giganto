@@ -1092,6 +1092,133 @@ impl<'db, T> RawEventStore<'db, T> {
 }
 
 impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
+    /// Iterate the legacy signed timestamp encoding in chronological order.
+    ///
+    /// Negative and non-negative timestamps form two individually ordered
+    /// ranges in RocksDB. Keep the stored keys unchanged and visit those
+    /// ranges in signed order instead.
+    #[allow(clippy::too_many_lines)]
+    pub fn timestamp_range_iter(
+        &self,
+        prefix: &[u8],
+        start: Option<DateTime>,
+        end: Option<DateTime>,
+        cursor: Option<&[u8]>,
+        direction: Direction,
+    ) -> impl Iterator<Item = Result<KeyValue<T>>> + 'db
+    where
+        T: 'db,
+    {
+        let start =
+            i128::from(start.map_or(i64::MIN, |t| t.timestamp_nanos_opt().unwrap_or(i64::MAX)));
+        let end = end.map_or(i128::from(i64::MAX) + 1, |t| {
+            i128::from(t.timestamp_nanos_opt().unwrap_or(i64::MAX))
+        });
+        let prefix = prefix.to_vec();
+        let cursor = cursor.map(<[u8]>::to_vec);
+        let cursor_time = cursor.as_ref().and_then(|key| {
+            key.get(prefix.len()..prefix.len() + TIMESTAMP_SIZE)
+                .map(|bytes| {
+                    i128::from(i64::from_be_bytes(
+                        bytes.try_into().expect("timestamp length"),
+                    ))
+                })
+        });
+        let mut segments = vec![
+            (start.max(i128::from(i64::MIN)), end.min(0)),
+            (start.max(0), end.min(i128::from(i64::MAX) + 1)),
+        ];
+        if matches!(direction, Direction::Reverse) {
+            segments.reverse();
+        }
+        let mut iterators = Vec::new();
+        for (lower, upper) in segments {
+            if lower >= upper {
+                continue;
+            }
+            if cursor_time.is_some_and(|time| match direction {
+                Direction::Forward => time >= upper,
+                Direction::Reverse => time < lower,
+            }) {
+                continue;
+            }
+            let mut lower_key = prefix.clone();
+            lower_key.extend_from_slice(
+                &i64::try_from(lower)
+                    .expect("valid lower bound")
+                    .to_be_bytes(),
+            );
+            let upper_key = if upper == 0 {
+                let mut key = prefix.clone();
+                while key.last() == Some(&u8::MAX) {
+                    key.pop();
+                }
+                if let Some(last) = key.last_mut() {
+                    *last += 1;
+                }
+                if key.is_empty() { None } else { Some(key) }
+            } else {
+                let mut key = prefix.clone();
+                if upper == i128::from(i64::MAX) + 1 {
+                    key.extend_from_slice(&i64::MIN.to_be_bytes());
+                } else {
+                    key.extend_from_slice(
+                        &i64::try_from(upper)
+                            .expect("valid upper bound")
+                            .to_be_bytes(),
+                    );
+                }
+                Some(key)
+            };
+            let mut options = ReadOptions::default();
+            options.set_iterate_lower_bound(lower_key.clone());
+            if let Some(key) = &upper_key {
+                options.set_iterate_upper_bound(key.clone());
+            }
+            let cursor_in_segment = cursor_time.is_some_and(|time| time >= lower && time < upper);
+            let mode = if cursor_in_segment {
+                rocksdb::IteratorMode::From(cursor.as_deref().expect("cursor exists"), direction)
+            } else {
+                match direction {
+                    Direction::Forward => rocksdb::IteratorMode::From(&lower_key, direction),
+                    Direction::Reverse => upper_key
+                        .as_ref()
+                        .map_or(rocksdb::IteratorMode::End, |key| {
+                            rocksdb::IteratorMode::From(key, direction)
+                        }),
+                }
+            };
+            iterators.push(BoundaryIter::new(
+                self.db.iterator_cf_opt(self.cf, options, mode),
+            ));
+        }
+        iterators.into_iter().flatten().filter(move |item| {
+            let Ok((key, _)) = item else {
+                return true;
+            };
+            let Some(bytes) = key.get(prefix.len()..prefix.len() + TIMESTAMP_SIZE) else {
+                return false;
+            };
+            let timestamp = i64::from_be_bytes(bytes.try_into().expect("timestamp length"));
+            if let Some(cursor) = &cursor {
+                let Some(cursor_bytes) = cursor.get(prefix.len()..prefix.len() + TIMESTAMP_SIZE)
+                else {
+                    return false;
+                };
+                let cursor_timestamp =
+                    i64::from_be_bytes(cursor_bytes.try_into().expect("timestamp length"));
+                let order = timestamp
+                    .cmp(&cursor_timestamp)
+                    .then_with(|| key.as_ref().cmp(cursor));
+                return match direction {
+                    Direction::Forward => order.is_gt(),
+                    Direction::Reverse => order.is_lt(),
+                };
+            }
+            true
+        })
+    }
+
     pub fn boundary_iter(
         &self,
         from: &[u8],
@@ -1301,43 +1428,6 @@ impl StorageKeyBuilder {
         self
     }
 
-    pub fn lower_closed_bound_end_key(mut self, time: Option<DateTime>) -> Self {
-        self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
-        } else {
-            0
-        };
-        self.pre_key.extend_from_slice(&ns.to_be_bytes());
-        self
-    }
-
-    pub fn upper_open_bound_end_key(mut self, time: Option<DateTime>) -> Self {
-        self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
-        } else {
-            i64::MAX
-        };
-        self.pre_key.extend_from_slice(&ns.to_be_bytes());
-        self
-    }
-
-    pub fn upper_closed_bound_end_key(mut self, time: Option<DateTime>) -> Self {
-        self.pre_key.reserve(TIMESTAMP_SIZE);
-        if let Some(time) = time {
-            let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
-            if let Some(ns) = ns.checked_sub(1)
-                && ns >= 0
-            {
-                self.pre_key.extend_from_slice(&ns.to_be_bytes());
-                return self;
-            }
-        }
-        self.pre_key.extend_from_slice(&i64::MAX.to_be_bytes());
-        self
-    }
-
     pub fn build(self) -> StorageKey {
         StorageKey(self.pre_key)
     }
@@ -1363,43 +1453,6 @@ impl StorageTimestampKeyBuilder {
         self
     }
 
-    pub fn lower_closed_bound_start_key(mut self, time: Option<DateTime>) -> Self {
-        self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
-        } else {
-            0
-        };
-        self.pre_key.extend_from_slice(&ns.to_be_bytes());
-        self
-    }
-
-    pub fn upper_open_bound_start_key(mut self, time: Option<DateTime>) -> Self {
-        self.pre_key.reserve(TIMESTAMP_SIZE);
-        let ns = if let Some(time) = time {
-            time.timestamp_nanos_opt().unwrap_or(i64::MAX)
-        } else {
-            i64::MAX
-        };
-        self.pre_key.extend_from_slice(&ns.to_be_bytes());
-        self
-    }
-
-    pub fn upper_closed_bound_start_key(mut self, time: Option<DateTime>) -> Self {
-        self.pre_key.reserve(TIMESTAMP_SIZE);
-        if let Some(time) = time {
-            let ns = time.timestamp_nanos_opt().unwrap_or(i64::MAX);
-            if let Some(ns) = ns.checked_sub(1)
-                && ns >= 0
-            {
-                self.pre_key.extend_from_slice(&ns.to_be_bytes());
-                return self;
-            }
-        }
-        self.pre_key.extend_from_slice(&i64::MAX.to_be_bytes());
-        self
-    }
-
     pub fn build(self) -> StorageKey {
         StorageKey(self.pre_key)
     }
@@ -1412,12 +1465,14 @@ pub type CheckedValue = Result<Option<Vec<u8>>, rocksdb::Error>;
 pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
 pub struct StatisticsIter<'d, T> {
-    inner: BoundaryIter<'d, T>,
+    inner: Box<dyn Iterator<Item = Result<KeyValue<T>>> + 'd>,
 }
 
 impl<'d, T> StatisticsIter<'d, T> {
-    pub fn new(inner: BoundaryIter<'d, T>) -> Self {
-        Self { inner }
+    pub fn new(inner: impl Iterator<Item = Result<KeyValue<T>>> + 'd) -> Self {
+        Self {
+            inner: Box::new(inner),
+        }
     }
 }
 
@@ -1436,13 +1491,16 @@ where
 }
 
 pub struct FilteredIter<'d, T, F: RawEventFilter = crate::graphql::NetworkFilter> {
-    inner: BoundaryIter<'d, T>,
+    inner: Box<dyn Iterator<Item = Result<KeyValue<T>>> + 'd>,
     filter: &'d F,
 }
 
 impl<'d, T, F: RawEventFilter> FilteredIter<'d, T, F> {
-    pub fn new(inner: BoundaryIter<'d, T>, filter: &'d F) -> Self {
-        Self { inner, filter }
+    pub fn new(inner: impl Iterator<Item = Result<KeyValue<T>>> + 'd, filter: &'d F) -> Self {
+        Self {
+            inner: Box::new(inner),
+            filter,
+        }
     }
 }
 
@@ -2352,6 +2410,141 @@ mod tests {
         (dir, db)
     }
 
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn legacy_timestamp_ranges_and_cursors_cross_epoch() {
+        let (_dir, db) = setup_db();
+        for (prefix, cf) in [(b"sensor\0".as_slice(), "conn"), (b"".as_slice(), "oplog")] {
+            let store = RawEventStore::<i64>::new(&db.db, db.get_cf_handle(cf).unwrap(), 1);
+            for timestamp in [-2_i64, -1, 0, 1, 2] {
+                let key = if prefix.is_empty() {
+                    StorageKey::timestamp_builder()
+                        .start_key(timestamp)
+                        .mid_key(1)
+                        .build()
+                        .key()
+                } else {
+                    StorageKey::builder()
+                        .start_key("sensor")
+                        .end_key(timestamp)
+                        .build()
+                        .key()
+                };
+                store
+                    .append(&key, &bincode::serialize(&timestamp).unwrap())
+                    .unwrap();
+            }
+            let query = |start: Option<i64>, end: Option<i64>, cursor: Option<&[u8]>, direction| {
+                store
+                    .timestamp_range_iter(
+                        prefix,
+                        start.map(DateTime::from_timestamp_nanos),
+                        end.map(DateTime::from_timestamp_nanos),
+                        cursor,
+                        direction,
+                    )
+                    .map(|item| item.unwrap())
+                    .collect::<Vec<_>>()
+            };
+            let values = |items: Vec<(Box<[u8]>, i64)>| {
+                items
+                    .into_iter()
+                    .map(|(_, value)| value)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                values(query(Some(-2), Some(2), None, super::Direction::Forward)),
+                [-2, -1, 0, 1]
+            );
+            assert_eq!(
+                values(query(Some(-2), Some(0), None, super::Direction::Forward)),
+                [-2, -1]
+            );
+            assert_eq!(
+                values(query(Some(0), None, None, super::Direction::Forward)),
+                [0, 1, 2]
+            );
+            assert_eq!(
+                values(query(None, Some(0), None, super::Direction::Forward)),
+                [-2, -1]
+            );
+            assert_eq!(
+                values(query(None, None, None, super::Direction::Forward)),
+                [-2, -1, 0, 1, 2]
+            );
+            assert_eq!(
+                values(query(Some(-2), Some(2), None, super::Direction::Reverse)),
+                [1, 0, -1, -2]
+            );
+            assert_eq!(
+                values(query(None, Some(0), None, super::Direction::Reverse)),
+                [-1, -2]
+            );
+            for direction in [super::Direction::Forward, super::Direction::Reverse] {
+                let mut cursor = None;
+                let mut all = Vec::new();
+                loop {
+                    let page = query(Some(-2), Some(2), cursor.as_deref(), direction)
+                        .into_iter()
+                        .take(2)
+                        .collect::<Vec<_>>();
+                    if page.is_empty() {
+                        break;
+                    }
+                    cursor = Some(page.last().unwrap().0.to_vec());
+                    all.extend(values(page));
+                }
+                if matches!(direction, super::Direction::Reverse) {
+                    all.reverse();
+                }
+                assert_eq!(all, [-2, -1, 0, 1]);
+            }
+            for timestamp in [i64::MIN, i64::MAX] {
+                let key = if prefix.is_empty() {
+                    StorageKey::timestamp_builder()
+                        .start_key(timestamp)
+                        .mid_key(1)
+                        .build()
+                        .key()
+                } else {
+                    StorageKey::builder()
+                        .start_key("sensor")
+                        .end_key(timestamp)
+                        .build()
+                        .key()
+                };
+                store
+                    .append(&key, &bincode::serialize(&timestamp).unwrap())
+                    .unwrap();
+            }
+            assert_eq!(
+                values(query(None, None, None, super::Direction::Forward)),
+                [i64::MIN, -2, -1, 0, 1, 2, i64::MAX]
+            );
+            assert_eq!(
+                values(query(None, Some(i64::MIN), None, super::Direction::Reverse)),
+                [] as [i64; 0]
+            );
+            assert_eq!(
+                values(query(Some(i64::MAX), None, None, super::Direction::Reverse)),
+                [i64::MAX]
+            );
+            let overflow =
+                DateTime::from("3000-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
+            let overflow_values = store
+                .timestamp_range_iter(
+                    prefix,
+                    Some(overflow),
+                    None,
+                    None,
+                    super::Direction::Forward,
+                )
+                .map(|item| item.unwrap().1)
+                .collect::<Vec<_>>();
+            assert_eq!(overflow_values, [i64::MAX]);
+        }
+    }
+
     fn conn_key(sensor: &str, timestamp: i64) -> Vec<u8> {
         StorageKey::builder()
             .start_key(sensor)
@@ -2960,211 +3153,6 @@ mod tests {
         assert_eq!(item.1.core, stats.core);
         assert_eq!(item.1.period, stats.period);
         assert_eq!(item.1.stats.as_slice(), []);
-    }
-
-    /// Test `StorageKeyBuilder` with timestamp boundaries
-    #[test]
-    fn test_storage_key_builder_lower_bound() {
-        // Test with None (should use 0)
-        let key_none = StorageKey::builder()
-            .start_key("test_source")
-            .lower_closed_bound_end_key(None)
-            .build();
-        let expected_none = {
-            let mut k = b"test_source\0".to_vec();
-            k.extend_from_slice(&0_i64.to_be_bytes());
-            k
-        };
-        assert_eq!(*key_none.key(), expected_none);
-
-        // Test with Some(DateTime)
-        let some_time = DateTime::from_timestamp_nanos(1_000_000_000);
-        let key_some = StorageKey::builder()
-            .start_key("test_source")
-            .lower_closed_bound_end_key(Some(some_time))
-            .build();
-        let expected_some = {
-            let mut k = b"test_source\0".to_vec();
-            k.extend_from_slice(&1_000_000_000_i64.to_be_bytes());
-            k
-        };
-        assert_eq!(*key_some.key(), expected_some);
-
-        // Test with MIN timestamp
-        let min_time = DateTime::from_timestamp_nanos(i64::MIN);
-        let key_min = StorageKey::builder()
-            .start_key("test_source")
-            .lower_closed_bound_end_key(Some(min_time))
-            .build();
-        let expected_min = {
-            let mut k = b"test_source\0".to_vec();
-            k.extend_from_slice(&i64::MIN.to_be_bytes());
-            k
-        };
-        assert_eq!(*key_min.key(), expected_min);
-    }
-
-    /// Test `StorageKeyBuilder` with upper bound edge cases
-    #[test]
-    fn test_storage_key_builder_upper_bound() {
-        // Test upper_closed_bound with None (should use i64::MAX)
-        let key_none = StorageKey::builder()
-            .start_key("test_source")
-            .upper_closed_bound_end_key(None)
-            .build();
-        let expected_none = {
-            let mut k = b"test_source\0".to_vec();
-            k.extend_from_slice(&i64::MAX.to_be_bytes());
-            k
-        };
-        assert_eq!(*key_none.key(), expected_none);
-
-        // Test upper_closed_bound with Some(DateTime)
-        // Should subtract 1 if possible
-        let some_time = DateTime::from_timestamp_nanos(2_000_000_000);
-        let key_some = StorageKey::builder()
-            .start_key("test_source")
-            .upper_closed_bound_end_key(Some(some_time))
-            .build();
-        let expected_some = {
-            let mut k = b"test_source\0".to_vec();
-            k.extend_from_slice(&1_999_999_999_i64.to_be_bytes());
-            k
-        };
-        assert_eq!(*key_some.key(), expected_some);
-
-        // Test upper_closed_bound with 0 (edge case)
-        // When timestamp is 0, subtracting 1 gives -1, which fails >= 0 check
-        // So it falls through to i64::MAX
-        let zero_time = DateTime::from_timestamp_nanos(0);
-        let key_zero = StorageKey::builder()
-            .start_key("test_source")
-            .upper_closed_bound_end_key(Some(zero_time))
-            .build();
-        let expected_zero = {
-            let mut k = b"test_source\0".to_vec();
-            k.extend_from_slice(&i64::MAX.to_be_bytes());
-            k
-        };
-        assert_eq!(*key_zero.key(), expected_zero);
-
-        // Test upper_open_bound with None (should use i64::MAX)
-        let key_open_none = StorageKey::builder()
-            .start_key("test_source")
-            .upper_open_bound_end_key(None)
-            .build();
-        let expected_open_none = {
-            let mut k = b"test_source\0".to_vec();
-            k.extend_from_slice(&i64::MAX.to_be_bytes());
-            k
-        };
-        assert_eq!(*key_open_none.key(), expected_open_none);
-
-        // Test upper_open_bound with Some(DateTime)
-        let some_time_open = DateTime::from_timestamp_nanos(3_000_000_000);
-        let key_open_some = StorageKey::builder()
-            .start_key("test_source")
-            .upper_open_bound_end_key(Some(some_time_open))
-            .build();
-        let expected_open_some = {
-            let mut k = b"test_source\0".to_vec();
-            k.extend_from_slice(&3_000_000_000_i64.to_be_bytes());
-            k
-        };
-        assert_eq!(*key_open_some.key(), expected_open_some);
-    }
-
-    #[test]
-    fn test_storage_timestamp_key_builder_lower_bound() {
-        // None uses zero epoch nanos
-        let key_none = StorageKey::timestamp_builder()
-            .start_key(42)
-            .lower_closed_bound_start_key(None)
-            .build()
-            .key();
-        let mut expected_none = 42_i64.to_be_bytes().to_vec();
-        expected_none.extend_from_slice(&0_i64.to_be_bytes());
-        assert_eq!(key_none, expected_none);
-
-        // Specific DateTime should be preserved exactly
-        let some_time = DateTime::from_timestamp_nanos(4_200_000_000);
-        let key_some = StorageKey::timestamp_builder()
-            .start_key(42)
-            .lower_closed_bound_start_key(Some(some_time))
-            .build()
-            .key();
-        let mut expected_some = 42_i64.to_be_bytes().to_vec();
-        expected_some.extend_from_slice(&4_200_000_000_i64.to_be_bytes());
-        assert_eq!(key_some, expected_some);
-
-        // MIN timestamp preserves i64::MIN nanoseconds
-        let min_time = DateTime::min_utc();
-        let key_min = StorageKey::timestamp_builder()
-            .start_key(42)
-            .lower_closed_bound_start_key(Some(min_time))
-            .build()
-            .key();
-        let mut expected_min = 42_i64.to_be_bytes().to_vec();
-        expected_min.extend_from_slice(&i64::MIN.to_be_bytes());
-        assert_eq!(key_min, expected_min);
-
-        // Out-of-range timestamps still fall back to i64::MAX
-        let overflow_time =
-            DateTime::from("3000-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap());
-        let key_overflow = StorageKey::timestamp_builder()
-            .start_key(42)
-            .lower_closed_bound_start_key(Some(overflow_time))
-            .build()
-            .key();
-        let mut expected_overflow = 42_i64.to_be_bytes().to_vec();
-        expected_overflow.extend_from_slice(&i64::MAX.to_be_bytes());
-        assert_eq!(key_overflow, expected_overflow);
-    }
-
-    #[test]
-    fn test_storage_timestamp_key_builder_upper_bound() {
-        // upper_open_bound_start_key with None falls back to i64::MAX
-        let key_open_none = StorageKey::timestamp_builder()
-            .start_key(7)
-            .upper_open_bound_start_key(None)
-            .build()
-            .key();
-        let mut expected_open_none = 7_i64.to_be_bytes().to_vec();
-        expected_open_none.extend_from_slice(&i64::MAX.to_be_bytes());
-        assert_eq!(key_open_none, expected_open_none);
-
-        // upper_open_bound_start_key with Some(DateTime) preserves the timestamp
-        let open_time = DateTime::from_timestamp_nanos(8_000_000_000);
-        let key_open_some = StorageKey::timestamp_builder()
-            .start_key(7)
-            .upper_open_bound_start_key(Some(open_time))
-            .build()
-            .key();
-        let mut expected_open_some = 7_i64.to_be_bytes().to_vec();
-        expected_open_some.extend_from_slice(&8_000_000_000_i64.to_be_bytes());
-        assert_eq!(key_open_some, expected_open_some);
-
-        // upper_closed_bound_start_key subtracts one nanosecond when possible
-        let closed_time = DateTime::from_timestamp_nanos(9_000_000_000);
-        let key_closed_some = StorageKey::timestamp_builder()
-            .start_key(7)
-            .upper_closed_bound_start_key(Some(closed_time))
-            .build()
-            .key();
-        let mut expected_closed_some = 7_i64.to_be_bytes().to_vec();
-        expected_closed_some.extend_from_slice(&8_999_999_999_i64.to_be_bytes());
-        assert_eq!(key_closed_some, expected_closed_some);
-
-        // When subtraction would underflow, it should fall back to i64::MAX
-        let zero_time = DateTime::from_timestamp_nanos(0);
-        let key_zero = StorageKey::timestamp_builder()
-            .start_key(7)
-            .upper_closed_bound_start_key(Some(zero_time))
-            .build()
-            .key();
-        let mut expected_zero = 7_i64.to_be_bytes().to_vec();
-        expected_zero.extend_from_slice(&i64::MAX.to_be_bytes());
-        assert_eq!(key_zero, expected_zero);
     }
 
     #[test]

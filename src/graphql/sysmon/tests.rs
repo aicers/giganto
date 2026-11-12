@@ -30,6 +30,25 @@ const FIXED_SYSMON_BASE_TIMESTAMP_NANOS: i64 = 1_709_528_767_000_000_000;
 const FIXED_SYSMON_NEXT_TIMESTAMP_NANOS: i64 = 1_709_528_768_000_000_000;
 const FIXED_SYSMON_PAGINATION_BASE_TIMESTAMP_NANOS: i64 = 1_704_067_200_000_000_000;
 
+#[tokio::test]
+async fn merged_sysmon_events_include_timestamp_extremes() {
+    for (timestamp, page) in [(i64::MIN, "last: 1"), (i64::MAX, "first: 1")] {
+        let schema = TestSchema::new();
+        insert_file_delete_detected_event(
+            &schema.db.file_delete_detected_store().unwrap(),
+            "src1",
+            timestamp,
+        );
+        let query = format!(
+            r#"{{ sysmonEvents(filter: {{sensor: "src1"}}, {page}) {{ edges {{ node {{ __typename }} }} }} }}"#
+        );
+        let response = schema.execute(&query).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        assert_eq!(data["sysmonEvents"]["edges"].as_array().unwrap().len(), 1);
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn sysmon_events_timestamp_format_stability() {
