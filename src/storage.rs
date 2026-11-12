@@ -1411,6 +1411,16 @@ pub type KeyValue<T> = (Box<[u8]>, T);
 pub type CheckedValue = Result<Option<Vec<u8>>, rocksdb::Error>;
 pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
+#[cfg(test)]
+thread_local! {
+    static FILTERED_ITER_ERROR: std::cell::RefCell<Option<rocksdb::Error>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn inject_filtered_iter_error(error: rocksdb::Error) {
+    FILTERED_ITER_ERROR.with(|slot| *slot.borrow_mut() = Some(error));
+}
+
 pub struct FilteredIter<'d, T, F: RawEventFilter = crate::graphql::NetworkFilter> {
     inner: BoundaryIter<'d, T>,
     filter: &'d F,
@@ -1426,10 +1436,31 @@ impl<T, F: RawEventFilter> Iterator for FilteredIter<'_, T, F>
 where
     T: DeserializeOwned + EventFilter,
 {
-    type Item = KeyValue<T>;
+    type Item = Result<KeyValue<T>, rocksdb::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(Ok(elem)) = self.inner.next() {
+        loop {
+            #[cfg(test)]
+            let injected = FILTERED_ITER_ERROR.with(|slot| slot.borrow_mut().take());
+            #[cfg(not(test))]
+            let injected: Option<rocksdb::Error> = None;
+            let item = if let Some(error) = injected {
+                Err(error)
+            } else {
+                self.inner.inner.next()?
+            };
+            let (key, value) = match item {
+                Ok(item) => item,
+                Err(error) => return Some(Err(error)),
+            };
+            let value: T = match bincode::deserialize(&value) {
+                Ok(value) => value,
+                Err(error) => {
+                    error!(?key, %error, "failed to decode event");
+                    continue;
+                }
+            };
+            let elem = (key, value);
             if let Ok(true) = self.filter.check(
                 elem.1.orig_addr(),
                 elem.1.resp_addr(),
@@ -1442,10 +1473,9 @@ where
                 elem.1.agent_id(),
                 elem.1.service_name(),
             ) {
-                return Some(elem);
+                return Some(Ok(elem));
             }
         }
-        None
     }
 }
 

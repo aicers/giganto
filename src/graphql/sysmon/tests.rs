@@ -3094,3 +3094,78 @@ async fn merged_zero_size_pagination_checks_later_stores() {
         assert_eq!(data["sysmonEvents"]["pageInfo"][flag], true);
     }
 }
+
+#[tokio::test]
+async fn merged_queries_skip_undecodable_records() {
+    let schema = TestSchema::new();
+    let store = schema.db.process_create_store().unwrap();
+    let other = schema.db.file_delete_store().unwrap();
+    let base = FIXED_SYSMON_BASE_TIMESTAMP_NANOS;
+    for offset in [1, 3, 5] {
+        insert_process_create_event(&store, "src 1", base + offset);
+    }
+    insert_file_delete_event(&other, "src 1", base + 4);
+    let query = |args: &str| {
+        format!(
+            r#"{{ sysmonEvents(filter: {{ sensor: "src 1" }}, {args}) {{
+        edges {{ cursor node {{ __typename }} }} pageInfo {{ hasNextPage hasPreviousPage }}
+    }} }}"#
+        )
+    };
+    let baseline = schema.execute(&query("first: 20")).await;
+    assert!(baseline.errors.is_empty(), "{:?}", baseline.errors);
+    let baseline = baseline.data.into_json().unwrap();
+    let edges = baseline["sysmonEvents"]["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 4);
+    let first = edges.first().unwrap()["cursor"].as_str().unwrap();
+    let last = edges.last().unwrap()["cursor"].as_str().unwrap();
+    let queries = [
+        "first: 20".to_string(),
+        "last: 20".to_string(),
+        "first: 2".to_string(),
+        "last: 2".to_string(),
+        format!(r#"after: "{first}", first: 20"#),
+        format!(r#"before: "{last}", last: 20"#),
+    ];
+    let mut expected = Vec::new();
+    for args in &queries {
+        let response = schema.execute(&query(args)).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        expected.push(response.data.into_json().unwrap());
+    }
+    for offset in [0, 2, 6] {
+        let mut key = b"src 1\0".to_vec();
+        key.extend_from_slice(&(base + offset).to_be_bytes());
+        store.append(&key, b"invalid").unwrap();
+    }
+    // This store has no readable records and must not hide the other stores.
+    let empty_store = schema.db.dns_query_store().unwrap();
+    let mut key = b"src 1\0".to_vec();
+    key.extend_from_slice(&(base + 2).to_be_bytes());
+    empty_store.append(&key, b"invalid").unwrap();
+    for (args, expected) in queries.iter().zip(expected) {
+        let response = schema.execute(&query(args)).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.into_json().unwrap(), expected, "{args}");
+    }
+}
+
+#[tokio::test]
+async fn merged_queries_return_storage_errors() {
+    let schema = TestSchema::new();
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let error = rocksdb::DB::open_default(file.path()).unwrap_err();
+    let message = error.to_string();
+    crate::storage::inject_filtered_iter_error(error);
+    let response = schema
+        .execute(r#"{ sysmonEvents(filter: { sensor: "src 1" }, first: 10) { edges { cursor } } }"#)
+        .await;
+    assert!(
+        response
+            .errors
+            .iter()
+            .any(|error| error.message.contains(&message)),
+        "{:?}",
+        response.errors
+    );
+}
