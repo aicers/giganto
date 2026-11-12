@@ -436,7 +436,6 @@ pub(crate) fn validate_pagination_args<A: ?Sized, B: ?Sized, F, L>(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
 fn get_connection<T>(
     store: &RawEventStore<'_, T>,
     filter: &(impl RawEventFilter + KeyExtractor),
@@ -448,114 +447,23 @@ fn get_connection<T>(
 where
     T: DeserializeOwned + EventFilter,
 {
-    validate_key_time_bounds(filter.get_range_end_key())?;
-    validate_pagination_args(
-        after.as_ref(),
-        before.as_ref(),
-        first.as_ref(),
-        last.as_ref(),
-    )?;
-
-    let (records, has_previous, has_next) = if let Some(before) = before {
-        let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64_engine.decode(before)?;
-
-        // generate storage search key
-        let key_builder = StorageKey::builder()
-            .start_key(filter.get_start_key())
-            .mid_key(filter.get_mid_key());
-        let from_key = key_builder
-            .clone()
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
-            .build();
-        let to_key = key_builder
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-
-        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Greater {
-            return Err("invalid cursor".into());
-        }
-        let mut iter = store
-            .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
-            .peekable();
-        if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
-        {
-            iter.next();
-        }
-        let (mut records, has_previous) = collect_records(iter, last, filter);
-        records.reverse();
-        (records, has_previous, false)
-    } else if let Some(after) = after {
-        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64_engine.decode(after)?;
-
-        // generate storage search key
-        let key_builder = StorageKey::builder()
-            .start_key(filter.get_start_key())
-            .mid_key(filter.get_mid_key());
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
-            .build();
-
-        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Less {
-            return Err("invalid cursor".into());
-        }
-        let mut iter = store
-            .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
-            .peekable();
-        if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
-        {
-            iter.next();
-        }
-        let (records, has_next) = collect_records(iter, first, filter);
-        (records, false, has_next)
-    } else if let Some(last) = last {
-        let last = last.min(MAXIMUM_PAGE_SIZE);
-
-        // generate storage search key
-        let key_builder = StorageKey::builder()
-            .start_key(filter.get_start_key())
-            .mid_key(filter.get_mid_key());
-        let from_key = key_builder
-            .clone()
-            .upper_closed_bound_end_key(filter.get_range_end_key().1)
-            .build();
-        let to_key = key_builder
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-
-        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
-        let (mut records, has_previous) = collect_records(iter, last, filter);
-        records.reverse();
-        (records, has_previous, false)
-    } else {
-        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        // generate storage search key
-        let key_builder = StorageKey::builder()
-            .start_key(filter.get_start_key())
-            .mid_key(filter.get_mid_key());
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
-            .build();
-
-        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-        let (records, has_next) = collect_records(iter, first, filter);
-        (records, false, has_next)
-    };
-    Ok((records, has_previous, has_next))
+    let prefix = StorageKey::builder()
+        .start_key(filter.get_start_key())
+        .mid_key(filter.get_mid_key())
+        .build()
+        .key();
+    get_timestamp_connection(
+        store,
+        filter,
+        &prefix,
+        filter.get_range_end_key(),
+        after,
+        before,
+        first,
+        last,
+    )
 }
 
-#[allow(clippy::too_many_lines)]
 fn get_connection_by_prefix_timestamp_key<T>(
     store: &RawEventStore<'_, T>,
     filter: &(impl RawEventFilter + TimestampKeyExtractor),
@@ -567,103 +475,78 @@ fn get_connection_by_prefix_timestamp_key<T>(
 where
     T: DeserializeOwned + EventFilter,
 {
-    validate_key_time_bounds(filter.get_range_start_key())?;
+    get_timestamp_connection(
+        store,
+        filter,
+        &[],
+        filter.get_range_start_key(),
+        after,
+        before,
+        first,
+        last,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn get_timestamp_connection<T>(
+    store: &RawEventStore<'_, T>,
+    filter: &impl RawEventFilter,
+    prefix: &[u8],
+    range: (Option<DateTime>, Option<DateTime>),
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<usize>,
+    last: Option<usize>,
+) -> Result<ConnArgs<T>>
+where
+    T: DeserializeOwned + EventFilter,
+{
+    validate_key_time_bounds(range)?;
     validate_pagination_args(
         after.as_ref(),
         before.as_ref(),
         first.as_ref(),
         last.as_ref(),
     )?;
-
-    let (records, has_previous, has_next) = if let Some(before) = before {
-        let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64_engine.decode(before)?;
-
-        // generate storage search key
-        let key_builder = StorageKey::timestamp_builder();
-        let from_key = key_builder
-            .clone()
-            .upper_open_bound_start_key(filter.get_range_start_key().1)
-            .build();
-        let to_key = key_builder
-            .lower_closed_bound_start_key(filter.get_range_start_key().0)
-            .build();
-
-        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Greater {
+    let reverse = before.is_some() || last.is_some();
+    let cursor = after
+        .or(before)
+        .map(|s| base64_engine.decode(s))
+        .transpose()?;
+    if let Some(cursor) = &cursor {
+        if !cursor.starts_with(prefix) || cursor.len() < prefix.len() + TIMESTAMP_SIZE {
             return Err("invalid cursor".into());
         }
-        let mut iter = store
-            .boundary_iter(&cursor, &to_key.key(), Direction::Reverse)
-            .peekable();
-        if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
+        let timestamp =
+            i64::from_be_bytes(cursor[prefix.len()..prefix.len() + TIMESTAMP_SIZE].try_into()?);
+        if (!reverse
+            && range
+                .0
+                .is_some_and(|t| timestamp < t.timestamp_nanos_opt().unwrap_or(i64::MAX)))
+            || (reverse
+                && range
+                    .1
+                    .is_some_and(|t| timestamp > t.timestamp_nanos_opt().unwrap_or(i64::MAX)))
         {
-            iter.next();
-        }
-        let (mut records, has_previous) = collect_records(iter, last, filter);
-        records.reverse();
-        (records, has_previous, false)
-    } else if let Some(after) = after {
-        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64_engine.decode(after)?;
-
-        // generate storage search key
-        let key_builder = StorageKey::timestamp_builder();
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_start_key(filter.get_range_start_key().0)
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_start_key(filter.get_range_start_key().1)
-            .build();
-
-        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Less {
             return Err("invalid cursor".into());
         }
-        let mut iter = store
-            .boundary_iter(&cursor, &to_key.key(), Direction::Forward)
-            .peekable();
-        if let Some(Ok((key, _))) = iter.peek()
-            && key.as_ref() == cursor
-        {
-            iter.next();
-        }
-        let (records, has_next) = collect_records(iter, first, filter);
-        (records, false, has_next)
-    } else if let Some(last) = last {
-        let last = last.min(MAXIMUM_PAGE_SIZE);
-
-        // generate storage search key
-        let key_builder = StorageKey::timestamp_builder();
-        let from_key = key_builder
-            .clone()
-            .upper_closed_bound_start_key(filter.get_range_start_key().1)
-            .build();
-        let to_key = key_builder
-            .lower_closed_bound_start_key(filter.get_range_start_key().0)
-            .build();
-
-        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
-        let (mut records, has_previous) = collect_records(iter, last, filter);
-        records.reverse();
-        (records, has_previous, false)
+    }
+    let direction = if reverse {
+        Direction::Reverse
     } else {
-        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        // generate storage search key
-        let key_builder = StorageKey::timestamp_builder();
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_start_key(filter.get_range_start_key().0)
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_start_key(filter.get_range_start_key().1)
-            .build();
-
-        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-        let (records, has_next) = collect_records(iter, first, filter);
-        (records, false, has_next)
+        Direction::Forward
     };
-    Ok((records, has_previous, has_next))
+    let size = if reverse { last } else { first }
+        .unwrap_or(MAXIMUM_PAGE_SIZE)
+        .min(MAXIMUM_PAGE_SIZE);
+    let iter = store.timestamp_range_iter(prefix, range.0, range.1, cursor.as_deref(), direction);
+    let (mut records, has_more) = collect_records(iter, size, filter);
+    if reverse {
+        records.reverse();
+        Ok((records, has_more, false))
+    } else {
+        Ok((records, false, has_more))
+    }
 }
 
 fn load_connection<N, T>(
@@ -801,7 +684,7 @@ fn get_peekable_iter<'c, T, F>(
     last: Option<usize>,
 ) -> Result<(std::iter::Peekable<FilteredIter<'c, T, F>>, usize)>
 where
-    T: DeserializeOwned + EventFilter,
+    T: DeserializeOwned + EventFilter + 'c,
     F: RawEventFilter + KeyExtractor,
 {
     let (filtered_iter, cursor, size) =
@@ -826,7 +709,7 @@ fn get_filtered_iter<'c, T, F>(
     last: Option<usize>,
 ) -> Result<(FilteredIter<'c, T, F>, Option<Vec<u8>>, usize)>
 where
-    T: DeserializeOwned + EventFilter,
+    T: DeserializeOwned + EventFilter + 'c,
     F: RawEventFilter + KeyExtractor,
 {
     validate_key_time_bounds(filter.get_range_end_key())?;
@@ -836,76 +719,40 @@ where
         first.as_ref(),
         last.as_ref(),
     )?;
-
-    let (iter, cursor, size) = if let Some(before) = before {
-        let last = last.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64_engine.decode(before)?;
-
-        // generate storage search key
-        let key_builder = StorageKey::builder().start_key(filter.get_start_key());
-        let from_key = key_builder
-            .clone()
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
-            .build();
-        let to_key = key_builder
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-
-        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Greater {
+    let reverse = before.is_some() || last.is_some();
+    let cursor = after
+        .or(before)
+        .map(|s| base64_engine.decode(s))
+        .transpose()?;
+    let prefix = StorageKey::builder()
+        .start_key(filter.get_start_key())
+        .build()
+        .key();
+    let (start, end) = filter.get_range_end_key();
+    if let Some(cursor) = &cursor {
+        if !cursor.starts_with(&prefix) || cursor.len() < prefix.len() + TIMESTAMP_SIZE {
             return Err("invalid cursor".into());
         }
-        let iter = store.boundary_iter(&cursor, &to_key.key(), Direction::Reverse);
-
-        (FilteredIter::new(iter, filter), Some(cursor), last)
-    } else if let Some(after) = after {
-        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-        let cursor = base64_engine.decode(after)?;
-
-        // generate storage search key
-        let key_builder = StorageKey::builder().start_key(filter.get_start_key());
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
-            .build();
-
-        if cursor.cmp(&from_key.key()) == std::cmp::Ordering::Less {
+        let timestamp =
+            i64::from_be_bytes(cursor[prefix.len()..prefix.len() + TIMESTAMP_SIZE].try_into()?);
+        if (!reverse
+            && start.is_some_and(|t| timestamp < t.timestamp_nanos_opt().unwrap_or(i64::MAX)))
+            || (reverse
+                && end.is_some_and(|t| timestamp > t.timestamp_nanos_opt().unwrap_or(i64::MAX)))
+        {
             return Err("invalid cursor".into());
         }
-
-        let iter = store.boundary_iter(&cursor, &to_key.key(), Direction::Forward);
-        (FilteredIter::new(iter, filter), Some(cursor), first)
-    } else if let Some(last) = last {
-        let last = last.min(MAXIMUM_PAGE_SIZE);
-
-        // generate storage search key
-        let key_builder = StorageKey::builder().start_key(filter.get_start_key());
-        let from_key = key_builder
-            .clone()
-            .upper_closed_bound_end_key(filter.get_range_end_key().1)
-            .build();
-        let to_key = key_builder
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
-        (FilteredIter::new(iter, filter), None, last)
+    }
+    let size = if reverse { last } else { first }
+        .unwrap_or(MAXIMUM_PAGE_SIZE)
+        .min(MAXIMUM_PAGE_SIZE);
+    let direction = if reverse {
+        Direction::Reverse
     } else {
-        let first = first.unwrap_or(MAXIMUM_PAGE_SIZE).min(MAXIMUM_PAGE_SIZE);
-
-        // generate storage search key
-        let key_builder = StorageKey::builder().start_key(filter.get_start_key());
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
-            .build();
-        let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
-        (FilteredIter::new(iter, filter), None, first)
+        Direction::Forward
     };
+    let iter = store.timestamp_range_iter(&prefix, start, end, cursor.as_deref(), direction);
+    let iter = FilteredIter::new(iter, filter);
 
     Ok((iter, cursor, size))
 }

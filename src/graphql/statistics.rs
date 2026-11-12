@@ -308,7 +308,7 @@ fn get_statistics_iter<'c, T>(
     time: Option<&TimeRange>,
 ) -> impl Iterator<Item = anyhow::Result<KeyValue<T>>> + use<'c, T>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + 'c,
 {
     let (start, end) = if let Some(time) = &time {
         (time.start, time.end)
@@ -316,12 +316,12 @@ where
         (None, None)
     };
 
-    let key_builder = StorageKey::builder()
+    let prefix = StorageKey::builder()
         .start_key(sensor)
-        .mid_key(Some(core_id.to_be_bytes().to_vec()));
-    let from_key = key_builder.clone().upper_closed_bound_end_key(end).build();
-    let to_key = key_builder.lower_closed_bound_end_key(start).build();
-    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
+        .mid_key(Some(core_id.to_be_bytes().to_vec()))
+        .build()
+        .key();
+    let iter = store.timestamp_range_iter(&prefix, start, end, None, Direction::Reverse);
     skip_statistics_decode_errors(iter, sensor, core_id)
 }
 
@@ -395,10 +395,13 @@ where
         let mut next_candidate = Vec::new();
 
         // Find the most recent statistics in iter by core.
-        let Some((latest_key, latest_stats)) = iter_next_values
-            .iter()
-            .max_by_key(|(key, _)| &key[(key.len() - TIMESTAMP_SIZE)..])
-        else {
+        let Some((latest_key, latest_stats)) = iter_next_values.iter().max_by_key(|(key, _)| {
+            i64::from_be_bytes(
+                key[(key.len() - TIMESTAMP_SIZE)..]
+                    .try_into()
+                    .expect("timestamp length"),
+            )
+        }) else {
             break;
         };
 
