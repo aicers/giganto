@@ -1219,6 +1219,7 @@ impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
         })
     }
 
+    #[cfg(test)]
     pub fn boundary_iter(
         &self,
         from: &[u8],
@@ -1612,6 +1613,30 @@ fn retain_cleanup_iteration(
     let sensors = db.sensors_store()?.names();
     let all_store = db.retain_period_store()?;
 
+    // Handle oplog deletion with timestamp-based range deletion
+    let mut from: Vec<u8> = from_timestamp.to_vec();
+    from.push(0x00);
+    from.extend_from_slice(&1_usize.to_be_bytes());
+
+    let mut to: Vec<u8> = cutoffs.oplog.to_be_bytes().to_vec();
+    to.push(0x00);
+    to.extend_from_slice(&usize::MAX.to_be_bytes());
+
+    let store = &all_store.op_log_cf;
+    if from < to
+        && store
+            .db
+            .delete_file_in_range_cf(store.cf, &from, &to)
+            .is_ok()
+    {
+        store.flush()?;
+        if store.db.delete_range_cf(store.cf, &from, &to).is_ok() {
+            store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
+        }
+    } else if from < to {
+        warn!("Failed to delete file in range for operation log");
+    }
+
     for sensor in sensors {
         let mut from: Vec<u8> = sensor.clone();
         from.push(0x00);
@@ -1666,29 +1691,6 @@ fn retain_cleanup_iteration(
         retention_timestamp,
         warned_malformed_series,
     )?;
-
-    // Handle oplog deletion with timestamp-based range deletion
-    let mut from: Vec<u8> = from_timestamp.to_vec();
-    from.push(0x00);
-    from.extend_from_slice(&1_usize.to_be_bytes());
-
-    let mut to: Vec<u8> = cutoffs.oplog.to_be_bytes().to_vec();
-    to.push(0x00);
-    to.extend_from_slice(&usize::MAX.to_be_bytes());
-
-    let store = &all_store.op_log_cf;
-    if store
-        .db
-        .delete_file_in_range_cf(store.cf, &from, &to)
-        .is_ok()
-    {
-        store.flush()?;
-        if store.db.delete_range_cf(store.cf, &from, &to).is_ok() {
-            store.db.compact_range_cf(store.cf, Some(&from), Some(&to));
-        }
-    } else {
-        warn!("Failed to delete file in range for operation log");
-    }
 
     Ok(())
 }
