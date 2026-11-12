@@ -80,15 +80,11 @@ impl RawEventFilter for NetflowFilter {
         _agent_id: Option<String>,
         _service_name: Option<String>,
     ) -> Result<bool> {
-        if check_address(self.orig_addr.as_ref(), orig_addr)?
+        Ok(check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?
             && check_port(self.orig_port.as_ref(), orig_port)
             && check_port(self.resp_port.as_ref(), resp_port)
-            && check_contents(self.contents.as_deref(), log_contents)
-        {
-            return Ok(true);
-        }
-        Ok(false)
+            && check_contents(self.contents.as_deref(), log_contents))
     }
 }
 
