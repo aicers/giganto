@@ -4,16 +4,19 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.35.1] - 2026-11-12
+## [Unreleased]
 
 ### Fixed
 
-- The final failure-reason line could be missing from the journal when output
-  was backed up. It is now written directly, even with `RUST_LOG` turned off.
 - When the process exits with a failure, the final error line stating why could
   be missing from the journal if log output was backed up. The final error line
   is now written directly instead of through the log filter, so it also appears
   with `RUST_LOG=off`.
+
+## [0.35.1] - 2026-11-12
+
+### Fixed
+
 - Results of exports of the same kind started in the same second no longer mix
   or overwrite each other.
 - Statistics exports with no matching records or only malformed records now
@@ -38,11 +41,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the sensor sent with the event, under which the event is stored and
   filtered. Most of these types described it as the session start time, which
   it has not been for events stored since 0.26.0; that is `startTime`.
-
-### Added
-
-- An exit warning reports the count of log events that could not be queued.
-  This count does not represent total log loss.
 
 ## [0.35.0] - 2026-11-01
 
@@ -1491,6 +1489,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Initial release.
 
+[Unreleased]: https://github.com/aicers/giganto/compare/0.35.1...main
 [0.35.1]: https://github.com/aicers/giganto/compare/0.35.0...0.35.1
 [0.35.0]: https://github.com/aicers/giganto/compare/0.34.0...0.35.0
 [0.34.0]: https://github.com/aicers/giganto/compare/0.33.0...0.34.0
