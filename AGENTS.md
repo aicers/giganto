@@ -574,8 +574,9 @@ Where the crate handles key material or secrets:
 
 ## Validation
 
-- The `check` and `lint` jobs in `.github/workflows/ci.yml` run the exact
-  invocations the shared linting and formatting rules refer to:
+- The `check`, `lint` and `Markdown` jobs in `.github/workflows/ci.yml`
+  run the exact invocations the shared linting and formatting rules refer
+  to:
   - `check` runs, for each feature configuration in its matrix — the
     default features, `--no-default-features --features benchmark`, and
     `--all-features`:
@@ -589,29 +590,37 @@ Where the crate handles key material or secrets:
     `Cargo.lock` (`git diff-index --quiet HEAD --`).
   - `lint` runs
     `cargo fmt -- --check --config group_imports=StdExternalCrate`,
-    `biome ci`, markdownlint over `**/*.md`, `scripts/fetch-theme.sh` and
-    `mkdocs build --strict`, and the shared instruction-block drift check,
+    `biome ci`, `scripts/fetch-theme.sh` and `mkdocs build --strict`.
+  - `Markdown` runs markdownlint over the files the `globs` of the root
+    `.markdownlint-cli2.yaml` select (`**/*.md`; the rules are in
+    `.markdownlint.yaml`), and the shared instruction-block drift check,
     which fails when the generated regions of this file stop matching the
     release `.agent-instructions.toml` pins.
 - `Change Filter` (the `changes` job) decides whether a change is
   documentation-only. For such a change `check`, `schema`, `test` and
-  `coverage` are skipped and `lint` still runs. `CI Gate` passes only when
-  every job passed or was skipped, and is the check branch protection
-  requires.
+  `coverage` are skipped and `Markdown` and `lint` still run. `CI Gate`
+  passes only when every job passed or was skipped, and is the check
+  branch protection requires.
 - Run local checks on the host's own operating system: macOS on a Mac,
   Linux on a Linux host. Do not use a container, a virtual machine or
   another operating system in its place. A CI job or matrix entry that
   exists only to cover another operating system or platform is left to CI;
   every other row applies on any host that can run its commands.
-- A change is documentation-only when every changed path matches the
-  `docs` filter of the `changes` job in `.github/workflows/ci.yml` and none
-  matches its `code` filter. For such a change build or test no code. Run
-  markdownlint over the tracked Markdown, as `lint` does:
+- A change is documentation-only when the `changes` job in
+  `.github/workflows/ci.yml` counts every changed path as documentation:
+  each is on the built-in list of `aicers/agent-instructions/change-scope`
+  or on its `docs-paths` input, and none is on its `not-docs-paths` input.
+  For such a change build or test no code. Run markdownlint over the
+  tracked Markdown, the files `Markdown` lints in a fresh checkout:
 
   ```sh
   git ls-files -z --cached --others --exclude-standard '*.md' \
-    | xargs -0 markdownlint-cli2
+    | xargs -0 markdownlint-cli2 --no-globs
   ```
+
+  `--no-globs` keeps the root config's `**/*.md` from being added to the
+  listed files, which would also lint Markdown under the ignored `.venv/`
+  and `docs/.theme/`.
 
   When the change touches `docs/` or `mkdocs.yml`, also build the manual,
   in the virtualenv the README's "Documentation" section sets up:
@@ -697,7 +706,7 @@ Where the crate handles key material or secrets:
 - Left to CI: the `test` cells of the other operating system, the full
   suites, the feature configurations not selected above, `schema` when the
   GraphQL API is untouched, and the shared instruction-block drift check
-  in `lint`; the generated regions of this file are never edited here.
+  in `Markdown`; the generated regions of this file are never edited here.
   The `coverage` job runs `cargo llvm-cov` and uploads to Codecov. It is
   not expected to be run locally.
 - When a CI job fails, reproduce that failure locally by name, not by

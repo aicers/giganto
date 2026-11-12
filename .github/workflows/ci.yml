@@ -1,9 +1,9 @@
 # CHANGE FILTER: `changes` classifies the run's diff, and `check`, `schema`,
 # `test` and `coverage` gate on its `docs_only` output, so a change that only
-# touches inert documentation does not build the crate in nine jobs. `lint` is
-# deliberately ungated: it runs markdownlint, the docs build and the shared
-# instruction-block drift check, which are exactly the checks a docs-only
-# change needs.
+# touches inert documentation does not build the crate in nine jobs.
+# `markdown` and `lint` are deliberately ungated: `markdown` runs markdownlint
+# and the shared instruction-block drift check, and `lint` the docs build,
+# which are exactly the checks a docs-only change needs.
 #
 # THE GATE IS FAIL-CLOSED. Each gated job's `if:` runs the job whenever the
 # filter did not positively report docs-only, including when the filter itself
@@ -32,6 +32,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || (github.run_attempt != '1' && format('-rerun-{0}', github.run_id) || '') }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -39,92 +43,54 @@ jobs:
   changes:
     name: Change Filter
     runs-on: ubuntu-latest
-    # Scoped to this job alone. `pull-requests: read` is what
-    # dorny/paths-filter needs to list a pull request's files.
+    # Scoped to this job alone. The filter only reads the checked-out
+    # history, so `contents: read` is all it needs.
     permissions:
       contents: read
-      pull-requests: read
     outputs:
-      docs_only: ${{ steps.decide.outputs.docs_only }}
+      docs_only: ${{ steps.scope.outputs.docs-only }}
     steps:
+      # The full history, because the action diffs locally and does not
+      # fetch: a pull request against its merge-base with the base branch,
+      # a push to `main` against `github.event.before`, and a dispatched
+      # branch against its merge-base with `main`.
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0 # a push diffs against its base commit locally
+          fetch-depth: 0
 
-      # A push carries its base in `github.event.before`. That sha is all-zeros
-      # on a branch's first push and can name a commit a force-push discarded,
-      # so establish that it is real and reachable before diffing. Leaving
-      # `sha` empty skips the filter below, which lands on docs_only=false.
-      - name: Resolve the push base
-        id: base
-        if: github.event_name != 'pull_request'
-        env:
-          BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ -n "${BEFORE}" ] \
-            && [ "${BEFORE}" != '0000000000000000000000000000000000000000' ] \
-            && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null
-          then
-            echo "sha=${BEFORE}" >> "$GITHUB_OUTPUT"
-          else
-            echo "Push base missing or unreachable; running the full suite."
-          fi
-
-      # On `pull_request` the action reads the file list from the API and
-      # ignores `base`; on `push` it diffs against the sha resolved above.
+      # `docs-paths` is the documentation allowlist that AGENTS.md also uses
+      # to define a documentation-only change, on top of the action's
+      # built-in list (`*.md`, `LICENSE`, `.agent-instructions.toml`,
+      # `.markdownlint*`). `.agent-instructions.toml` is on it because the
+      # pin is read only by the drift check in the ungated `markdown` job.
+      # `not-docs-paths` names every path a build or a test reads, and wins
+      # over the allowlist.
       #
-      # `docs` is the documentation allowlist that AGENTS.md also uses to
-      # define a documentation-only change. `.agent-instructions.toml` is on
-      # it because the pin is read only by the drift check in the ungated
-      # `lint` job. `all` matches every changed file, so its count is the
-      # size of the change.
-      - name: Filter Paths
-        id: filter
-        if: github.event_name == 'pull_request' || steps.base.outputs.sha != ''
-        uses: dorny/paths-filter@v4
+      # Docs-only requires every changed file to be on the allowlist and
+      # none on `not-docs-paths`. A path on neither list therefore leaves
+      # the change not docs-only, even next to documentation, and runs the
+      # full suite. Anything the action cannot establish runs it as well.
+      - id: scope
+        uses: aicers/agent-instructions/change-scope@main
         with:
-          base: ${{ steps.base.outputs.sha }}
-          filters: |
-            docs:
-              - "docs/**"
-              - "docs-internal/**"
-              - "**/*.md"
-              - "mkdocs.yml"
-              - ".markdownlint*"
-              - ".agent-instructions.toml"
-              - "LICENSE"
-            code:
-              - "src/**"
-              - "tests/**"
-              - "build.rs"
-              - "Cargo.toml"
-              - "Cargo.lock"
-              - "clippy.toml"
-              - "scripts/**"
-              - ".github/workflows/**"
-              - ".github/cache-cargo/**"
-            all:
-              - "**"
-
-      # Docs-only requires every changed file to be on the `docs` allowlist
-      # (its count equals the count of all changed files) and none to be
-      # code. A path on neither list therefore leaves the change not
-      # docs-only, even next to documentation, and runs the full suite.
-      - name: Decide Docs-Only
-        id: decide
-        env:
-          DOCS_COUNT: ${{ steps.filter.outputs.docs_count }}
-          ALL_COUNT: ${{ steps.filter.outputs.all_count }}
-          CODE: ${{ steps.filter.outputs.code }}
-        run: |
-          if [ -n "${ALL_COUNT}" ] && [ "${ALL_COUNT}" -gt 0 ] \
-            && [ "${DOCS_COUNT}" = "${ALL_COUNT}" ] \
-            && [ "${CODE}" != "true" ]; then
-            echo "docs_only=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-          fi
+          docs-paths: |
+            docs/**
+            docs-internal/**
+            **/*.md
+            mkdocs.yml
+            .markdownlint*
+            .agent-instructions.toml
+            LICENSE
+          not-docs-paths: |
+            src/**
+            tests/**
+            build.rs
+            Cargo.toml
+            Cargo.lock
+            clippy.toml
+            scripts/**
+            .github/workflows/**
+            .github/cache-cargo/**
 
   check:
     runs-on: ubuntu-latest
@@ -158,10 +124,8 @@ jobs:
         run: git diff-index --quiet HEAD --
   lint:
     runs-on: ubuntu-latest
-    # Read-only, as in the other consumers of aicers/agent-instructions.
-    # Nothing here writes: `scripts/fetch-theme.sh` reads the public
-    # aicers/docs-theme, and the drift check reads the pin and the upstream
-    # release.
+    # Read-only. Nothing here writes: `scripts/fetch-theme.sh` reads the
+    # public aicers/docs-theme.
     permissions:
       contents: read
     steps:
@@ -170,7 +134,6 @@ jobs:
         with:
           components: rustfmt
       - uses: actions/checkout@v5
-        id: checkout
       - uses: biomejs/setup-biome@v2
         with:
           version: latest
@@ -179,14 +142,6 @@ jobs:
         run: cargo fmt -- --check --config group_imports=StdExternalCrate
       - name: Biome check
         run: biome ci
-      - name: markdownlint
-        uses: DavidAnson/markdownlint-cli2-action@v24
-        with:
-          # Recursive, deliberately. The action's default glob is
-          # `*.{md,markdown}` — repository root only — and `.markdownlint.yaml`
-          # supplies no `globs` of its own, so 13 of the 15 tracked documents,
-          # every one of them under `docs/`, went unlinted.
-          globs: "**/*.md"
       - name: Fetch docs theme
         run: scripts/fetch-theme.sh
         env:
@@ -195,14 +150,37 @@ jobs:
         run: python3 -m pip install --upgrade pip mkdocs-material mkdocs-static-i18n
       - name: Build Docs
         run: mkdocs build --strict
+
+  # Ungated, deliberately: a docs-only change skips every gated job, so this
+  # is the Markdown check it gets.
+  markdown:
+    name: Markdown
+    runs-on: ubuntu-latest
+    # Read-only, as in the other consumers of aicers/agent-instructions.
+    # Nothing here writes: the lint reads the checkout, and the drift check
+    # reads the pin and the upstream release.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        id: checkout
+      # No `globs` input. The `globs` of the root `.markdownlint-cli2.yaml`
+      # are the one place that decides which files are linted, here and in a
+      # local `markdownlint-cli2` alike; they are recursive, so the
+      # documents under `docs/` are linted. The rules stay in
+      # `.markdownlint.yaml`. The action's default `*.{md,markdown}` is only
+      # added to the config's globs and changes nothing.
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v25
       # Fails when this repository's copy of the shared instruction blocks
       # stops matching the release `.agent-instructions.toml` pins --
       # because a generated region of AGENTS.md was edited here, or because
       # an update pull request was never merged.
       #
-      # In `lint` because that is the job that already concerns itself with
-      # Markdown, and last so that a drift failure cannot hide the docs
-      # build behind it.
+      # In `markdown` because that is the job that concerns itself with
+      # Markdown, and because it must not inherit the docs-only gate: a pull
+      # request that edits only a generated region of AGENTS.md is
+      # docs-only.
       #
       # `@main`: the scripts are mechanism and come from wherever this
       # reference points, while the blocks are content and come from the
@@ -211,15 +189,16 @@ jobs:
       #
       # Guarded rather than left to the default `success()`, which would
       # skip it whenever a step above failed. The checks are independent --
-      # a drifted block is drift whether or not the Markdown lint or the
-      # docs build also failed. `!cancelled()` rather than `always()`,
-      # because a cancelled run should stop. The `checkout` clause keeps a
-      # failed checkout from being reported as drift: the action fails
-      # outright when it cannot read the pin file, and in an empty workspace
-      # that message names the pin for a problem that is not the pin's.
+      # a drifted block is drift whether or not the Markdown lint also
+      # failed. `!cancelled()` rather than `always()`, because a cancelled
+      # run should stop. The `checkout` clause keeps a failed checkout from
+      # being reported as drift: the action fails outright when it cannot
+      # read the pin file, and in an empty workspace that message names the
+      # pin for a problem that is not the pin's.
       - name: Check shared instruction-block drift
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         uses: aicers/agent-instructions/check-drift@main
+
   schema:
     runs-on: ubuntu-latest
     needs: changes
@@ -229,9 +208,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
+      # `-o Acquire::Retries=3` and the step timeout: on 2026-11-11 hosted
+      # runners could not resolve the Ubuntu archive for hours, and apt
+      # steps failed or stalled. The image sets `Acquire::Retries "1"`; the
+      # timeout is three times the step's longest recent success, rounded
+      # up to 5 minutes, minimum 10.
       - name: Install libcap on Ubuntu
+        timeout-minutes: 10
         run: |
-          sudo apt-get install libpcap-dev libpcap0.8
+          sudo apt-get -o Acquire::Retries=3 install libpcap-dev libpcap0.8
       - name: Schema snapshot check
         run: cargo test --bin gen_schema graphql::tests::schema_should_be_up_to_date
           --no-default-features -- --ignored
@@ -253,10 +238,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
+      # `-o Acquire::Retries=3` and the step timeout: on 2026-11-11 hosted
+      # runners could not resolve the Ubuntu archive for hours, and apt
+      # steps failed or stalled. The image sets `Acquire::Retries "1"`; the
+      # timeout is three times the step's longest recent success, rounded
+      # up to 5 minutes, minimum 10.
       - name: Install libcap on Ubuntu
         if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
         run: |
-          sudo apt-get install libpcap-dev libpcap0.8
+          sudo apt-get -o Acquire::Retries=3 install libpcap-dev libpcap0.8
       - name: Build (${{ matrix.feature_set }})
         run: cargo build ${{ matrix.cargo_flags }} --verbose
       - name: Run tests (${{ matrix.feature_set }})
@@ -291,9 +282,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v5
       - uses: ./.github/cache-cargo
+      # `-o Acquire::Retries=3` and the step timeout: on 2026-11-11 hosted
+      # runners could not resolve the Ubuntu archive for hours, and apt
+      # steps failed or stalled. The image sets `Acquire::Retries "1"`; the
+      # timeout is three times the step's longest recent success, rounded
+      # up to 5 minutes, minimum 10.
       - name: Install libcap on Ubuntu
+        timeout-minutes: 10
         run: |
-          sudo apt-get install libpcap-dev libpcap0.8
+          sudo apt-get -o Acquire::Retries=3 install libpcap-dev libpcap0.8
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:
@@ -325,12 +322,12 @@ jobs:
   # `always()`, deliberately, and not `!cancelled()`: a cancelled run would
   # otherwise skip this job, and GitHub counts a skipped required check as a
   # pass. Running through cancellation lets the assertions below see the
-  # cancelled results and report red. `lint` is among the needs although it
-  # is not gated, so that the one required check covers it too.
+  # cancelled results and report red. `markdown` and `lint` are among the
+  # needs although they are not gated, so that the gate covers them too.
   gate:
     name: CI Gate
     runs-on: ubuntu-latest
-    needs: [changes, lint, check, schema, test, coverage]
+    needs: [changes, markdown, lint, check, schema, test, coverage]
     if: ${{ always() }}
     steps:
       # A filter that errored is a defect, not a tolerable outcome. The gated
