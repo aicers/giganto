@@ -3743,26 +3743,26 @@ fn network_connection(
     let mut has_next_page: bool = false;
     let mut has_next_value: bool = false;
 
-    let mut conn_data = conn_iter.next();
-    let mut dns_data = dns_iter.next();
-    let mut malformed_dns_data = malformed_dns_iter.next();
-    let mut http_data = http_iter.next();
-    let mut rdp_data = rdp_iter.next();
-    let mut ntlm_data = ntlm_iter.next();
-    let mut kerberos_data = kerberos_iter.next();
-    let mut ssh_data = ssh_iter.next();
-    let mut dce_rpc_data = dce_rpc_iter.next();
-    let mut ftp_data = ftp_iter.next();
-    let mut mqtt_data = mqtt_iter.next();
-    let mut ldap_data = ldap_iter.next();
-    let mut tls_data = tls_iter.next();
-    let mut smb_data = smb_iter.next();
-    let mut nfs_data = nfs_iter.next();
-    let mut smtp_data = smtp_iter.next();
-    let mut bootp_data = bootp_iter.next();
-    let mut dhcp_data = dhcp_iter.next();
-    let mut radius_data = radius_iter.next();
-    let mut icmp_data = icmp_iter.next();
+    let mut conn_data = conn_iter.next().transpose()?;
+    let mut dns_data = dns_iter.next().transpose()?;
+    let mut malformed_dns_data = malformed_dns_iter.next().transpose()?;
+    let mut http_data = http_iter.next().transpose()?;
+    let mut rdp_data = rdp_iter.next().transpose()?;
+    let mut ntlm_data = ntlm_iter.next().transpose()?;
+    let mut kerberos_data = kerberos_iter.next().transpose()?;
+    let mut ssh_data = ssh_iter.next().transpose()?;
+    let mut dce_rpc_data = dce_rpc_iter.next().transpose()?;
+    let mut ftp_data = ftp_iter.next().transpose()?;
+    let mut mqtt_data = mqtt_iter.next().transpose()?;
+    let mut ldap_data = ldap_iter.next().transpose()?;
+    let mut tls_data = tls_iter.next().transpose()?;
+    let mut smb_data = smb_iter.next().transpose()?;
+    let mut nfs_data = nfs_iter.next().transpose()?;
+    let mut smtp_data = smtp_iter.next().transpose()?;
+    let mut bootp_data = bootp_iter.next().transpose()?;
+    let mut dhcp_data = dhcp_iter.next().transpose()?;
+    let mut radius_data = radius_iter.next().transpose()?;
+    let mut icmp_data = icmp_iter.next().transpose()?;
 
     loop {
         if (result_vec.len() >= size)
@@ -3990,7 +3990,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::ConnRawEvent(ConnRawEvent::from_key_value(&key, value)?),
                     ));
-                    conn_data = conn_iter.next();
+                    conn_data = conn_iter.next().transpose()?;
                 }
             }
             _ if selected == dns_ts => {
@@ -3999,7 +3999,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::DnsRawEvent(DnsRawEvent::from_key_value(&key, value)?),
                     ));
-                    dns_data = dns_iter.next();
+                    dns_data = dns_iter.next().transpose()?;
                 }
             }
             _ if selected == malformed_dns_ts => {
@@ -4010,7 +4010,7 @@ fn network_connection(
                             MalformedDnsRawEvent::from_key_value(&key, value)?,
                         ),
                     ));
-                    malformed_dns_data = malformed_dns_iter.next();
+                    malformed_dns_data = malformed_dns_iter.next().transpose()?;
                 }
             }
             _ if selected == http_ts => {
@@ -4019,7 +4019,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::HttpRawEvent(HttpRawEvent::from_key_value(&key, value)?),
                     ));
-                    http_data = http_iter.next();
+                    http_data = http_iter.next().transpose()?;
                 }
             }
             _ if selected == rdp_ts => {
@@ -4028,7 +4028,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::RdpRawEvent(RdpRawEvent::from_key_value(&key, value)?),
                     ));
-                    rdp_data = rdp_iter.next();
+                    rdp_data = rdp_iter.next().transpose()?;
                 }
             }
             _ if selected == ntlm_ts => {
@@ -4037,7 +4037,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::NtlmRawEvent(NtlmRawEvent::from_key_value(&key, value)?),
                     ));
-                    ntlm_data = ntlm_iter.next();
+                    ntlm_data = ntlm_iter.next().transpose()?;
                 }
             }
             _ if selected == kerberos_ts => {
@@ -4048,7 +4048,7 @@ fn network_connection(
                             &key, value,
                         )?),
                     ));
-                    kerberos_data = kerberos_iter.next();
+                    kerberos_data = kerberos_iter.next().transpose()?;
                 }
             }
             _ if selected == ssh_ts => {
@@ -4057,7 +4057,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::SshRawEvent(SshRawEvent::from_key_value(&key, value)?),
                     ));
-                    ssh_data = ssh_iter.next();
+                    ssh_data = ssh_iter.next().transpose()?;
                 }
             }
             _ if selected == dce_rpc_ts => {
@@ -4068,7 +4068,7 @@ fn network_connection(
                             &key, value,
                         )?),
                     ));
-                    dce_rpc_data = dce_rpc_iter.next();
+                    dce_rpc_data = dce_rpc_iter.next().transpose()?;
                 }
             }
             _ if selected == ftp_ts => {
@@ -4077,7 +4077,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::FtpRawEvent(FtpRawEvent::from_key_value(&key, value)?),
                     ));
-                    ftp_data = ftp_iter.next();
+                    ftp_data = ftp_iter.next().transpose()?;
                 }
             }
             _ if selected == mqtt_ts => {
@@ -4086,7 +4086,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::MqttRawEvent(MqttRawEvent::from_key_value(&key, value)?),
                     ));
-                    mqtt_data = mqtt_iter.next();
+                    mqtt_data = mqtt_iter.next().transpose()?;
                 }
             }
             _ if selected == ldap_ts => {
@@ -4095,7 +4095,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::LdapRawEvent(LdapRawEvent::from_key_value(&key, value)?),
                     ));
-                    ldap_data = ldap_iter.next();
+                    ldap_data = ldap_iter.next().transpose()?;
                 }
             }
             _ if selected == tls_ts => {
@@ -4104,7 +4104,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::TlsRawEvent(TlsRawEvent::from_key_value(&key, value)?),
                     ));
-                    tls_data = tls_iter.next();
+                    tls_data = tls_iter.next().transpose()?;
                 }
             }
             _ if selected == smb_ts => {
@@ -4113,7 +4113,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::SmbRawEvent(SmbRawEvent::from_key_value(&key, value)?),
                     ));
-                    smb_data = smb_iter.next();
+                    smb_data = smb_iter.next().transpose()?;
                 }
             }
             _ if selected == nfs_ts => {
@@ -4122,7 +4122,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::NfsRawEvent(NfsRawEvent::from_key_value(&key, value)?),
                     ));
-                    nfs_data = nfs_iter.next();
+                    nfs_data = nfs_iter.next().transpose()?;
                 }
             }
             _ if selected == smtp_ts => {
@@ -4131,7 +4131,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::SmtpRawEvent(SmtpRawEvent::from_key_value(&key, value)?),
                     ));
-                    smtp_data = smtp_iter.next();
+                    smtp_data = smtp_iter.next().transpose()?;
                 }
             }
             _ if selected == bootp_ts => {
@@ -4142,7 +4142,7 @@ fn network_connection(
                             &key, value,
                         )?),
                     ));
-                    bootp_data = bootp_iter.next();
+                    bootp_data = bootp_iter.next().transpose()?;
                 }
             }
             _ if selected == dhcp_ts => {
@@ -4151,7 +4151,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::DhcpRawEvent(DhcpRawEvent::from_key_value(&key, value)?),
                     ));
-                    dhcp_data = dhcp_iter.next();
+                    dhcp_data = dhcp_iter.next().transpose()?;
                 }
             }
             _ if selected == radius_ts => {
@@ -4162,7 +4162,7 @@ fn network_connection(
                             &key, value,
                         )?),
                     ));
-                    radius_data = radius_iter.next();
+                    radius_data = radius_iter.next().transpose()?;
                 }
             }
             _ if selected == icmp_ts => {
@@ -4171,7 +4171,7 @@ fn network_connection(
                         base64_engine.encode(&key),
                         NetworkRawEvents::IcmpRawEvent(IcmpRawEvent::from_key_value(&key, value)?),
                     ));
-                    icmp_data = icmp_iter.next();
+                    icmp_data = icmp_iter.next().transpose()?;
                 }
             }
             _ => {}
