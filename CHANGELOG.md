@@ -8,9 +8,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- Publish relays for range, raw-event, and PCAP requests now resolve peer names
-  by IP address even when the peer and publish service ports differ.
-
 - When the process exits with a failure, the final error line stating why could
   be missing from the journal if log output was backed up. The final error line
   is now written directly instead of through the log filter, so it also appears
@@ -18,6 +15,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - GraphQL queries and exports reject time filter bounds outside
   `1677-09-21T00:12:43.145224192Z` through `2262-04-11T23:47:16.854775807Z`
   inclusive.
+- Publish relays for range, raw-event, and PCAP requests now resolve peer names
+  by IP address even when the peer and publish service ports differ.
 
 ## [0.35.1] - 2026-11-12
 
@@ -47,6 +46,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the sensor sent with the event, under which the event is stored and
   filtered. Most of these types described it as the session start time, which
   it has not been for events stored since 0.26.0; that is `startTime`.
+
 ## [0.35.0] - 2026-11-01
 
 ### Changed
