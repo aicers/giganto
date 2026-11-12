@@ -14,6 +14,8 @@ use std::{
     os::unix::fs::MetadataExt,
     path::Path,
     process::{Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use tempfile::TempDir;
@@ -70,8 +72,14 @@ impl Run {
 
 /// Runs the binary in `dir` with `args`, its standard output a file in `dir`.
 fn run(dir: &Path, output: Output, args: &[&str]) -> Run {
+    run_with_filter(dir, output, args, None)
+}
+
+fn run_with_filter(dir: &Path, output: Output, args: &[&str], rust_log: Option<&str>) -> Run {
     let stdout_path = dir.join("stdout");
     let stdout = File::create(&stdout_path).expect("create the stdout capture");
+    let stderr_path = dir.join("stderr");
+    let stderr = File::create(&stderr_path).expect("create the stderr capture");
     let metadata = stdout
         .metadata()
         .expect("read the stdout capture's metadata");
@@ -83,7 +91,10 @@ fn run(dir: &Path, output: Output, args: &[&str]) -> Run {
         .env_remove("RUST_LOG")
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(Stdio::piped());
+        .stderr(stderr);
+    if let Some(filter) = rust_log {
+        command.env("RUST_LOG", filter);
+    }
     match output {
         Output::Journal => {
             command.env(
@@ -95,11 +106,24 @@ fn run(dir: &Path, output: Output, args: &[&str]) -> Run {
             command.env_remove("JOURNAL_STREAM");
         }
     }
-    let child = command.output().expect("run the giganto binary");
+    let mut child = command.spawn().expect("spawn the giganto binary");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the giganto binary") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed-out giganto binary");
+            child.wait().expect("reap timed-out giganto binary");
+            panic!("giganto exceeded 30 seconds");
+        }
+        // Polling a subprocess has no notification handle in std.
+        thread::sleep(Duration::from_millis(10));
+    };
     Run {
-        status: child.status,
+        status,
         stdout: fs::read_to_string(&stdout_path).expect("read the stdout capture"),
-        stderr: String::from_utf8_lossy(&child.stderr).into_owned(),
+        stderr: fs::read_to_string(&stderr_path).expect("read the stderr capture"),
     }
 }
 
@@ -332,4 +356,30 @@ fn repair_writes_its_events_under_the_journal() {
         "{}",
         run.diagnostics()
     );
+}
+
+#[test]
+fn journal_final_errors_bypass_rust_log_off() {
+    let dir = tempdir();
+    let config = path_str(&dir.path().join("missing.toml")).to_owned();
+    let run = run_with_filter(
+        dir.path(),
+        Output::Journal,
+        &args_with(&config, &["--log-path", "unused"]),
+        Some("off"),
+    );
+    assert_eq!(run.status.code(), Some(1), "{}", run.diagnostics());
+    assert_eq!(
+        run.stdout,
+        format!("<3>ERROR giganto: {LOG_PATH_REMOVED}\n")
+    );
+    assert_eq!(run.stderr, "");
+
+    let run = run_with_filter(dir.path(), Output::Journal, &["-c", "x"], Some("off"));
+    assert_eq!(run.status.code(), Some(2), "{}", run.diagnostics());
+    assert_eq!(run.lines().len(), 1, "{}", run.diagnostics());
+    assert!(run.stdout.starts_with("<3>ERROR giganto: "));
+    assert!(run.stdout.contains("--cert"));
+    assert!(run.stdout.ends_with('\n'));
+    assert_eq!(run.stderr, "");
 }
