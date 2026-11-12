@@ -2972,8 +2972,7 @@ async fn notify_sensor_and_pcap_disconnect_behaviors() {
         .read()
         .await
         .get("notify_sensor_disconnect")
-        .map(Vec::len)
-        .unwrap_or_default();
+        .map_or_default(Vec::len);
     assert_eq!(pcap_len, 1, "pcap_sensors should not change on non-pcap");
 
     // Pcap disconnect should remove one connection without notifying.
@@ -2997,8 +2996,7 @@ async fn notify_sensor_and_pcap_disconnect_behaviors() {
         .read()
         .await
         .get("notify_sensor_disconnect")
-        .map(Vec::len)
-        .unwrap_or_default();
+        .map_or_default(Vec::len);
     assert_eq!(pcap_len, 0, "pcap_sensors not updated on pcap disconnect");
 
     sensor_token.cancel();

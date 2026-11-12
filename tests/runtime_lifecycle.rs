@@ -376,9 +376,7 @@ struct Node {
 }
 
 fn read_text(path: &Path) -> String {
-    fs::read(path)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default()
+    fs::read(path).map_or_default(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// The child's pid, when it is one that can be signalled.

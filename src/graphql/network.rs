@@ -93,14 +93,10 @@ impl RawEventFilter for NetworkFilter {
         _agent_id: Option<String>,
         _service_name: Option<String>,
     ) -> Result<bool> {
-        if check_address(self.orig_addr.as_ref(), orig_addr)?
+        Ok(check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?
             && check_port(self.orig_port.as_ref(), orig_port)
-            && check_port(self.resp_port.as_ref(), resp_port)
-        {
-            return Ok(true);
-        }
-        Ok(false)
+            && check_port(self.resp_port.as_ref(), resp_port))
     }
 }
 
@@ -127,15 +123,11 @@ impl RawEventFilter for SearchFilter {
                 return Ok(false);
             }
         }
-        if check_address(self.orig_addr.as_ref(), orig_addr)?
+        Ok(check_address(self.orig_addr.as_ref(), orig_addr)?
             && check_address(self.resp_addr.as_ref(), resp_addr)?
             && check_port(self.orig_port.as_ref(), orig_port)
             && check_port(self.resp_port.as_ref(), resp_port)
-            && check_agent_id(self.agent_id.as_deref(), agent_id.as_deref())
-        {
-            return Ok(true);
-        }
-        Ok(false)
+            && check_agent_id(self.agent_id.as_deref(), agent_id.as_deref()))
     }
 }
 
