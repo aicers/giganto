@@ -57,7 +57,7 @@ use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::{
     IngestSensors, PcapSensors, StreamDirectChannelMap, StreamDirectChannels,
     ingest::{NetworkKey, implement::EventFilter},
-    peer::{PeerIdents, Peers},
+    peer::{PeerIdents, PeerNameLookupError, Peers, peer_name_by_ip},
     stream_channel_key::StreamChannelKey,
 };
 use crate::datetime::DateTime;
@@ -2902,21 +2902,13 @@ async fn connect_repeatedly(
 async fn peer_name(peer_idents: PeerIdents, peer_addr: &SocketAddr) -> Result<String> {
     let peer_idents_guard = peer_idents.read().await;
     let ip = peer_addr.ip().to_canonical();
-    let mut names: Vec<&str> = Vec::new();
-    for ident in peer_idents_guard
-        .iter()
-        .filter(|ident| ident.addr.ip().to_canonical() == ip)
-    {
-        if !names
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(&ident.hostname))
-        {
-            names.push(&ident.hostname);
+    match peer_name_by_ip(&peer_idents_guard, ip) {
+        Ok(name) => Ok(name.to_owned()),
+        Err(PeerNameLookupError::NoIdentity) => {
+            bail!("Peer giganto's server name cannot be identified for IP {ip}")
         }
-    }
-    match names.as_slice() {
-        [] => bail!("Peer giganto's server name cannot be identified for IP {ip}"),
-        [name] => Ok((*name).to_owned()),
-        _ => bail!("More than one peer giganto server name matches IP {ip}"),
+        Err(PeerNameLookupError::MoreThanOneIdentity) => {
+            bail!("More than one peer giganto server name matches IP {ip}")
+        }
     }
 }
