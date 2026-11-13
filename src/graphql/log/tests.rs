@@ -14,6 +14,127 @@ use crate::{
     storage::RawEventStore,
 };
 
+#[test]
+#[allow(clippy::too_many_lines)]
+fn legacy_keys_paginate_across_epoch_for_both_layouts() {
+    let schema = TestSchema::new();
+    let logs = schema.db.log_store().unwrap();
+    let oplogs = schema.db.op_log_store().unwrap();
+    let generator = OnceLock::new();
+    for timestamp in [-1, 0, 1] {
+        insert_log_raw_event(&logs, "src1", timestamp, "kind1", b"log");
+        insert_oplog_raw_event(&oplogs, "giganto", "src1", timestamp, &generator);
+    }
+    let range = Some(TimeRange {
+        start: Some(DateTime::from_timestamp_nanos(-2)),
+        end: Some(DateTime::from_timestamp_nanos(2)),
+    });
+    let log_filter = LogFilter {
+        time: range.clone(),
+        sensor: "src1".into(),
+        kind: Some("kind1".into()),
+    };
+    let op_filter = OpLogFilter {
+        time: range,
+        sensor: None,
+        service_name: None,
+        log_level: None,
+        contents: None,
+    };
+    for reverse in [false, true] {
+        let mut log_cursor = None;
+        let mut op_cursor = None;
+        let mut log_times = Vec::new();
+        let mut op_times = Vec::new();
+        for _ in 0..3 {
+            let (logs_page, _, _) = super::super::get_connection(
+                &logs,
+                &log_filter,
+                if reverse { None } else { log_cursor.clone() },
+                if reverse { log_cursor.clone() } else { None },
+                if reverse { None } else { Some(1) },
+                if reverse { Some(1) } else { None },
+            )
+            .unwrap();
+            let (op_page, _, _) = super::super::get_connection_by_prefix_timestamp_key(
+                &oplogs,
+                &op_filter,
+                if reverse { None } else { op_cursor.clone() },
+                if reverse { op_cursor.clone() } else { None },
+                if reverse { None } else { Some(1) },
+                if reverse { Some(1) } else { None },
+            )
+            .unwrap();
+            assert_eq!(logs_page.len(), 1);
+            assert_eq!(op_page.len(), 1);
+            log_cursor = Some(base64_engine.encode(&logs_page[0].0));
+            op_cursor = Some(base64_engine.encode(&op_page[0].0));
+            log_times.push(
+                super::get_time_from_key(&logs_page[0].0)
+                    .unwrap()
+                    .timestamp_nanos_opt()
+                    .unwrap(),
+            );
+            op_times.push(
+                super::get_time_from_key_prefix(&op_page[0].0)
+                    .unwrap()
+                    .timestamp_nanos_opt()
+                    .unwrap(),
+            );
+        }
+        if reverse {
+            log_times.reverse();
+            op_times.reverse();
+        }
+        assert_eq!(log_times, [-1, 0, 1]);
+        assert_eq!(op_times, [-1, 0, 1]);
+    }
+}
+
+#[tokio::test]
+async fn graphql_omitted_null_and_zero_time_bounds() {
+    let schema = TestSchema::new();
+    let logs = schema.db.log_store().unwrap();
+    let oplogs = schema.db.op_log_store().unwrap();
+    let generator = OnceLock::new();
+    for timestamp in [-1, 0, 1] {
+        insert_log_raw_event(&logs, "src1", timestamp, "kind1", b"log");
+        insert_oplog_raw_event(&oplogs, "giganto", "src1", timestamp, &generator);
+    }
+    for (time, expected) in [
+        ("", vec![-1, 0, 1]),
+        ("time: {start: null, end: null}", vec![-1, 0, 1]),
+        ("time: {start: \"1970-01-01T00:00:00Z\"}", vec![0, 1]),
+        ("time: {end: \"1970-01-01T00:00:00Z\"}", vec![-1]),
+    ] {
+        let query = format!(
+            r#"{{
+            logRawEvents(filter: {{sensor: "src1", kind: "kind1", {time}}}) {{ edges {{ node {{ time }} }} }}
+            opLogRawEvents(filter: {{{time}}}) {{ edges {{ node {{ time }} }} }}
+        }}"#
+        );
+        let response = schema.execute(&query).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        for field in ["logRawEvents", "opLogRawEvents"] {
+            let actual = data[field]["edges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|edge| {
+                    let time = edge["node"]["time"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<jiff::Timestamp>()
+                        .unwrap();
+                    i64::try_from(time.as_nanosecond()).unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{field} with {time}");
+        }
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn load_time_range() {

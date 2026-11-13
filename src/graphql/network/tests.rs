@@ -444,6 +444,24 @@ async fn conn_with_data_giganto_cluster() {
     mock.assert_async().await;
 }
 
+#[tokio::test]
+async fn merged_network_events_include_timestamp_extremes() {
+    for (timestamp, page) in [(i64::MIN, "last: 1"), (i64::MAX, "first: 1")] {
+        let schema = TestSchema::new();
+        insert_dns_raw_event(&schema.db.dns_store().unwrap(), "src1", timestamp);
+        let query = format!(
+            r#"{{ networkRawEvents(filter: {{sensor: "src1"}}, {page}) {{ edges {{ node {{ __typename }} }} }} }}"#
+        );
+        let response = schema.execute(&query).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let data = response.data.into_json().unwrap();
+        assert_eq!(
+            data["networkRawEvents"]["edges"].as_array().unwrap().len(),
+            1
+        );
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn network_raw_events_timestamp_format_stability() {

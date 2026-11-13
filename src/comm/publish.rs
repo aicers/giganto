@@ -66,7 +66,7 @@ use crate::server::{
     Certs, config_client, config_server, connected_client_display_from_cert,
     extract_cert_from_conn, service_fqdn_from_cert,
 };
-use crate::storage::{BoundaryIter, Database, Direction, RawEventStore, StorageKey};
+use crate::storage::{Database, Direction, KeyValue, RawEventStore, StorageKey};
 use crate::tls_reload::{self, TlsWatch};
 
 const PUBLISH_VERSION_REQ: &str = ">=0.28.0,<0.36.0";
@@ -995,7 +995,7 @@ async fn send_stream<T, N>(
     token: CancellationToken,
 ) -> Result<()>
 where
-    T: EventFilter + Serialize + DeserializeOwned + Display,
+    T: EventFilter + Serialize + DeserializeOwned + Display + Send,
     N: RequestStreamMessage,
 {
     // The same name the caller registered this subscription under, rebuilt
@@ -1061,24 +1061,28 @@ async fn snapshot_and_register<'db, T, N>(
     stream_direct_channels: &StreamDirectChannels,
     channel_keys: &[StreamChannelKey],
     send: &UnboundedSender<Vec<u8>>,
-) -> Result<Option<BoundaryIter<'db, T>>>
+) -> Result<Option<Box<dyn Iterator<Item = Result<KeyValue<T>>> + Send + 'db>>>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + Send + 'db,
     N: RequestStreamMessage,
 {
     let mut channels = stream_direct_channels.write().await;
     // Ingest holds a read guard from storage through notification. Creating
     // the iterator here makes every stored record belong to exactly one path.
     let iter = if msg.is_time_series_generator() {
-        let key_builder = StorageKey::builder()
+        let prefix = StorageKey::builder()
             .start_key(&msg.sensor()?)
-            .mid_key(kind.map(|s| s.as_bytes().to_vec()));
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(msg.start_time())))
-            .build();
-        let to_key = key_builder.upper_open_bound_end_key(None).build();
-        Some(store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward))
+            .mid_key(kind.map(|s| s.as_bytes().to_vec()))
+            .build()
+            .key();
+        let iter = store.timestamp_range_iter(
+            &prefix,
+            Some(DateTime::from_timestamp_nanos(msg.start_time())),
+            None,
+            None,
+            Direction::Forward,
+        );
+        Some(Box::new(iter) as Box<dyn Iterator<Item = Result<KeyValue<T>>> + Send>)
     } else {
         None
     };
@@ -1091,12 +1095,12 @@ where
 /// Writes the start message and replays the snapshot after releasing the write guard.
 async fn start_stream<T, N>(
     sender: &mut SendStream,
-    iter: Option<BoundaryIter<'_, T>>,
+    iter: Option<Box<dyn Iterator<Item = Result<KeyValue<T>>> + Send + '_>>,
     msg: &N,
     record_type: RequestStreamRecord,
 ) -> Result<()>
 where
-    T: EventFilter + Serialize + DeserializeOwned + Display,
+    T: EventFilter + Serialize + DeserializeOwned + Display + Send,
     N: RequestStreamMessage,
 {
     // send stored record raw data
@@ -2501,15 +2505,14 @@ where
         key_builder
     };
 
-    let from_key = key_builder
-        .clone()
-        .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(request_range.start)))
-        .build();
-    let to_key = key_builder
-        .upper_open_bound_end_key(Some(DateTime::from_timestamp_nanos(request_range.end)))
-        .build();
-
-    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+    let prefix = key_builder.build().key();
+    let iter = store.timestamp_range_iter(
+        &prefix,
+        Some(DateTime::from_timestamp_nanos(request_range.start)),
+        Some(DateTime::from_timestamp_nanos(request_range.end)),
+        None,
+        Direction::Forward,
+    );
 
     for item in iter.take(request_range.count) {
         let (key, val) = item.context("Failed to read Database")?;

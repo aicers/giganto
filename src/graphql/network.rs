@@ -3976,7 +3976,7 @@ fn network_connection(
         };
 
         match selected {
-            _ if selected == conn_ts => {
+            _ if selected == conn_ts && conn_data.is_some() => {
                 if let Some((key, value)) = conn_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -3985,7 +3985,7 @@ fn network_connection(
                     conn_data = conn_iter.next();
                 }
             }
-            _ if selected == dns_ts => {
+            _ if selected == dns_ts && dns_data.is_some() => {
                 if let Some((key, value)) = dns_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -3994,7 +3994,7 @@ fn network_connection(
                     dns_data = dns_iter.next();
                 }
             }
-            _ if selected == malformed_dns_ts => {
+            _ if selected == malformed_dns_ts && malformed_dns_data.is_some() => {
                 if let Some((key, value)) = malformed_dns_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4005,7 +4005,7 @@ fn network_connection(
                     malformed_dns_data = malformed_dns_iter.next();
                 }
             }
-            _ if selected == http_ts => {
+            _ if selected == http_ts && http_data.is_some() => {
                 if let Some((key, value)) = http_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4014,7 +4014,7 @@ fn network_connection(
                     http_data = http_iter.next();
                 }
             }
-            _ if selected == rdp_ts => {
+            _ if selected == rdp_ts && rdp_data.is_some() => {
                 if let Some((key, value)) = rdp_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4023,7 +4023,7 @@ fn network_connection(
                     rdp_data = rdp_iter.next();
                 }
             }
-            _ if selected == ntlm_ts => {
+            _ if selected == ntlm_ts && ntlm_data.is_some() => {
                 if let Some((key, value)) = ntlm_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4032,7 +4032,7 @@ fn network_connection(
                     ntlm_data = ntlm_iter.next();
                 }
             }
-            _ if selected == kerberos_ts => {
+            _ if selected == kerberos_ts && kerberos_data.is_some() => {
                 if let Some((key, value)) = kerberos_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4043,7 +4043,7 @@ fn network_connection(
                     kerberos_data = kerberos_iter.next();
                 }
             }
-            _ if selected == ssh_ts => {
+            _ if selected == ssh_ts && ssh_data.is_some() => {
                 if let Some((key, value)) = ssh_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4052,7 +4052,7 @@ fn network_connection(
                     ssh_data = ssh_iter.next();
                 }
             }
-            _ if selected == dce_rpc_ts => {
+            _ if selected == dce_rpc_ts && dce_rpc_data.is_some() => {
                 if let Some((key, value)) = dce_rpc_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4063,7 +4063,7 @@ fn network_connection(
                     dce_rpc_data = dce_rpc_iter.next();
                 }
             }
-            _ if selected == ftp_ts => {
+            _ if selected == ftp_ts && ftp_data.is_some() => {
                 if let Some((key, value)) = ftp_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4072,7 +4072,7 @@ fn network_connection(
                     ftp_data = ftp_iter.next();
                 }
             }
-            _ if selected == mqtt_ts => {
+            _ if selected == mqtt_ts && mqtt_data.is_some() => {
                 if let Some((key, value)) = mqtt_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4081,7 +4081,7 @@ fn network_connection(
                     mqtt_data = mqtt_iter.next();
                 }
             }
-            _ if selected == ldap_ts => {
+            _ if selected == ldap_ts && ldap_data.is_some() => {
                 if let Some((key, value)) = ldap_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4090,7 +4090,7 @@ fn network_connection(
                     ldap_data = ldap_iter.next();
                 }
             }
-            _ if selected == tls_ts => {
+            _ if selected == tls_ts && tls_data.is_some() => {
                 if let Some((key, value)) = tls_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4099,7 +4099,7 @@ fn network_connection(
                     tls_data = tls_iter.next();
                 }
             }
-            _ if selected == smb_ts => {
+            _ if selected == smb_ts && smb_data.is_some() => {
                 if let Some((key, value)) = smb_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4108,7 +4108,7 @@ fn network_connection(
                     smb_data = smb_iter.next();
                 }
             }
-            _ if selected == nfs_ts => {
+            _ if selected == nfs_ts && nfs_data.is_some() => {
                 if let Some((key, value)) = nfs_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4117,7 +4117,7 @@ fn network_connection(
                     nfs_data = nfs_iter.next();
                 }
             }
-            _ if selected == smtp_ts => {
+            _ if selected == smtp_ts && smtp_data.is_some() => {
                 if let Some((key, value)) = smtp_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4126,7 +4126,7 @@ fn network_connection(
                     smtp_data = smtp_iter.next();
                 }
             }
-            _ if selected == bootp_ts => {
+            _ if selected == bootp_ts && bootp_data.is_some() => {
                 if let Some((key, value)) = bootp_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4137,7 +4137,7 @@ fn network_connection(
                     bootp_data = bootp_iter.next();
                 }
             }
-            _ if selected == dhcp_ts => {
+            _ if selected == dhcp_ts && dhcp_data.is_some() => {
                 if let Some((key, value)) = dhcp_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4146,7 +4146,7 @@ fn network_connection(
                     dhcp_data = dhcp_iter.next();
                 }
             }
-            _ if selected == radius_ts => {
+            _ if selected == radius_ts && radius_data.is_some() => {
                 if let Some((key, value)) = radius_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -4157,7 +4157,7 @@ fn network_connection(
                     radius_data = radius_iter.next();
                 }
             }
-            _ if selected == icmp_ts => {
+            _ if selected == icmp_ts && icmp_data.is_some() => {
                 if let Some((key, value)) = icmp_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
