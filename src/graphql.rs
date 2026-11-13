@@ -792,7 +792,7 @@ where
         get_filtered_iter(store, filter, after, before, first, last)?;
     let mut filtered_iter = filtered_iter.peekable();
     if let Some(cursor) = cursor
-        && let Some((key, _)) = filtered_iter.peek()
+        && let Some(Ok((key, _))) = filtered_iter.peek()
         && key.as_ref() == cursor
     {
         filtered_iter.next();
