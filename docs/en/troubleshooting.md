@@ -47,6 +47,14 @@
     another name, or that moved, is removed from `peers` by the operator.
   - `recorded peer name ... is not a DNS name`: the name recorded at that IP,
     such as an IP address, cannot be verified against a certificate.
+- For publish relays, look for `Peer giganto's server name cannot be identified
+  for IP <ip>` or `More than one peer giganto server name matches IP <ip>` at
+  ERROR. Their causes and fixes are the same as `no recorded peer identity`
+  and `more than one recorded peer identity`, respectively, above: check that
+  the peer's recorded address matches its actual address, and remove stale
+  entries from `peers`. Relay lookup uses the target IP regardless of service
+  port; names differing only in ASCII letter case count as one name. The
+  `not a DNS name` check applies only to GraphQL.
 
 ## When the process exits while it was serving
 

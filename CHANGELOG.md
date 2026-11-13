@@ -8,6 +8,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Publish relays for range, raw-event, and PCAP requests now resolve peer names
+  by IP address even when the peer and publish service ports differ.
 - When the process exits with a failure, the final error line stating why could
   be missing from the journal if log output was backed up. The final error line
   is now written directly instead of through the log filter, so it also appears
@@ -15,6 +17,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - GraphQL queries and exports reject time filter bounds outside
   `1677-09-21T00:12:43.145224192Z` through `2262-04-11T23:47:16.854775807Z`
   inclusive.
+- Range, raw-event, and PCAP requests for a sensor that another node in the
+  cluster ingests are now relayed to that node instead of failing.
 
 ## [0.35.1] - 2026-11-12
 

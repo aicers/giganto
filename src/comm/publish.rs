@@ -57,7 +57,7 @@ use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::{
     IngestSensors, PcapSensors, StreamDirectChannelMap, StreamDirectChannels,
     ingest::{NetworkKey, implement::EventFilter},
-    peer::{PeerIdents, Peers},
+    peer::{PeerIdents, PeerNameLookupError, Peers, peer_name_by_ip},
     stream_channel_key::StreamChannelKey,
 };
 use crate::datetime::DateTime;
@@ -772,17 +772,11 @@ async fn process_pcap_extract_filters(
             } else if let Some(peer_addr) =
                 peer_in_charge_publish_addr(peers.clone(), &filter.sensor).await
             {
-                let peer_name: String = {
-                    let peer_idents_guard = peer_idents.read().await;
-                    let peer_ident = peer_idents_guard
-                        .iter()
-                        .find(|idents| idents.addr.eq(&peer_addr));
-
-                    if let Some(peer_ident) = peer_ident {
-                        peer_ident.hostname.clone()
-                    } else {
+                let peer_name = match peer_name(peer_idents.clone(), &peer_addr).await {
+                    Ok(name) => name,
+                    Err(e) => {
                         error!(
-                            "{error_label}: Peer's server name cannot be identitified. addr: {peer_addr}, sensor: {}",
+                            "{error_label}: {e}. addr: {peer_addr}, sensor: {}",
                             filter.sensor
                         );
                         continue;
@@ -2907,12 +2901,14 @@ async fn connect_repeatedly(
 
 async fn peer_name(peer_idents: PeerIdents, peer_addr: &SocketAddr) -> Result<String> {
     let peer_idents_guard = peer_idents.read().await;
-    let peer_ident = peer_idents_guard
-        .iter()
-        .find(|idents| idents.addr.eq(peer_addr));
-
-    match peer_ident {
-        Some(peer_ident) => Ok(peer_ident.hostname.clone()),
-        None => bail!("Peer giganto's server name cannot be identitified"),
+    let ip = peer_addr.ip().to_canonical();
+    match peer_name_by_ip(&peer_idents_guard, ip) {
+        Ok(name) => Ok(name.to_owned()),
+        Err(PeerNameLookupError::NoIdentity) => {
+            bail!("Peer giganto's server name cannot be identified for IP {ip}")
+        }
+        Err(PeerNameLookupError::MoreThanOneIdentity) => {
+            bail!("More than one peer giganto server name matches IP {ip}")
+        }
     }
 }

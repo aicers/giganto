@@ -20,7 +20,7 @@ use rustls::pki_types::ServerName;
 use tracing::error;
 
 use crate::{
-    comm::peer::{PeerIdentity, PeerIdents, Peers},
+    comm::peer::{PeerIdentity, PeerIdents, PeerNameLookupError, Peers, peer_name_by_ip},
     server::{Certs, tls_client_config},
     tls_reload::{TlsWatch, get_current_tls_material},
 };
@@ -180,24 +180,10 @@ pub(crate) fn peer_graphql_url(
     peer: SocketAddr,
 ) -> Result<Url, PeerRequestRefusal> {
     let ip = peer.ip();
-    let canonical = ip.to_canonical();
-    let mut names: Vec<&str> = Vec::new();
-    for ident in idents
-        .iter()
-        .filter(|ident| ident.addr.ip().to_canonical() == canonical)
-    {
-        if !names
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(&ident.hostname))
-        {
-            names.push(&ident.hostname);
-        }
-    }
-    let hostname = match names.as_slice() {
-        [] => return Err(PeerRequestRefusal::NoIdentity(ip)),
-        [hostname] => *hostname,
-        _ => return Err(PeerRequestRefusal::MoreThanOneIdentity(ip)),
-    };
+    let hostname = peer_name_by_ip(idents, ip).map_err(|error| match error {
+        PeerNameLookupError::NoIdentity => PeerRequestRefusal::NoIdentity(ip),
+        PeerNameLookupError::MoreThanOneIdentity => PeerRequestRefusal::MoreThanOneIdentity(ip),
+    })?;
     let not_dns_name = || PeerRequestRefusal::NotDnsName(ip, hostname.to_owned());
     if !matches!(ServerName::try_from(hostname), Ok(ServerName::DnsName(_))) {
         return Err(not_dns_name());
