@@ -103,6 +103,20 @@ pub struct TimeRange {
     start: Option<DateTime>,
     end: Option<DateTime>,
 }
+
+fn validate_key_time_bounds((start, end): (Option<DateTime>, Option<DateTime>)) -> Result<()> {
+    for (name, bound) in [("start", start), ("end", end)] {
+        if bound.is_some_and(|time| time.timestamp_nanos_opt().is_none()) {
+            return Err(format!("time filter {name} must be between 1677-09-21T00:12:43.145224192Z and 2262-04-11T23:47:16.854775807Z inclusive").into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_key_time_range(time: Option<&TimeRange>) -> Result<()> {
+    validate_key_time_bounds(time.map_or((None, None), |time| (time.start, time.end)))
+}
+
 /// IP address range filter.
 ///
 /// Range semantics:
@@ -434,6 +448,7 @@ fn get_connection<T>(
 where
     T: DeserializeOwned + EventFilter,
 {
+    validate_key_time_bounds(filter.get_range_end_key())?;
     validate_pagination_args(
         after.as_ref(),
         before.as_ref(),
@@ -552,6 +567,7 @@ fn get_connection_by_prefix_timestamp_key<T>(
 where
     T: DeserializeOwned + EventFilter,
 {
+    validate_key_time_bounds(filter.get_range_start_key())?;
     validate_pagination_args(
         after.as_ref(),
         before.as_ref(),
@@ -813,6 +829,7 @@ where
     T: DeserializeOwned + EventFilter,
     F: RawEventFilter + KeyExtractor,
 {
+    validate_key_time_bounds(filter.get_range_end_key())?;
     validate_pagination_args(
         after.as_ref(),
         before.as_ref(),
@@ -1508,6 +1525,155 @@ pub(crate) mod tests {
                 assert_invalid_ip_ranges(&schema, field, extra, selection).await;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn key_time_bounds_are_checked_before_queries_and_exports() {
+        let schema = TestSchema::new();
+        for populated in [false, true] {
+            if populated {
+                insert_conn_raw_event(&schema.db.conn_store().unwrap(), "src1", 1);
+            }
+            for bound in ["start", "end"] {
+                for timestamp in [
+                    "1677-09-21T00:12:43.145224191Z",
+                    "2262-04-11T23:47:16.854775808Z",
+                ] {
+                    for export in [false, true] {
+                        let query = if export {
+                            format!(
+                                "{{ export(exportType: \"json\", filter: {{ protocol: \"conn\", sensorId: \"src1\", time: {{ {bound}: \"{timestamp}\" }} }}) }}"
+                            )
+                        } else {
+                            format!(
+                                "{{ connRawEvents(filter: {{ sensor: \"src1\", time: {{ {bound}: \"{timestamp}\" }} }}) {{ edges {{ node {{ time }} }} }} }}"
+                            )
+                        };
+                        let response = schema.execute(&query).await;
+                        assert_eq!(response.errors.len(), 1, "{query}: {response:?}");
+                        assert!(
+                            response.errors[0]
+                                .message
+                                .contains("1677-09-21T00:12:43.145224192Z")
+                        );
+                        assert_eq!(schema.top_level_tracker.pending_count(), 0);
+                        assert_eq!(
+                            std::fs::read_dir(schema.export_dir.path()).unwrap().count(),
+                            0
+                        );
+                    }
+                }
+            }
+            for time in [
+                "",
+                "time: null",
+                "time: {start: null, end: null}",
+                "time: {start: \"1677-09-21T00:12:43.145224192Z\"}",
+                "time: {end: \"2262-04-11T23:47:16.854775807Z\"}",
+                "time: {end: \"1677-09-21T00:12:43.145224192Z\"}",
+                "time: {start: \"2262-04-11T23:47:16.854775807Z\"}",
+                "time: {start: \"1970-01-01T00:00:00Z\", end: \"1970-01-02T00:00:00Z\"}",
+            ] {
+                let query = format!(
+                    "{{ connRawEvents(filter: {{ sensor: \"src1\", {time} }}) {{ edges {{ node {{ time }} }} }} }}"
+                );
+                let response = schema.execute(&query).await;
+                assert!(response.errors.is_empty(), "{query}: {response:?}");
+                // Negative bounds have a separate key-ordering issue.
+                if populated && !time.contains("1677-") {
+                    let edges = &response.data.into_json().unwrap()["connRawEvents"]["edges"];
+                    let expected = usize::from(!time.contains("start: \"2262-"));
+                    assert_eq!(edges.as_array().unwrap().len(), expected, "{query}");
+                    if expected == 1 {
+                        assert_eq!(
+                            edges[0]["node"]["time"],
+                            "1970-01-01T00:00:00.000000001+00:00"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn independent_query_paths_reject_out_of_range_key_time_bounds() {
+        let schema = TestSchema::new();
+        let queries = [
+            r"query($time: TimeRange) {
+                opLogRawEvents(filter: { time: $time }) {
+                    edges { node { time } }
+                }
+            }",
+            r#"query($time: TimeRange) {
+                statistics(sensors: ["src1"], time: $time) { sensor }
+            }"#,
+            r#"query($time: TimeRange) {
+                pcap(filter: {
+                    sensor: "src1"
+                    requestTime: "1970-01-01T00:00:00Z"
+                    packetTime: $time
+                }) { parsedPcap }
+            }"#,
+            r#"query($time: TimeRange) {
+                periodicTimeSeries(filter: { id: "1", time: $time }) {
+                    edges { node { start } }
+                }
+            }"#,
+        ];
+
+        for query in queries {
+            for bound in ["start", "end"] {
+                for timestamp in [
+                    "1677-09-21T00:12:43.145224191Z",
+                    "2262-04-11T23:47:16.854775808Z",
+                ] {
+                    let response = schema
+                        .schema
+                        .execute(Request::new(query).variables(Variables::from_json(
+                            serde_json::json!({ "time": { (bound): timestamp } }),
+                        )))
+                        .await;
+                    assert_eq!(
+                        response.errors.len(),
+                        1,
+                        "{query}, {bound}: {timestamp}: {response:?}"
+                    );
+                    assert_eq!(
+                        response.errors[0].message,
+                        format!(
+                            "time filter {bound} must be between 1677-09-21T00:12:43.145224192Z and 2262-04-11T23:47:16.854775807Z inclusive"
+                        ),
+                        "{query}, {bound}: {timestamp}: {response:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn export_accepts_valid_and_missing_key_time_bounds() {
+        let schema = TestSchema::new();
+        for time in [
+            "",
+            "time: null",
+            "time: {start: null, end: null}",
+            "time: {start: \"1677-09-21T00:12:43.145224192Z\"}",
+            "time: {end: \"2262-04-11T23:47:16.854775807Z\"}",
+            "time: {end: \"1677-09-21T00:12:43.145224192Z\"}",
+            "time: {start: \"2262-04-11T23:47:16.854775807Z\"}",
+            "time: {start: \"1970-01-01T00:00:00Z\", end: \"1970-01-02T00:00:00Z\"}",
+        ] {
+            let query = format!(
+                "{{ export(exportType: \"json\", filter: {{ protocol: \"conn\", sensorId: \"src1\", {time} }}) }}"
+            );
+            let response = schema.execute(&query).await;
+            assert!(response.errors.is_empty(), "{query}: {response:?}");
+        }
+        schema
+            .top_level_tracker
+            .drain(std::time::Duration::from_secs(30))
+            .await
+            .unwrap();
     }
 
     #[cfg(feature = "cluster")]

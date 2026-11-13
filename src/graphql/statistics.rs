@@ -230,6 +230,7 @@ impl StatisticsQuery {
         protocols: Option<Vec<String>>,
         #[allow(unused_variables)] request_from_peer: Option<bool>,
     ) -> Result<Vec<StatisticsRawEvent>> {
+        super::validate_key_time_range(time.as_ref())?;
         let handler = handle_statistics;
 
         events_in_cluster!(
