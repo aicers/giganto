@@ -395,19 +395,6 @@ where
         }
         next_candidate.reverse();
 
-        // Change the value of the selected iter to the following value.
-        for idx in next_candidate {
-            if let Some(iter) = stats_iters.get_mut(idx) {
-                if let Some(item) = iter.next() {
-                    *iter_next_values.get_mut(idx).expect("`next_candidate` is generated during iteration over `iter_next_values`, ensuring all its indices are valid within the latter.") = item.map_err(|error| anyhow!("reading statistics for sensor {sensor}: {error}"))?;
-                } else {
-                    // No value to call with the iterator.
-                    let _ = stats_iters.remove(idx);
-                    let _ = iter_next_values.remove(idx);
-                }
-            }
-        }
-
         // Generates StatisticsDetail by calculating the bps/pps/eps.
         for (r_type, (count, size)) in total_stats {
             let mut stats_detail = StatisticsDetail {
@@ -437,6 +424,19 @@ where
         // If there is no time condition, only the most recent statistics are passed.
         if latest_flag {
             break;
+        }
+
+        // Change the value of the selected iter to the following value.
+        for idx in next_candidate {
+            if let Some(iter) = stats_iters.get_mut(idx) {
+                if let Some(item) = iter.next() {
+                    *iter_next_values.get_mut(idx).expect("`next_candidate` is generated during iteration over `iter_next_values`, ensuring all its indices are valid within the latter.") = item.map_err(|error| anyhow!("reading statistics for sensor {sensor}: {error}"))?;
+                } else {
+                    // No value to call with the iterator.
+                    let _ = stats_iters.remove(idx);
+                    let _ = iter_next_values.remove(idx);
+                }
+            }
         }
     }
 
@@ -890,6 +890,33 @@ mod tests {
                 "{error:?}"
             );
         }
+    }
+
+    #[test]
+    fn gen_statistics_latest_does_not_read_older_records() {
+        let record = || {
+            Ok((
+                Box::from(FIXED_STATISTICS_TIMESTAMP_NANOS.to_be_bytes()),
+                Statistics {
+                    core: 0,
+                    period: 60,
+                    stats: vec![(RawEventKind::Statistics, 60, 120)],
+                },
+            ))
+        };
+        let mut iters = (0..2)
+            .map(|_| {
+                vec![record(), Err(anyhow::anyhow!("older read failed"))]
+                    .into_iter()
+                    .peekable()
+            })
+            .collect();
+        let allowed = STATS_ALLOWED_KINDS.into_iter().collect();
+
+        let stats = gen_statistics(&mut iters, "src1", true, &allowed).unwrap();
+        assert_eq!(stats.stats.len(), 1);
+        assert_eq!(stats.stats[0].detail[0].count, Some(StringNumberU64(120)));
+        assert_eq!(stats.stats[0].detail[0].size, Some(StringNumberU64(240)));
     }
 
     #[test]
