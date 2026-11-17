@@ -81,7 +81,7 @@ impl SequenceGenerator {
 
     #[inline]
     fn current_utc_date() -> jiff::civil::Date {
-        Timestamp::now().to_zoned(TimeZone::UTC).date()
+        Timestamp::now().to_zoned_datetime(TimeZone::UTC).date()
     }
 
     /// Returns the current UTC date key (`days since CE`).

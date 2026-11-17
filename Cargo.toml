@@ -73,7 +73,7 @@ x509-parser = "0.18"
 poem = { version = "3", features = ["rustls"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-graphql-poem = "7"
-jiff = { version = "0.2", features = ["serde"] }
+jiff = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
 mockito = "1"

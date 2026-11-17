@@ -753,7 +753,7 @@ mod tests {
             .to_datetime()
             .expect("pcap timestamp should contain a full civil datetime");
         let utc_time = local_datetime
-            .to_zoned(TimeZone::system())
+            .to_zoned_datetime(TimeZone::system())
             .expect("local civil datetime should resolve in system timezone")
             .in_tz("UTC")
             .expect("pcap timestamp should convert to UTC");
