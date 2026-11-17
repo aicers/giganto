@@ -2161,7 +2161,7 @@ impl Drop for ExportClaim {
 }
 
 fn handle_export(ctx: &Context<'_>, filter: &ExportFilter, export_type: String) -> Result<String> {
-    let now = jiff::Zoned::now();
+    let now = jiff::ZonedDateTime::now();
     start_export(
         ctx.data::<Database>()?,
         ctx.data::<PathBuf>()?,
@@ -2180,7 +2180,7 @@ fn start_export(
     tracker: &TaskTracker,
     filter: &ExportFilter,
     export_type: String,
-    now: &jiff::Zoned,
+    now: &jiff::ZonedDateTime,
 ) -> Result<String> {
     info!(
         "File export request received. Protocol: {}, Sensor: {}, Format: {export_type}",

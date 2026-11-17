@@ -99,7 +99,7 @@ impl DateTime {
     /// * Uses chrono-compatible year formatting, including negative years.
     /// * Always uses `+00:00` offset (not `Z`).
     pub fn to_rfc3339(self) -> String {
-        let dt = self.0.to_zoned(jiff::tz::TimeZone::UTC).datetime();
+        let dt = self.0.to_zoned_datetime(jiff::tz::TimeZone::UTC).datetime();
         let (y, mo, d) = (dt.year(), dt.month(), dt.day());
         let (h, mi, s) = (dt.hour(), dt.minute(), dt.second());
         let nanos = dt.subsec_nanosecond();
@@ -245,7 +245,7 @@ mod tests {
     fn rfc3339_negative_year() {
         let ts = jiff::civil::date(-1, 1, 1)
             .at(0, 0, 0, 0)
-            .to_zoned(jiff::tz::TimeZone::UTC)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
             .unwrap()
             .timestamp();
         let dt = DateTime::from(ts);

@@ -1641,7 +1641,7 @@ async fn export_after_tracker_closed_registers_nothing() {
     assert!(!progress_path.exists());
 }
 
-fn fixed_export_time() -> jiff::Zoned {
+fn fixed_export_time() -> jiff::ZonedDateTime {
     "2024-03-04T05:06:07+00:00[UTC]".parse().unwrap()
 }
 
