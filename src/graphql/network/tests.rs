@@ -7800,3 +7800,39 @@ async fn merged_queries_return_storage_errors() {
         response.errors
     );
 }
+
+#[tokio::test]
+async fn merged_queries_return_storage_errors_after_record() {
+    let schema = TestSchema::new();
+    let store = schema.db.conn_store().unwrap();
+    insert_conn_raw_event(&store, "src 1", FIXED_TIME1_NANOS);
+    for size_arg in ["first", "last"] {
+        let query = format!(
+            r#"{{ networkRawEvents(filter: {{ sensor: "src 1" }}, {size_arg}: 10) {{ edges {{ cursor }} }} }}"#
+        );
+        let baseline = schema.execute(&query).await;
+        assert!(baseline.errors.is_empty(), "{:?}", baseline.errors);
+        assert_eq!(
+            baseline.data.into_json().unwrap()["networkRawEvents"]["edges"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let error = rocksdb::DB::open_default(file.path()).unwrap_err();
+        let message = error.to_string();
+        crate::storage::inject_filtered_iter_error_after_record(error);
+        let response = schema.execute(&query).await;
+        assert!(
+            response
+                .errors
+                .iter()
+                .any(|error| error.message.contains(&message)),
+            "{:?}",
+            response.errors
+        );
+        assert_eq!(response.data, async_graphql::Value::Null);
+    }
+}
