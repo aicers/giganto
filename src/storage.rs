@@ -1413,22 +1413,34 @@ pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
 #[cfg(test)]
 thread_local! {
-    static FILTERED_ITER_ERROR: std::cell::RefCell<Option<rocksdb::Error>> = const { std::cell::RefCell::new(None) };
+    static FILTERED_ITER_ERROR: std::cell::RefCell<Option<(rocksdb::Error, bool)>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
 pub(crate) fn inject_filtered_iter_error(error: rocksdb::Error) {
-    FILTERED_ITER_ERROR.with(|slot| *slot.borrow_mut() = Some(error));
+    FILTERED_ITER_ERROR.with(|slot| *slot.borrow_mut() = Some((error, false)));
+}
+
+#[cfg(test)]
+pub(crate) fn inject_filtered_iter_error_after_record(error: rocksdb::Error) {
+    FILTERED_ITER_ERROR.with(|slot| *slot.borrow_mut() = Some((error, true)));
 }
 
 pub struct FilteredIter<'d, T, F: RawEventFilter = crate::graphql::NetworkFilter> {
     inner: BoundaryIter<'d, T>,
     filter: &'d F,
+    #[cfg(test)]
+    returned_record: bool,
 }
 
 impl<'d, T, F: RawEventFilter> FilteredIter<'d, T, F> {
     pub fn new(inner: BoundaryIter<'d, T>, filter: &'d F) -> Self {
-        Self { inner, filter }
+        Self {
+            inner,
+            filter,
+            #[cfg(test)]
+            returned_record: false,
+        }
     }
 }
 
@@ -1441,7 +1453,17 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             #[cfg(test)]
-            let injected = FILTERED_ITER_ERROR.with(|slot| slot.borrow_mut().take());
+            let injected = FILTERED_ITER_ERROR.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                if slot
+                    .as_ref()
+                    .is_some_and(|(_, after_record)| !after_record || self.returned_record)
+                {
+                    slot.take().map(|(error, _)| error)
+                } else {
+                    None
+                }
+            });
             #[cfg(not(test))]
             let injected: Option<rocksdb::Error> = None;
             let item = if let Some(error) = injected {
@@ -1473,6 +1495,10 @@ where
                 elem.1.agent_id(),
                 elem.1.service_name(),
             ) {
+                #[cfg(test)]
+                {
+                    self.returned_record = true;
+                }
                 return Some(Ok(elem));
             }
         }
