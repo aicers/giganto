@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     mem,
-    net::{SocketAddr, ToSocketAddrs},
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{Arc, RwLock as StdRwLock},
     time::Duration,
 };
@@ -136,6 +136,41 @@ pub enum PeerCode {
 pub struct PeerIdentity {
     pub addr: SocketAddr,
     pub hostname: String,
+}
+
+/// Failure to choose a single recorded peer name for an IP address.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PeerNameLookupError {
+    #[error("no recorded peer identity")]
+    NoIdentity,
+    #[error("more than one recorded peer identity")]
+    MoreThanOneIdentity,
+}
+
+/// Returns the unique peer name for an IP, ignoring ports and ASCII case.
+///
+/// # Errors
+///
+/// Returns an error if no name or more than one distinct name matches the IP.
+pub(crate) fn peer_name_by_ip(
+    idents: &HashSet<PeerIdentity>,
+    ip: IpAddr,
+) -> Result<&str, PeerNameLookupError> {
+    let ip = ip.to_canonical();
+    let mut name: Option<&str> = None;
+    for ident in idents
+        .iter()
+        .filter(|ident| ident.addr.ip().to_canonical() == ip)
+    {
+        match name {
+            None => name = Some(&ident.hostname),
+            Some(name) if !name.eq_ignore_ascii_case(&ident.hostname) => {
+                return Err(PeerNameLookupError::MoreThanOneIdentity);
+            }
+            Some(_) => {}
+        }
+    }
+    name.ok_or(PeerNameLookupError::NoIdentity)
 }
 
 impl TomlPeers for PeerIdentity {

@@ -15,6 +15,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - GraphQL queries and exports reject time filter bounds outside
   `1677-09-21T00:12:43.145224192Z` through `2262-04-11T23:47:16.854775807Z`
   inclusive.
+- Range, raw-event, and PCAP requests for a sensor that another node in the
+  cluster ingests are now relayed to that node instead of failing.
 
 ## [0.35.1] - 2026-11-12
 

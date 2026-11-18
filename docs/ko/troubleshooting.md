@@ -44,6 +44,13 @@
     항목은 운영자가 `peers`에서 제거해야 합니다.
   - `recorded peer name ... is not a DNS name`: IP 주소처럼 그 IP에 기록된
     이름으로는 인증서를 검증할 수 없습니다.
+- Publish 릴레이에서는 ERROR 수준의 `Peer giganto's server name cannot be
+  identified for IP <ip>` 또는 `More than one peer giganto server name matches
+  IP <ip>`를 확인합니다. 원인과 해결 방법은 각각 위의 `no recorded peer identity`와
+  `more than one recorded peer identity`와 같습니다. 피어에 기록된 주소가 실제
+  주소와 일치하는지 확인하고, 오래된 항목은 `peers`에서 제거합니다. 릴레이는
+  서비스 포트와 관계없이 대상 IP로 이름을 찾으며, ASCII 영문자의 대소문자만 다른
+  이름은 같은 이름으로 취급합니다. `not a DNS name` 검사는 GraphQL에만 적용됩니다.
 
 ## 동작 중이던 프로세스가 종료될 때
 

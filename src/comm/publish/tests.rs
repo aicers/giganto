@@ -1092,12 +1092,21 @@ mod fixtures {
         )])))
     }
 
+    fn peer_service_addr(publish_addr: SocketAddr) -> SocketAddr {
+        let socket = std::net::UdpSocket::bind(SocketAddr::new(publish_addr.ip(), 0))
+            .expect("bind a different peer-service port");
+        let addr = socket.local_addr().unwrap();
+        assert_ne!(addr.port(), publish_addr.port());
+        addr
+    }
+
     pub(super) fn build_peer_idents(
         peer_addr: SocketAddr,
         hostname: &str,
     ) -> Arc<RwLock<HashSet<PeerIdentity>>> {
         Arc::new(RwLock::new(HashSet::from([PeerIdentity {
-            addr: peer_addr,
+            // Peer identities record the peer-service port, not the publish port.
+            addr: peer_service_addr(peer_addr),
             hostname: hostname.to_string(),
         }])))
     }
@@ -4447,7 +4456,8 @@ mod fixtures {
         }
         {
             let mut node2_peer_idents_guard = node2_peer_idents.write().await;
-            node2_peer_idents_guard.insert(NODE1.peer_identity_with_addr(node1_addr));
+            node2_peer_idents_guard
+                .insert(NODE1.peer_identity_with_addr(peer_service_addr(node1_addr)));
         }
         {
             let mut peers_guard = peers.write().await;
@@ -4458,7 +4468,7 @@ mod fixtures {
         }
         {
             let mut peer_idents_guard = peer_idents.write().await;
-            peer_idents_guard.insert(NODE2.peer_identity_with_addr(node2_addr));
+            peer_idents_guard.insert(NODE2.peer_identity_with_addr(peer_service_addr(node2_addr)));
         }
 
         let publish = TestClient::new(node1_addr, NODE1.server_name()).await;
@@ -6641,7 +6651,10 @@ async fn process_raw_events_errors_when_peer_name_missing() {
     .expect_err("process_raw_events should fail when peer name is missing");
     assert_eq!(
         err.to_string(),
-        "Peer giganto's server name cannot be identitified"
+        format!(
+            "Peer giganto's server name cannot be identified for IP {}",
+            peer_server.addr.ip()
+        )
     );
 }
 
@@ -7414,9 +7427,45 @@ async fn process_pcap_extract_filters_skips_when_peer_name_missing() {
 
         assert_no_peer_connection(&tracker, connection_rx).await;
         let expected_log = format!(
-            "Peer's server name cannot be identitified. addr: {peer_addr}, sensor: {SENSOR}"
+            "Peer giganto's server name cannot be identified for IP {}. addr: {peer_addr}, sensor: {SENSOR}",
+            peer_addr.ip()
         );
         assert_log_contains(&log_capture, &expected_log).await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn process_pcap_extract_filters_skips_when_peer_name_ambiguous() {
+    init_crypto();
+    const SENSOR: &str = "pcap_peer_ambiguous_ident";
+    let filter = build_filter_for_sensor(SENSOR, 30, 40);
+    let PeerPcapServer {
+        addr: peer_addr,
+        connection_rx,
+        ..
+    } = setup_peer_pcap_server(NODE2.build_certs()).await;
+
+    let peers = build_peers_for_sensor(SENSOR, peer_addr);
+    let peer_idents = build_peer_idents(peer_addr, NODE2.server_name());
+    peer_idents.write().await.insert(PeerIdentity {
+        addr: peer_addr,
+        hostname: "another-peer.example".to_string(),
+    });
+
+    with_log_capture(|log_capture| async move {
+        let tracker =
+            run_process_pcap_extract_filters(vec![filter], new_pcap_sensors(), peers, peer_idents)
+                .await;
+        assert_no_peer_connection(&tracker, connection_rx).await;
+        assert_log_contains(
+            &log_capture,
+            &format!(
+                "More than one peer giganto server name matches IP {}",
+                peer_addr.ip()
+            ),
+        )
+        .await;
     })
     .await;
 }
@@ -7574,33 +7623,85 @@ fn filter_ip_time_series_generator_matches_both() {
 }
 
 #[tokio::test]
-async fn peer_name_returns_hostname_when_match() {
-    let addr = SocketAddr::new("10.0.0.4".parse::<IpAddr>().unwrap(), 61001);
-    let peer_idents = Arc::new(RwLock::new(HashSet::from([PeerIdentity {
-        addr,
-        hostname: "node-a".to_string(),
-    }])));
-
-    let name = super::peer_name(peer_idents, &addr)
-        .await
-        .expect("peer_name should resolve");
-
-    assert_eq!(name, "node-a");
+async fn peer_name_matches_canonical_ip_independently_of_port() {
+    for (target, recorded) in [
+        ("10.0.0.4:61001", "10.0.0.4:61002"),
+        ("10.0.0.4:61001", "[::ffff:10.0.0.4]:61002"),
+        ("[::ffff:10.0.0.4]:61001", "10.0.0.4:61002"),
+        ("[2001:db8::4]:61001", "[2001:db8::4]:61002"),
+    ] {
+        let peer_idents = Arc::new(RwLock::new(HashSet::from([PeerIdentity {
+            addr: recorded.parse().unwrap(),
+            hostname: "node-a".to_string(),
+        }])));
+        let name = super::peer_name(peer_idents, &target.parse().unwrap())
+            .await
+            .expect("peer_name should resolve by canonical IP");
+        assert_eq!(name, "node-a");
+    }
 }
 
 #[tokio::test]
-async fn peer_name_returns_error_without_match() {
-    let addr = SocketAddr::new("10.0.0.5".parse::<IpAddr>().unwrap(), 61002);
-    let peer_idents = Arc::new(RwLock::new(HashSet::new()));
+async fn peer_name_returns_error_without_matching_ip() {
+    let addr = "10.0.0.5:61002".parse().unwrap();
+    for idents in [
+        HashSet::new(),
+        HashSet::from([PeerIdentity {
+            addr: "10.0.0.6:61002".parse().unwrap(),
+            hostname: "node-a".to_string(),
+        }]),
+    ] {
+        let err = super::peer_name(Arc::new(RwLock::new(idents)), &addr)
+            .await
+            .expect_err("peer_name should return error when missing");
+        assert_eq!(
+            err.to_string(),
+            "Peer giganto's server name cannot be identified for IP 10.0.0.5"
+        );
+    }
+}
 
-    let err = super::peer_name(peer_idents, &addr)
+#[tokio::test]
+async fn peer_name_rejects_distinct_names_for_same_ip() {
+    let peer_idents = Arc::new(RwLock::new(HashSet::from([
+        PeerIdentity {
+            addr: "10.0.0.4:61001".parse().unwrap(),
+            hostname: "node-a".to_string(),
+        },
+        PeerIdentity {
+            addr: "[::ffff:10.0.0.4]:61002".parse().unwrap(),
+            hostname: "node-b".to_string(),
+        },
+    ])));
+    let err = super::peer_name(peer_idents, &"10.0.0.4:61001".parse().unwrap())
         .await
-        .expect_err("peer_name should return error when missing");
-
+        .expect_err("even an exact socket match must reject ambiguous names");
     assert_eq!(
         err.to_string(),
-        "Peer giganto's server name cannot be identitified"
+        "More than one peer giganto server name matches IP 10.0.0.4"
     );
+}
+
+#[tokio::test]
+async fn peer_name_deduplicates_names_case_insensitively() {
+    let peer_idents = Arc::new(RwLock::new(HashSet::from([
+        PeerIdentity {
+            addr: "10.0.0.4:61001".parse().unwrap(),
+            hostname: "Node-A".to_string(),
+        },
+        PeerIdentity {
+            addr: "[::ffff:10.0.0.4]:61002".parse().unwrap(),
+            hostname: "node-a".to_string(),
+        },
+        PeerIdentity {
+            addr: "10.0.0.6:61003".parse().unwrap(),
+            hostname: "node-b".to_string(),
+        },
+    ])));
+    let name = super::peer_name(peer_idents, &"10.0.0.4:61003".parse().unwrap())
+        .await
+        .expect("case variants represent one peer name");
+    assert!(name.eq_ignore_ascii_case("node-a"));
 }
 
 #[tokio::test]
