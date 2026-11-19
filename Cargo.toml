@@ -28,7 +28,7 @@ giganto-client = { git = "https://github.com/aicers/giganto-client.git", tag = "
 graphql_client = "0.16"
 humantime-serde = "1"
 libc = "0.2"
-nix = { version = "0.31", features = ["fs", "resource"] }
+nix = { version = "0.32", features = ["fs", "resource"] }
 num_enum = "0.7"
 num-traits = "0.2"
 pcap = "2"
