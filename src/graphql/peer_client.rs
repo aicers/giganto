@@ -172,8 +172,8 @@ fn build_tls_client(resolver: &Arc<PeerNameResolver>, certs: &Certs) -> Result<r
 ///
 /// # Errors
 ///
-/// Returns the refusal if no name, more than one name, or a name that is not a
-/// DNS name is recorded for the IP.
+/// Returns the refusal if the IP has no recorded name, more than one name,
+/// or a name that cannot be used as the DNS host of the peer's HTTPS URL.
 pub(crate) fn peer_graphql_url(
     scheme: &str,
     idents: &HashSet<PeerIdentity>,
@@ -185,19 +185,19 @@ pub(crate) fn peer_graphql_url(
         PeerNameLookupError::MoreThanOneIdentity => PeerRequestRefusal::MoreThanOneIdentity(ip),
     })?;
     let not_dns_name = || PeerRequestRefusal::NotDnsName(ip, hostname.to_owned());
-    if !matches!(ServerName::try_from(hostname), Ok(ServerName::DnsName(_))) {
-        return Err(not_dns_name());
-    }
-    // The URL parser reads some names rustls accepts as DNS names, such as
-    // `0x7f000001`, as IPv4 addresses. A request to such a URL would bypass
-    // the resolver and verify the certificate against the address, so only a
-    // URL whose host is still the recorded name is sent.
+    // The URL parser reads names such as `0x7f000001` as IPv4 addresses.
+    // A request to such a URL would bypass the resolver and verify the
+    // certificate against the address.
     let url = Url::parse(&format!("{scheme}://{hostname}:{}/graphql", peer.port()))
         .map_err(|_| not_dns_name())?;
     if !url
         .domain()
         .is_some_and(|domain| domain.eq_ignore_ascii_case(hostname))
     {
+        return Err(not_dns_name());
+    }
+    // The recorded name must also be a valid TLS DNS name.
+    if !matches!(ServerName::try_from(hostname), Ok(ServerName::DnsName(_))) {
         return Err(not_dns_name());
     }
     Ok(url)
@@ -276,9 +276,12 @@ mod tests {
         sync::Arc,
     };
 
-    use reqwest::dns::{Name, Resolve};
-    use rustls::pki_types::ServerName;
+    use reqwest::{
+        Url,
+        dns::{Name, Resolve},
+    };
     use tokio::sync::RwLock;
+    use url::{Host, ParseError};
 
     use super::{PeerNameResolver, PeerRequestRefusal, peer_graphql_url};
     use crate::comm::peer::{PeerIdentity, PeerIdents, PeerInfo, Peers};
@@ -377,14 +380,15 @@ mod tests {
 
     #[test]
     fn url_is_refused_for_a_name_the_url_parser_reads_as_an_ip() {
-        // rustls accepts each as a DNS name; the URL parser reads the first
-        // two as `127.0.0.1` and `0.0.0.0`, and rejects the third as an
-        // invalid IPv4 address.
-        for name in ["0x7f000001", "0x00000000", "a.0x10"] {
-            assert!(matches!(
-                ServerName::try_from(name),
-                Ok(ServerName::DnsName(_))
-            ));
+        for (name, expected_host) in [
+            ("0x7f000001", Ok(Host::Ipv4(Ipv4Addr::LOCALHOST))),
+            ("0x00000000", Ok(Host::Ipv4(Ipv4Addr::UNSPECIFIED))),
+            ("a.0x10", Err(ParseError::InvalidIpv4Address)),
+        ] {
+            let parsed_host = Url::parse(&format!("https://{name}:{GRAPHQL_PORT}/graphql"))
+                .map(|url| url.host().expect("HTTPS URLs have a host").to_owned());
+            assert_eq!(parsed_host, expected_host, "{name}");
+
             let idents = HashSet::from([ident(&format!("10.0.0.2:{QUIC_PORT}"), name)]);
             let refusal = peer_graphql_url("https", &idents, graphql_addr("10.0.0.2")).unwrap_err();
             assert_eq!(
@@ -394,6 +398,17 @@ mod tests {
                 ),
             );
         }
+    }
+
+    #[test]
+    fn url_is_refused_for_a_domain_that_is_invalid_for_tls() {
+        let name = "-peer.example.test";
+        let url = Url::parse(&format!("https://{name}:{GRAPHQL_PORT}/graphql")).unwrap();
+        assert_eq!(url.domain(), Some(name));
+
+        let idents = HashSet::from([ident(&format!("10.0.0.2:{QUIC_PORT}"), name)]);
+        let refusal = peer_graphql_url("https", &idents, graphql_addr("10.0.0.2")).unwrap_err();
+        assert!(matches!(refusal, PeerRequestRefusal::NotDnsName(_, _)));
     }
 
     #[test]
