@@ -25,7 +25,7 @@ use graphql_client::GraphQLQuery;
 use num_traits::NumCast;
 use rocksdb::Direction;
 use serde::de::DeserializeOwned;
-use tracing::warn;
+use tracing::{error, warn};
 
 use super::TIMESTAMP_SIZE;
 #[cfg(feature = "cluster")]
@@ -35,7 +35,7 @@ use crate::graphql::client::{
 };
 use crate::{
     graphql::{StringNumberI64, StringNumberU64, TimeRange, events_in_cluster},
-    storage::{Database, RawEventStore, StatisticsIter, StorageKey},
+    storage::{Database, KeyValue, RawEventStore, StorageKey},
 };
 
 pub const MAX_CORE_SIZE: u32 = 16; // Number of queues on the collect device's NIC
@@ -199,7 +199,7 @@ async fn handle_statistics(
 
     // Configure statistics results by sensor.
     for sensor in sensors {
-        let mut stats_iters: Vec<Peekable<StatisticsIter<'_, Statistics>>> = Vec::new();
+        let mut stats_iters = Vec::new();
         for core in 0..MAX_CORE_SIZE {
             let stats_iter = get_statistics_iter(&db.statistics_store()?, core, sensor, time);
             let mut peek_stats_iter = stats_iter.peekable();
@@ -306,7 +306,7 @@ fn get_statistics_iter<'c, T>(
     core_id: u32,
     sensor: &str,
     time: Option<&TimeRange>,
-) -> StatisticsIter<'c, T>
+) -> impl Iterator<Item = anyhow::Result<KeyValue<T>>> + use<'c, T>
 where
     T: DeserializeOwned,
 {
@@ -322,22 +322,72 @@ where
     let from_key = key_builder.clone().upper_closed_bound_end_key(end).build();
     let to_key = key_builder.lower_closed_bound_end_key(start).build();
     let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Reverse);
-    StatisticsIter::new(iter)
+    skip_statistics_decode_errors(iter, sensor, core_id)
 }
 
-fn gen_statistics(
-    stats_iters: &mut Vec<Peekable<StatisticsIter<'_, Statistics>>>,
+struct SkippedStatistics {
+    sensor: String,
+    core_id: u32,
+    count: usize,
+}
+
+impl SkippedStatistics {
+    fn record_skip(&mut self) {
+        self.count += 1;
+    }
+}
+
+impl Drop for SkippedStatistics {
+    fn drop(&mut self) {
+        if self.count > 0 {
+            warn!(sensor = %self.sensor, core = self.core_id, skipped = self.count, "Failed to decode statistics records");
+        }
+    }
+}
+
+fn skip_statistics_decode_errors<T, I>(
+    iter: I,
+    sensor: &str,
+    core_id: u32,
+) -> impl Iterator<Item = anyhow::Result<KeyValue<T>>> + use<T, I>
+where
+    I: Iterator<Item = anyhow::Result<KeyValue<T>>>,
+{
+    let mut skipped = SkippedStatistics {
+        sensor: sensor.to_owned(),
+        core_id,
+        count: 0,
+    };
+    iter.filter_map(move |item| match item {
+        Err(error) if error.is::<bincode::Error>() => {
+            skipped.record_skip();
+            None
+        }
+        item => Some(item),
+    })
+}
+
+fn statistics_read_error(error: &anyhow::Error, sensor: &str) -> anyhow::Error {
+    error!(%error, %sensor, "Failed to read statistics");
+    anyhow!("failed to read statistics")
+}
+
+fn gen_statistics<I>(
+    stats_iters: &mut Vec<Peekable<I>>,
     sensor: &str,
     latest_flag: bool,
     allowed_raw_event_kinds: &HashSet<RawEventKind>,
-) -> Result<StatisticsRawEvent> {
+) -> Result<StatisticsRawEvent>
+where
+    I: Iterator<Item = anyhow::Result<KeyValue<Statistics>>>,
+{
     let mut stats_info_vec: Vec<StatisticsInfo> = Vec::new();
     let mut stats_detail_vec: Vec<StatisticsDetail> = Vec::new();
     let mut iter_next_values: Vec<(Box<[u8]>, Statistics)> = Vec::with_capacity(stats_iters.len());
 
     for iter in &mut *stats_iters {
         if let Some(item) = iter.next() {
-            iter_next_values.push(item);
+            iter_next_values.push(item.map_err(|error| statistics_read_error(&error, sensor))?);
         }
     }
 
@@ -345,8 +395,7 @@ fn gen_statistics(
         let mut next_candidate = Vec::new();
 
         // Find the most recent statistics in iter by core.
-        let check_latest_values = iter_next_values.clone();
-        let Some((latest_key, latest_stats)) = check_latest_values
+        let Some((latest_key, latest_stats)) = iter_next_values
             .iter()
             .max_by_key(|(key, _)| &key[(key.len() - TIMESTAMP_SIZE)..])
         else {
@@ -358,7 +407,7 @@ fn gen_statistics(
         let mut total_stats: HashMap<RawEventKind, (u64, u64)> = HashMap::new();
 
         // Collect statistics formed at the same timestamp as the most recent statistics into a HashMap.
-        for (idx, (key, value)) in iter_next_values.clone().iter().enumerate() {
+        for (idx, (key, value)) in iter_next_values.iter().enumerate() {
             let compare_key_timestamp =
                 i64::from_be_bytes(key[(key.len() - TIMESTAMP_SIZE)..].try_into()?);
             if latest_key_timestamp == compare_key_timestamp {
@@ -377,19 +426,6 @@ fn gen_statistics(
             }
         }
         next_candidate.reverse();
-
-        // Change the value of the selected iter to the following value.
-        for idx in next_candidate {
-            if let Some(iter) = stats_iters.get_mut(idx) {
-                if let Some(item) = iter.next() {
-                    *iter_next_values.get_mut(idx).expect("`next_candidate` is generated during iteration over `iter_next_values`, ensuring all its indices are valid within the latter.") = item;
-                } else {
-                    // No value to call with the iterator.
-                    let _ = stats_iters.remove(idx);
-                    let _ = iter_next_values.remove(idx);
-                }
-            }
-        }
 
         // Generates StatisticsDetail by calculating the bps/pps/eps.
         for (r_type, (count, size)) in total_stats {
@@ -420,6 +456,19 @@ fn gen_statistics(
         // If there is no time condition, only the most recent statistics are passed.
         if latest_flag {
             break;
+        }
+
+        // Change the value of the selected iter to the following value.
+        for idx in next_candidate {
+            if let Some(iter) = stats_iters.get_mut(idx) {
+                if let Some(item) = iter.next() {
+                    *iter_next_values.get_mut(idx).expect("`next_candidate` is generated during iteration over `iter_next_values`, ensuring all its indices are valid within the latter.") = item.map_err(|error| statistics_read_error(&error, sensor))?;
+                } else {
+                    // No value to call with the iterator.
+                    let _ = stats_iters.remove(idx);
+                    let _ = iter_next_values.remove(idx);
+                }
+            }
         }
     }
 
@@ -464,6 +513,7 @@ mod tests {
     };
     use crate::graphql::statistics::{
         STATS_ALLOWED_KINDS, convert_to_stats_allowed_type, gen_statistics, get_statistics_iter,
+        skip_statistics_decode_errors,
     };
     use crate::{graphql::tests::TestSchema, storage::RawEventStore};
 
@@ -712,9 +762,233 @@ mod tests {
         assert_eq!(detail["size"].as_str().unwrap(), "0");
     }
 
+    #[tokio::test]
+    async fn statistics_skips_undecodable_records() {
+        let start = FIXED_STATISTICS_TIMESTAMP_NANOS;
+        // Cover a gap, unreadable newest records, and no readable records.
+        for readable in [vec![(0, 10), (2, 30)], vec![(0, 10), (1, 20)], vec![]] {
+            let (logs, _guard) = crate::test_bootroot::capture_logs();
+            let schema = TestSchema::new();
+            let store = schema.db.statistics_store().unwrap();
+            for offset in 0..4 {
+                let key = crate::storage::StorageKey::builder()
+                    .start_key("src1")
+                    .mid_key(Some(0_u32.to_be_bytes().to_vec()))
+                    .end_key(start + offset * 1_000_000_000)
+                    .build();
+                store.append(&key.key(), b"undecodable").unwrap();
+            }
+            for &(offset, count) in &readable {
+                insert_statistics_raw_event_kind(
+                    &store,
+                    start + offset * 1_000_000_000,
+                    "src1",
+                    0,
+                    60,
+                    RawEventKind::Statistics,
+                    count,
+                    120,
+                );
+            }
+
+            for time in [
+                "",
+                ", time: { start: \"2024-03-04T05:06:07Z\", end: \"2024-03-04T05:06:11Z\" }",
+            ] {
+                let query = format!(
+                    "{{ statistics(sensors: [\"src1\"]{time}) {{
+                        sensor stats {{ timestamp detail {{ protocol count size bps pps eps }} }}
+                    }} }}"
+                );
+                let response = schema.execute(&query).await;
+                assert!(response.errors.is_empty(), "{response:?}");
+                let expected: Vec<_> = readable
+                    .iter()
+                    .rev()
+                    .take(if time.is_empty() { 1 } else { readable.len() })
+                    .map(|&(offset, count)| {
+                        serde_json::json!({
+                            "timestamp": (start + offset * 1_000_000_000).to_string(),
+                            "detail": [{
+                                "protocol": "Statistics", "count": count.to_string(),
+                                "size": "120", "bps": 16.0,
+                                "pps": match count { 10 => 0.17, 20 => 0.33, 30 => 0.5, _ => unreachable!() }, "eps": null
+                            }]
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    response.data.into_json().unwrap(),
+                    serde_json::json!({"statistics": [{"sensor": "src1", "stats": expected}]}),
+                    "readable records: {readable:?}, time filter: {time}"
+                );
+            }
+            assert!(
+                logs.contents()
+                    .contains("Failed to decode statistics records")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn statistics_preserves_aggregation_and_time_bounds() {
+        let schema = TestSchema::new();
+        let store = schema.db.statistics_store().unwrap();
+        let start = FIXED_STATISTICS_TIMESTAMP_NANOS;
+        for offset in 0..3 {
+            for core in 0..2 {
+                insert_statistics_raw_event_kind(
+                    &store,
+                    start + offset * 1_000_000_000,
+                    "src1",
+                    core,
+                    60,
+                    RawEventKind::Statistics,
+                    30,
+                    60,
+                );
+            }
+        }
+        for (time, offsets) in [
+            ("", vec![2]),
+            (
+                ", time: { start: \"2024-03-04T05:06:07Z\", end: \"2024-03-04T05:06:09Z\" }",
+                vec![1, 0],
+            ),
+        ] {
+            let query = format!(
+                "{{ statistics(sensors: [\"src1\"]{time}) {{
+                    sensor stats {{ timestamp detail {{ protocol count size bps pps eps }} }}
+                }} }}"
+            );
+            let response = schema.execute(&query).await;
+            assert!(response.errors.is_empty(), "{response:?}");
+            let expected: Vec<_> = offsets
+                .into_iter()
+                .map(|offset| {
+                    serde_json::json!({
+                        "timestamp": (start + offset * 1_000_000_000).to_string(),
+                        "detail": [{"protocol": "Statistics", "count": "60", "size": "120",
+                            "bps": 16.0, "pps": 1.0, "eps": null}]
+                    })
+                })
+                .collect();
+            assert_eq!(
+                response.data.into_json().unwrap(),
+                serde_json::json!({
+                    "statistics": [{"sensor": "src1", "stats": expected}]
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn statistics_decode_warning_counts_skips_on_drop() {
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
+        let invalid = || {
+            Err(bincode::deserialize::<Statistics>(b"invalid")
+                .unwrap_err()
+                .into())
+        };
+        let readable = Ok((
+            Box::from(&b"key"[..]),
+            Statistics {
+                core: 3,
+                period: 60,
+                stats: vec![],
+            },
+        ));
+        let mut iter = skip_statistics_decode_errors(
+            vec![invalid(), invalid(), readable, invalid()].into_iter(),
+            "sensor-a",
+            3,
+        );
+        assert!(iter.next().unwrap().is_ok());
+        drop(iter);
+        let contents = logs.contents();
+        assert_eq!(
+            contents
+                .matches("Failed to decode statistics records")
+                .count(),
+            1
+        );
+        assert!(contents.contains("sensor=sensor-a"), "{contents}");
+        assert!(contents.contains("core=3"), "{contents}");
+        assert!(contents.contains("skipped=2"), "{contents}");
+    }
+
+    #[test]
+    fn statistics_propagates_rocksdb_read_errors() {
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
+        let dir = tempfile::tempdir().unwrap();
+        let db = rocksdb::DB::open_default(dir.path()).unwrap();
+        for after_readable in [false, true] {
+            let mut records: Vec<anyhow::Result<crate::storage::KeyValue<Statistics>>> = Vec::new();
+            if after_readable {
+                records.push(Ok((
+                    Box::from(FIXED_STATISTICS_TIMESTAMP_NANOS.to_be_bytes()),
+                    Statistics {
+                        core: 0,
+                        period: 60,
+                        stats: vec![],
+                    },
+                )));
+            }
+            // A decoding error is skipped, but the following RocksDB error must reach the caller.
+            records.push(Err(bincode::deserialize::<Statistics>(b"invalid")
+                .unwrap_err()
+                .into()));
+            // RocksDB rejects persisted-only reads for iterators with a read error.
+            let mut options = rocksdb::ReadOptions::default();
+            options.set_read_tier(rocksdb::ReadTier::Persisted);
+            let failed_iter = crate::storage::BoundaryIter::<Statistics>::new(
+                db.iterator_opt(rocksdb::IteratorMode::Start, options),
+            );
+            let mut iters = vec![
+                skip_statistics_decode_errors(records.into_iter().chain(failed_iter), "src1", 0)
+                    .peekable(),
+            ];
+            let allowed = STATS_ALLOWED_KINDS.into_iter().collect();
+            let error = gen_statistics(&mut iters, "src1", false, &allowed).unwrap_err();
+            assert_eq!(error.message, "failed to read statistics");
+            assert!(logs.contents().contains("not yet supported in iterators"));
+        }
+    }
+
+    #[test]
+    fn gen_statistics_latest_does_not_read_older_records() {
+        let record = || {
+            Ok((
+                Box::from(FIXED_STATISTICS_TIMESTAMP_NANOS.to_be_bytes()),
+                Statistics {
+                    core: 0,
+                    period: 60,
+                    stats: vec![(RawEventKind::Statistics, 60, 120)],
+                },
+            ))
+        };
+        let mut iters = (0..2)
+            .map(|_| {
+                vec![record(), Err(anyhow::anyhow!("older read failed"))]
+                    .into_iter()
+                    .peekable()
+            })
+            .collect();
+        let allowed = STATS_ALLOWED_KINDS.into_iter().collect();
+
+        let stats = gen_statistics(&mut iters, "src1", true, &allowed).unwrap();
+        assert_eq!(stats.stats.len(), 1);
+        assert_eq!(stats.stats[0].detail[0].count, Some(StringNumberU64(120)));
+        assert_eq!(stats.stats[0].detail[0].size, Some(StringNumberU64(240)));
+    }
+
     #[test]
     fn gen_statistics_handles_empty_iters() {
-        let mut stats_iters = Vec::new();
+        let mut stats_iters = Vec::<
+            std::iter::Peekable<
+                std::iter::Empty<anyhow::Result<crate::storage::KeyValue<Statistics>>>,
+            >,
+        >::new();
         let allowed_raw_event_kinds = STATS_ALLOWED_KINDS.into_iter().collect::<HashSet<_>>();
 
         let stats = gen_statistics(&mut stats_iters, "src1", false, &allowed_raw_event_kinds)

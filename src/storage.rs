@@ -1411,30 +1411,6 @@ pub type KeyValue<T> = (Box<[u8]>, T);
 pub type CheckedValue = Result<Option<Vec<u8>>, rocksdb::Error>;
 pub type RawValue = (Box<[u8]>, Box<[u8]>);
 
-pub struct StatisticsIter<'d, T> {
-    inner: BoundaryIter<'d, T>,
-}
-
-impl<'d, T> StatisticsIter<'d, T> {
-    pub fn new(inner: BoundaryIter<'d, T>) -> Self {
-        Self { inner }
-    }
-}
-
-impl<T> Iterator for StatisticsIter<'_, T>
-where
-    T: DeserializeOwned,
-{
-    type Item = KeyValue<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(Ok(elem)) = self.inner.next() {
-            return Some(elem);
-        }
-        None
-    }
-}
-
 pub struct FilteredIter<'d, T, F: RawEventFilter = crate::graphql::NetworkFilter> {
     inner: BoundaryIter<'d, T>,
     filter: &'d F,
@@ -2232,7 +2208,6 @@ mod tests {
 
     use anyhow::anyhow;
     use giganto_client::ingest::network::Conn;
-    use giganto_client::ingest::statistics::Statistics;
     use rocksdb::WriteBatch;
     use tempfile::TempDir;
     use tokio::{sync::Barrier, task::JoinSet};
@@ -2240,7 +2215,7 @@ mod tests {
 
     use super::{
         APPEND_UNIQUE_MAX_PROBES, BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES,
-        RawEventStore, StatisticsIter, StorageKey, UniqueAppend,
+        RawEventStore, StorageKey, UniqueAppend,
         deletion_coordination::CustomerDeletionCoordinator, read_compression_metadata,
         store_compression_metadata,
     };
@@ -2828,14 +2803,6 @@ mod tests {
         }
     }
 
-    fn create_test_statistics() -> Statistics {
-        Statistics {
-            core: 0,
-            period: 600,
-            stats: vec![],
-        }
-    }
-
     fn assert_conn_fields(actual: &Conn, expected: &Conn) {
         assert_eq!(actual.orig_addr, expected.orig_addr);
         assert_eq!(actual.orig_port, expected.orig_port);
@@ -2941,25 +2908,6 @@ mod tests {
         let mut missing_range_iter =
             store.boundary_iter(b"key4", b"key3", super::Direction::Reverse);
         assert!(missing_range_iter.next().is_none());
-    }
-
-    #[test]
-    fn test_statistics_iter() {
-        let (_dir, db) = setup_db();
-        let store = db.statistics_store().unwrap();
-
-        let stats = create_test_statistics();
-        let value = bincode::serialize(&stats).unwrap();
-        store.append(b"key1", &value).unwrap();
-
-        let boundary_iter = store.boundary_iter(b"key1", b"key2", super::Direction::Forward);
-        let mut stats_iter = StatisticsIter::new(boundary_iter);
-
-        let item = stats_iter.next().unwrap();
-        assert_eq!(item.0.as_ref(), b"key1");
-        assert_eq!(item.1.core, stats.core);
-        assert_eq!(item.1.period, stats.period);
-        assert_eq!(item.1.stats.as_slice(), []);
     }
 
     /// Test `StorageKeyBuilder` with timestamp boundaries

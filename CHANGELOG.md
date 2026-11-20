@@ -17,6 +17,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   inclusive.
 - Range, raw-event, and PCAP requests for a sensor that another node in the
   cluster ingests are now relayed to that node instead of failing.
+- Statistics queries preserve readable records around undecodable records and
+  propagate RocksDB read failures.
 
 ## [0.35.1] - 2026-11-12
 
