@@ -184,7 +184,7 @@ mod tests {
         let node = res_json["periodicTimeSeries"]["edges"][0]["node"]
             .as_object()
             .unwrap();
-        assert_eq!(node["start"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(node["start"].as_str().unwrap(), "2024-03-04T05:06:07Z");
         assert_eq!(node["id"].as_str().unwrap(), "sensor");
     }
 
