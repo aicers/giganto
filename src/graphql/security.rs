@@ -269,7 +269,7 @@ mod tests {
         let node = res_json["secuLogRawEvents"]["edges"][0]["node"]
             .as_object()
             .unwrap();
-        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07Z");
     }
 
     #[tokio::test]

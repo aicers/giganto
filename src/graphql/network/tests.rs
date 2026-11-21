@@ -284,8 +284,8 @@ async fn conn_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, respPort: 80, proto: 6, time: \"2026-01-01T00:00:00+00:00\", \
-         startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", connState: \"sf\", service: \"-\", \
+         origPort: 46378, respPort: 80, proto: 6, time: \"2026-01-01T00:00:00Z\", \
+         startTime: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", connState: \"sf\", service: \"-\", \
          origBytes: \"77\", respBytes: \"295\", origPkts: \
          \"397\", respPkts: \"511\", origL2Bytes: \"21515\", respL2Bytes: \"27889\"}}]}}"
     );
@@ -436,7 +436,7 @@ async fn conn_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{connRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, startTime: \"2026-01-01T00:00:00+00:00\", \
+         origPort: 46378, startTime: \"2026-01-01T00:00:00Z\", \
          origBytes: \"0\", respBytes: \"0\", \
          origPkts: \"6\", respPkts: \"0\", origL2Bytes: \"0\", respL2Bytes: \"0\"}}]}}"
     );
@@ -560,26 +560,26 @@ async fn network_raw_events_timestamp_format_stability() {
     ];
 
     let expected_times: HashMap<&str, &str> = HashMap::from([
-        ("ConnRawEvent", "2024-03-04T05:06:07+00:00"),
-        ("DnsRawEvent", "2024-03-04T05:06:07.001+00:00"),
-        ("MalformedDnsRawEvent", "2024-03-04T05:06:07.002+00:00"),
-        ("HttpRawEvent", "2024-03-04T05:06:07.003+00:00"),
-        ("RdpRawEvent", "2024-03-04T05:06:07.004+00:00"),
-        ("NtlmRawEvent", "2024-03-04T05:06:07.005+00:00"),
-        ("KerberosRawEvent", "2024-03-04T05:06:07.006+00:00"),
-        ("SshRawEvent", "2024-03-04T05:06:07.007+00:00"),
-        ("DceRpcRawEvent", "2024-03-04T05:06:07.008+00:00"),
-        ("FtpRawEvent", "2024-03-04T05:06:07.009+00:00"),
-        ("MqttRawEvent", "2024-03-04T05:06:07.010+00:00"),
-        ("LdapRawEvent", "2024-03-04T05:06:07.011+00:00"),
-        ("TlsRawEvent", "2024-03-04T05:06:07.012+00:00"),
-        ("SmbRawEvent", "2024-03-04T05:06:07.013+00:00"),
-        ("NfsRawEvent", "2024-03-04T05:06:07.014+00:00"),
-        ("SmtpRawEvent", "2024-03-04T05:06:07.015+00:00"),
-        ("BootpRawEvent", "2024-03-04T05:06:07.016+00:00"),
-        ("DhcpRawEvent", "2024-03-04T05:06:07.017+00:00"),
-        ("RadiusRawEvent", "2024-03-04T05:06:07.018+00:00"),
-        ("IcmpRawEvent", "2024-03-04T05:06:07.019+00:00"),
+        ("ConnRawEvent", "2024-03-04T05:06:07Z"),
+        ("DnsRawEvent", "2024-03-04T05:06:07.001Z"),
+        ("MalformedDnsRawEvent", "2024-03-04T05:06:07.002Z"),
+        ("HttpRawEvent", "2024-03-04T05:06:07.003Z"),
+        ("RdpRawEvent", "2024-03-04T05:06:07.004Z"),
+        ("NtlmRawEvent", "2024-03-04T05:06:07.005Z"),
+        ("KerberosRawEvent", "2024-03-04T05:06:07.006Z"),
+        ("SshRawEvent", "2024-03-04T05:06:07.007Z"),
+        ("DceRpcRawEvent", "2024-03-04T05:06:07.008Z"),
+        ("FtpRawEvent", "2024-03-04T05:06:07.009Z"),
+        ("MqttRawEvent", "2024-03-04T05:06:07.01Z"),
+        ("LdapRawEvent", "2024-03-04T05:06:07.011Z"),
+        ("TlsRawEvent", "2024-03-04T05:06:07.012Z"),
+        ("SmbRawEvent", "2024-03-04T05:06:07.013Z"),
+        ("NfsRawEvent", "2024-03-04T05:06:07.014Z"),
+        ("SmtpRawEvent", "2024-03-04T05:06:07.015Z"),
+        ("BootpRawEvent", "2024-03-04T05:06:07.016Z"),
+        ("DhcpRawEvent", "2024-03-04T05:06:07.017Z"),
+        ("RadiusRawEvent", "2024-03-04T05:06:07.018Z"),
+        ("IcmpRawEvent", "2024-03-04T05:06:07.019Z"),
     ]);
     let mut seen = HashSet::new();
 
@@ -822,10 +822,10 @@ async fn network_raw_events_with_data_giganto_cluster() {
     );
 
     let expected_order = [
-        ("2023-11-16T15:03:45.291779203+00:00", "ConnRawEvent"),
-        ("2023-11-16T15:03:45.291779203+00:00", "DnsRawEvent"),
-        ("2023-11-16T15:03:45.291779203+00:00", "HttpRawEvent"),
-        ("2023-11-16T15:03:45.291779203+00:00", "RdpRawEvent"),
+        ("2023-11-16T15:03:45.291779203Z", "ConnRawEvent"),
+        ("2023-11-16T15:03:45.291779203Z", "DnsRawEvent"),
+        ("2023-11-16T15:03:45.291779203Z", "HttpRawEvent"),
+        ("2023-11-16T15:03:45.291779203Z", "RdpRawEvent"),
     ];
     let actual_order: Vec<(&str, &str)> = edges
         .iter()
@@ -864,7 +864,7 @@ async fn network_raw_events_with_data_giganto_cluster() {
                         46378,
                         443,
                         6,
-                        "2023-11-16T15:03:45.291779203+00:00",
+                        "2023-11-16T15:03:45.291779203Z",
                         "1000000000",
                         "6",
                         "0"
@@ -1106,8 +1106,8 @@ async fn dns_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
-        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:01+00:00\", \
-        startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:01Z\", \
+        startTime: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\", rtt: \"1\", query: \"Hello Server Hello Server Hello Server\", \
         answer: [\"1.1.1.1\"], transId: 1, qclass: 0, qtype: 0, rcode: 0, aaFlag: false, tcFlag: false, \
         rdFlag: false, raFlag: false, ttl: [1, 1, 1, 1, 1]}}]}}"
@@ -1307,7 +1307,7 @@ async fn dns_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{dnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
-        origPort: 46378, startTime: \"2026-01-01T00:00:00+00:00\", rtt: \"567\"}}]}}"
+        origPort: 46378, startTime: \"2026-01-01T00:00:00Z\", rtt: \"567\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1460,8 +1460,8 @@ async fn malformed_dns_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", \
-        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:01+00:00\", \
-        startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1\", origPkts: \"1\", respPkts: \"2\", \
+        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:01Z\", \
+        startTime: \"2026-01-01T00:00:00Z\", duration: \"1\", origPkts: \"1\", respPkts: \"2\", \
         origL2Bytes: \"32\", respL2Bytes: \"64\", transId: 1, flags: 42, questionCount: 1, answerCount: 2, \
         authorityCount: 3, additionalCount: 4, queryCount: \"5\", respCount: \"6\", queryBytes: \"32\", \
         respBytes: \"64\", queryBody: [[113]], respBody: [[114]]}}]}}"
@@ -1578,7 +1578,7 @@ async fn malformed_dns_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", questionCount: 1, startTime: \"2026-01-01T00:00:00+00:00\", queryCount: \"5\"}}]}}"
+        "{malformedDnsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"31.3.245.133\", questionCount: 1, startTime: \"2026-01-01T00:00:00Z\", queryCount: \"5\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -1741,8 +1741,8 @@ async fn http_with_data() {
          referer: \"cluml.com\", version: \"\", userAgent: \"giganto\", requestLen: \"0\", responseLen: \"0\", \
          statusCode: 200, statusMsg: \"\", username: \"\", password: \"\", cookie: \"\", \
          contentEncoding: \"\", contentType: \"\", cacheControl: \"\", filenames: [], mimeTypes: [], \
-         body: [], state: \"\", respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
-         startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+         body: [], state: \"\", respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
+         startTime: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
          origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -1925,7 +1925,7 @@ async fn http_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, startTime: \"2026-01-01T00:00:00+00:00\", requestLen: \"1024\", responseLen: \"2048\"}}]}}"
+         origPort: 46378, startTime: \"2026-01-01T00:00:00Z\", requestLen: \"1024\", responseLen: \"2048\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2065,8 +2065,8 @@ async fn rdp_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
-        startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
+        startTime: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\", cookie: \"rdp_test\"}}]}}"
     );
 
@@ -2195,7 +2195,7 @@ async fn rdp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378, startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
+        "{rdpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", origPort: 46378, startTime: \"2026-01-01T00:00:00Z\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2246,10 +2246,10 @@ async fn smtp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         mailfrom: \"mailfrom\", date: \"date\", from: \"from\", to: \"to\", subject: \"subject\", \
         agent: \"agent\", state: \"\", respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -2384,7 +2384,7 @@ async fn smtp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
+        "{smtpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2433,9 +2433,9 @@ async fn ntlm_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         username: \"bly\", hostname: \"host\", domainname: \"domain\", success: \"tf\", protocol: \"protocol\", \
-        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -2566,7 +2566,7 @@ async fn ntlm_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
+        "{ntlmRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -2619,10 +2619,10 @@ async fn kerberos_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         clientTime: \"1\", serverTime: \"1\", errorCode: \"1\", clientRealm: \"client_realm\", cnameType: 1, \
         cname: [\"client_name\"], realm: \"realm\", snameType: 1, sname: [\"service_name\"], \
-        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -2770,7 +2770,7 @@ async fn kerberos_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
-        \"2026-01-01T00:00:00+00:00\", clientTime: \"123456789\", serverTime: \
+        \"2026-01-01T00:00:00Z\", clientTime: \"123456789\", serverTime: \
         \"987654321\", errorCode: \"0\"}}]}}"
     );
 
@@ -2828,12 +2828,12 @@ async fn ssh_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         client: \"client\", server: \"server\", cipherAlg: \"cipher_alg\", macAlg: \"mac_alg\", \
         compressionAlg: \"compression_alg\", kexAlg: \"kex_alg\", hostKeyAlg: \"host_key_alg\", \
         hasshAlgorithms: \"hassh_algorithms\", hassh: \"hassh\", hasshServerAlgorithms: \"hassh_server_algorithms\", \
         hasshServer: \"hassh_server\", clientShka: \"client_shka\", serverShka: \"server_shka\", \
-        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -2980,7 +2980,7 @@ async fn ssh_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
+        "{sshRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -3036,11 +3036,11 @@ async fn dce_rpc_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         context: [{id: 0, abstractSyntax: \"00000000000000000000000000000000\", abstractMajor: 0, abstractMinor: 0, \
         transferSyntax: \"00000000000000000000000000000000\", transferMajor: 0, transferMinor: 0, acceptance: 0, \
         reason: 0}], request: [\"request_op\"], \
-        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -3166,7 +3166,7 @@ async fn dce_rpc_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", request: [\"request_op\"]}}]}}"
+        "{dceRpcRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", request: [\"request_op\"]}}]}}"
     );
     mock.assert_async().await;
 }
@@ -3223,12 +3223,12 @@ async fn ftp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         user: \"cluml\", password: \"aice\", commands: [{command: \"command\", replyCode: \"500\", \
         replyMsg: \"reply_message\", dataPassive: false, dataOrigAddr: \"192.168.4.76\", \
         dataRespAddr: \"31.3.245.133\", dataRespPort: 80, file: \"ftp_file\", fileSize: \"100\", \
         fileId: \"1\"}], respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -3383,7 +3383,7 @@ async fn ftp_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{ftpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
-        \"2026-01-01T00:00:00+00:00\", commands: [{fileSize: \"1024\"}]}}]}}"
+        \"2026-01-01T00:00:00Z\", commands: [{fileSize: \"1024\"}]}}]}}"
     );
 
     mock.assert_async().await;
@@ -3433,10 +3433,10 @@ async fn mqtt_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         protocol: \"protocol\", version: 1, clientId: \"1\", connackReason: 1, subscribe: [\"subscribe\"], \
         subackReason: [1], respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -3574,7 +3574,7 @@ async fn mqtt_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\"}}]}}"
+        "{mqttRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -3625,10 +3625,10 @@ async fn ldap_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         messageId: \"1\", version: 1, opcode: [\"opcode\"], result: [\"result\"], diagnosticMessage: [], \
         object: [], argument: [], respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -3779,7 +3779,7 @@ async fn ldap_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", messageId: \"123\"}}]}}"
+        "{ldapRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", messageId: \"123\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -3844,7 +3844,7 @@ async fn tls_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         serverName: \"server_name\", alpnProtocol: \"alpn_protocol\", ja3: \"ja3\", version: \"version\", \
         clientCipherSuites: [771, 769, 770], clientExtensions: [0, 1, 2], cipher: 10, extensions: [0, 1], \
         ja3S: \"ja3s\", serial: \"serial\", subjectCountry: \"sub_country\", subjectOrgName: \"sub_org\", \
@@ -3852,7 +3852,7 @@ async fn tls_with_data() {
         subjectAltName: \"sub_alt\", issuerCountry: \"issuer_country\", issuerOrgName: \"issuer_org\", \
         issuerOrgUnitName: \"issuer_org_unit\", issuerCommonName: \"issuer_comm\", lastAlert: 13, \
         respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -4030,7 +4030,7 @@ async fn tls_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{tlsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
-        \"2026-01-01T00:00:00+00:00\", validityNotBefore: \
+        \"2026-01-01T00:00:00Z\", validityNotBefore: \
         \"1637076000\", validityNotAfter: \"1668612000\"}}]}}"
     );
 
@@ -4086,11 +4086,11 @@ async fn smb_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         command: 0, path: \"something/path\", service: \"service\", fileName: \"fine_name\", fileSize: \"10\", \
         resourceType: 20, fid: 30, createTime: \"10000000\", accessTime: \"20000000\", writeTime: \"10000000\", \
         changeTime: \"20000000\", respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -4238,7 +4238,7 @@ async fn smb_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{smbRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
-        \"2026-01-01T00:00:00+00:00\", fileSize: \"1024\", createTime: \
+        \"2026-01-01T00:00:00Z\", fileSize: \"1024\", createTime: \
         \"1609459200\", accessTime: \"1637076000\", writeTime: \"1668612000\", \
         changeTime: \"1700148000\"}}]}}"
     );
@@ -4286,9 +4286,9 @@ async fn nfs_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{nfsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{nfsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         readFiles: [], writeFiles: [], respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -4419,7 +4419,7 @@ async fn nfs_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{nfsRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
-        \"2026-01-01T00:00:00+00:00\"}}]}}"
+        \"2026-01-01T00:00:00Z\"}}]}}"
     );
     mock.assert_async().await;
 }
@@ -4473,11 +4473,11 @@ async fn bootp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         op: 0, htype: 0, hops: 0, xid: \"0\", ciaddr: \"192.168.4.1\", yiaddr: \"192.168.4.2\", \
         siaddr: \"192.168.4.3\", giaddr: \"192.168.4.4\", chaddr: [0, 1, 2], sname: \"sname\", \
         file: \"file\", respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -4622,7 +4622,7 @@ async fn bootp_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{bootpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
-        \"2026-01-01T00:00:00+00:00\", xid: \"0\"}}]}}"
+        \"2026-01-01T00:00:00Z\", xid: \"0\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -4685,12 +4685,12 @@ async fn dhcp_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
-        \"2026-01-01T00:00:00+00:00\", msgType: 0, serverId: \"192.168.4.7\", leaseTime: \"1\", renewalTime: \"1\", \
+        \"2026-01-01T00:00:00Z\", msgType: 0, serverId: \"192.168.4.7\", leaseTime: \"1\", renewalTime: \"1\", \
         rebindingTime: \"1\", ciaddr: \"192.168.4.1\", yiaddr: \"192.168.4.2\", siaddr: \"192.168.4.3\", \
         giaddr: \"192.168.4.4\", subnetMask: \"192.168.4.5\", router: [\"192.168.1.11\", \"192.168.1.22\"], \
         domainNameServer: [\"192.168.1.33\", \"192.168.1.44\"], reqIpAddr: \"192.168.4.6\", \
         paramReqList: [0, 1, 2], message: \"message\", classId: [0, 1, 2], clientIdType: 1, clientId: [0, 1, 2], \
-        respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00+00:00\", \
+        respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -4861,7 +4861,7 @@ async fn dhcp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", leaseTime: \"1\", renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
+        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", leaseTime: \"1\", renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
     );
 
     mock.assert_async().await;
@@ -4919,7 +4919,7 @@ async fn radius_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00+00:00\", \
+        "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         nasPort: \"12345\", code: 1, respCode: 2, message: \"test_message\", \
         auth: \"00112233445566778899aabbccddeeff\", id: 123, respAuth: \"ffeeddccbbaa99887766554433221100\", \
         userName: [116, 101, 115, 116, 95, 117, 115, 101, 114], \
@@ -4928,7 +4928,7 @@ async fn radius_with_data() {
         nasIp: \"192.168.1.1\", state: [3, 3, 3, 3, 3, 3, 3, 3], \
         nasId: [116, 101, 115, 116, 95, 110, 97, 115], nasPortType: \"15\", \
         respAddr: \"31.3.245.133\", origPort: 1812, respPort: 1813, proto: 17, \
-        time: \"2026-01-01T00:00:00+00:00\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
+        time: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
 
@@ -5081,7 +5081,7 @@ async fn radius_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         "{radiusRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
-        \"2026-01-01T00:00:00+00:00\", nasPort: \"12345\", code: 1, respCode: 2, \
+        \"2026-01-01T00:00:00Z\", nasPort: \"12345\", code: 1, respCode: 2, \
         message: \"test_message\"}}]}}"
     );
     mock.assert_async().await;
@@ -5158,10 +5158,10 @@ async fn icmp_with_data() {
     assert_eq!(
         res.data.to_string(),
         "{icmpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.77\", \
-        proto: 1, startTime: \"2026-01-01T00:00:00+00:00\", duration: \"1000000\", origPkts: \"1\", \
+        proto: 1, startTime: \"2026-01-01T00:00:00Z\", duration: \"1000000\", origPkts: \"1\", \
         respPkts: \"1\", origL2Bytes: \"84\", respL2Bytes: \"84\", icmpType: 8, icmpCode: 0, \
         id: 12345, seqNum: 1, dataLen: 56, payload: [97, 98, 99, 100], \
-        time: \"2026-01-01T00:00:00+00:00\"}}]}}"
+        time: \"2026-01-01T00:00:00Z\"}}]}}"
     );
 
     assert_time_boundaries(
@@ -5781,7 +5781,7 @@ async fn union() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{networkRawEvents: {edges: [{node: {time: \"2019-12-31T23:59:59+00:00\", __typename: \"BootpRawEvent\"}}, {node: {time: \"2020-01-01T00:00:01+00:00\", __typename: \"SshRawEvent\"}}, {node: {time: \"2020-01-01T00:00:05+00:00\", __typename: \"SmtpRawEvent\"}}, {node: {time: \"2020-01-01T00:01:01+00:00\", __typename: \"ConnRawEvent\"}}, {node: {time: \"2020-01-05T00:01:01+00:00\", __typename: \"RdpRawEvent\"}}, {node: {time: \"2020-01-05T06:05:00+00:00\", __typename: \"DceRpcRawEvent\"}}, {node: {time: \"2020-03-01T00:00:00+00:00\", __typename: \"IcmpRawEvent\"}}, {node: {time: \"2020-06-01T00:01:01+00:00\", __typename: \"HttpRawEvent\"}}, {node: {time: \"2021-01-01T00:01:01+00:00\", __typename: \"DnsRawEvent\"}}, {node: {time: \"2022-01-05T00:01:01+00:00\", __typename: \"NtlmRawEvent\"}}, {node: {time: \"2023-01-05T00:01:01+00:00\", __typename: \"KerberosRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"FtpRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00+00:00\", __typename: \"MqttRawEvent\"}}, {node: {time: \"2023-01-06T11:11:00+00:00\", __typename: \"TlsRawEvent\"}}, {node: {time: \"2023-01-06T12:12:00+00:00\", __typename: \"LdapRawEvent\"}}, {node: {time: \"2023-01-06T12:12:10+00:00\", __typename: \"SmbRawEvent\"}}, {node: {time: \"2023-01-06T12:13:00+00:00\", __typename: \"NfsRawEvent\"}}, {node: {time: \"2023-01-06T12:13:10+00:00\", __typename: \"DhcpRawEvent\"}}]}}"
+        "{networkRawEvents: {edges: [{node: {time: \"2019-12-31T23:59:59Z\", __typename: \"BootpRawEvent\"}}, {node: {time: \"2020-01-01T00:00:01Z\", __typename: \"SshRawEvent\"}}, {node: {time: \"2020-01-01T00:00:05Z\", __typename: \"SmtpRawEvent\"}}, {node: {time: \"2020-01-01T00:01:01Z\", __typename: \"ConnRawEvent\"}}, {node: {time: \"2020-01-05T00:01:01Z\", __typename: \"RdpRawEvent\"}}, {node: {time: \"2020-01-05T06:05:00Z\", __typename: \"DceRpcRawEvent\"}}, {node: {time: \"2020-03-01T00:00:00Z\", __typename: \"IcmpRawEvent\"}}, {node: {time: \"2020-06-01T00:01:01Z\", __typename: \"HttpRawEvent\"}}, {node: {time: \"2021-01-01T00:01:01Z\", __typename: \"DnsRawEvent\"}}, {node: {time: \"2022-01-05T00:01:01Z\", __typename: \"NtlmRawEvent\"}}, {node: {time: \"2023-01-05T00:01:01Z\", __typename: \"KerberosRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00Z\", __typename: \"FtpRawEvent\"}}, {node: {time: \"2023-01-05T12:12:00Z\", __typename: \"MqttRawEvent\"}}, {node: {time: \"2023-01-06T11:11:00Z\", __typename: \"TlsRawEvent\"}}, {node: {time: \"2023-01-06T12:12:00Z\", __typename: \"LdapRawEvent\"}}, {node: {time: \"2023-01-06T12:12:10Z\", __typename: \"SmbRawEvent\"}}, {node: {time: \"2023-01-06T12:13:00Z\", __typename: \"NfsRawEvent\"}}, {node: {time: \"2023-01-06T12:13:10Z\", __typename: \"DhcpRawEvent\"}}]}}"
     );
 }
 
@@ -5835,7 +5835,7 @@ async fn search_http_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchHttpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchHttpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6003,7 +6003,7 @@ async fn search_http_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchHttpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchHttpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6037,7 +6037,7 @@ async fn search_conn_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchConnRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchConnRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6086,7 +6086,7 @@ async fn search_conn_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchConnRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchConnRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6120,7 +6120,7 @@ async fn search_dns_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchDnsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchDnsRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6169,7 +6169,7 @@ async fn search_dns_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchDnsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchDnsRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6203,7 +6203,7 @@ async fn search_malformed_dns_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchMalformedDnsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchMalformedDnsRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6252,7 +6252,7 @@ async fn search_malformed_dns_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchMalformedDnsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchMalformedDnsRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6286,7 +6286,7 @@ async fn search_rdp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchRdpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchRdpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6335,7 +6335,7 @@ async fn search_rdp_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchRdpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchRdpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6369,7 +6369,7 @@ async fn search_smtp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchSmtpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchSmtpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6418,7 +6418,7 @@ async fn search_smtp_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchSmtpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchSmtpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6452,7 +6452,7 @@ async fn search_ntlm_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchNtlmRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchNtlmRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6501,7 +6501,7 @@ async fn search_ntlm_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchNtlmRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchNtlmRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6535,7 +6535,7 @@ async fn search_kerberos_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchKerberosRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchKerberosRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6583,7 +6583,7 @@ async fn search_kerberos_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchKerberosRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchKerberosRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6617,7 +6617,7 @@ async fn search_ssh_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchSshRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchSshRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6665,7 +6665,7 @@ async fn search_ssh_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchSshRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchSshRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6699,7 +6699,7 @@ async fn search_dce_rpc_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6747,7 +6747,7 @@ async fn search_dce_rpc_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchDceRpcRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6781,7 +6781,7 @@ async fn search_ftp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchFtpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchFtpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6829,7 +6829,7 @@ async fn search_ftp_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchFtpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchFtpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6863,7 +6863,7 @@ async fn search_mqtt_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchMqttRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchMqttRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6911,7 +6911,7 @@ async fn search_mqtt_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchMqttRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchMqttRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -6945,7 +6945,7 @@ async fn search_ldap_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchLdapRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchLdapRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -6993,7 +6993,7 @@ async fn search_ldap_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchLdapRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchLdapRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -7027,7 +7027,7 @@ async fn search_tls_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchTlsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchTlsRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -7075,7 +7075,7 @@ async fn search_tls_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchTlsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchTlsRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -7109,7 +7109,7 @@ async fn search_smb_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchSmbRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchSmbRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -7157,7 +7157,7 @@ async fn search_smb_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchSmbRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchSmbRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -7191,7 +7191,7 @@ async fn search_nfs_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchNfsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchNfsRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -7239,7 +7239,7 @@ async fn search_nfs_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchNfsRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchNfsRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -7273,7 +7273,7 @@ async fn search_bootp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchBootpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchBootpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -7321,7 +7321,7 @@ async fn search_bootp_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchBootpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchBootpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -7355,7 +7355,7 @@ async fn search_dhcp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchDhcpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchDhcpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -7403,7 +7403,7 @@ async fn search_dhcp_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchDhcpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchDhcpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -7437,7 +7437,7 @@ async fn search_radius_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchRadiusRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -7485,7 +7485,7 @@ async fn search_radius_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchRadiusRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchRadiusRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
@@ -7514,7 +7514,7 @@ async fn search_icmp_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchIcmpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchIcmpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
 }
 
@@ -7561,7 +7561,7 @@ async fn search_icmp_with_data_giganto_cluster() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{searchIcmpRawEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}"
+        "{searchIcmpRawEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}"
     );
     mock.assert_async().await;
 }
