@@ -2010,7 +2010,7 @@ fn sysmon_connection(
         };
 
         match selected {
-            _ if selected == process_create_ts => {
+            _ if selected == process_create_ts && process_create_data.is_some() => {
                 if let Some((key, value)) = process_create_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2021,7 +2021,7 @@ fn sysmon_connection(
                     process_create_data = process_create_iter.next();
                 }
             }
-            _ if selected == file_create_time_ts => {
+            _ if selected == file_create_time_ts && file_create_time_data.is_some() => {
                 if let Some((key, value)) = file_create_time_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2032,7 +2032,7 @@ fn sysmon_connection(
                     file_create_time_data = file_create_time_iter.next();
                 }
             }
-            _ if selected == network_connect_ts => {
+            _ if selected == network_connect_ts && network_connect_data.is_some() => {
                 if let Some((key, value)) = network_connect_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2043,7 +2043,7 @@ fn sysmon_connection(
                     network_connect_data = network_connect_iter.next();
                 }
             }
-            _ if selected == process_terminate_ts => {
+            _ if selected == process_terminate_ts && process_terminate_data.is_some() => {
                 if let Some((key, value)) = process_terminate_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2054,7 +2054,7 @@ fn sysmon_connection(
                     process_terminate_data = process_terminate_iter.next();
                 }
             }
-            _ if selected == image_load_ts => {
+            _ if selected == image_load_ts && image_load_data.is_some() => {
                 if let Some((key, value)) = image_load_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2065,7 +2065,7 @@ fn sysmon_connection(
                     image_load_data = image_load_iter.next();
                 }
             }
-            _ if selected == file_create_ts => {
+            _ if selected == file_create_ts && file_create_data.is_some() => {
                 if let Some((key, value)) = file_create_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2076,7 +2076,7 @@ fn sysmon_connection(
                     file_create_data = file_create_iter.next();
                 }
             }
-            _ if selected == registry_value_set_ts => {
+            _ if selected == registry_value_set_ts && registry_value_set_data.is_some() => {
                 if let Some((key, value)) = registry_value_set_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2087,7 +2087,7 @@ fn sysmon_connection(
                     registry_value_set_data = registry_value_set_iter.next();
                 }
             }
-            _ if selected == registry_key_rename_ts => {
+            _ if selected == registry_key_rename_ts && registry_key_rename_data.is_some() => {
                 if let Some((key, value)) = registry_key_rename_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2098,7 +2098,9 @@ fn sysmon_connection(
                     registry_key_rename_data = registry_key_rename_iter.next();
                 }
             }
-            _ if selected == file_create_stream_hash_ts => {
+            _ if selected == file_create_stream_hash_ts
+                && file_create_stream_hash_data.is_some() =>
+            {
                 if let Some((key, value)) = file_create_stream_hash_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2109,7 +2111,7 @@ fn sysmon_connection(
                     file_create_stream_hash_data = file_create_stream_hash_iter.next();
                 }
             }
-            _ if selected == pipe_event_ts => {
+            _ if selected == pipe_event_ts && pipe_event_data.is_some() => {
                 if let Some((key, value)) = pipe_event_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2118,7 +2120,7 @@ fn sysmon_connection(
                     pipe_event_data = pipe_event_iter.next();
                 }
             }
-            _ if selected == dns_query_ts => {
+            _ if selected == dns_query_ts && dns_query_data.is_some() => {
                 if let Some((key, value)) = dns_query_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2127,7 +2129,7 @@ fn sysmon_connection(
                     dns_query_data = dns_query_iter.next();
                 }
             }
-            _ if selected == file_delete_ts => {
+            _ if selected == file_delete_ts && file_delete_data.is_some() => {
                 if let Some((key, value)) = file_delete_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2138,7 +2140,7 @@ fn sysmon_connection(
                     file_delete_data = file_delete_iter.next();
                 }
             }
-            _ if selected == process_tamper_ts => {
+            _ if selected == process_tamper_ts && process_tamper_data.is_some() => {
                 if let Some((key, value)) = process_tamper_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),
@@ -2149,7 +2151,7 @@ fn sysmon_connection(
                     process_tamper_data = process_tamper_iter.next();
                 }
             }
-            _ if selected == file_delete_detected_ts => {
+            _ if selected == file_delete_detected_ts && file_delete_detected_data.is_some() => {
                 if let Some((key, value)) = file_delete_detected_data {
                     result_vec.push(Edge::new(
                         base64_engine.encode(&key),

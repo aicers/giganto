@@ -63,8 +63,7 @@ use crate::{
     comm::ingest::implement::EventFilter,
     graphql::events_in_cluster,
     storage::{
-        BoundaryIter, Database, Direction, KeyExtractor, RawEventStore, StorageKey,
-        TimestampKeyExtractor,
+        Database, Direction, KeyExtractor, RawEventStore, StorageKey, TimestampKeyExtractor,
     },
 };
 
@@ -2407,19 +2406,13 @@ where
     T: DeserializeOwned + Display + EventFilter + JsonOutput<N> + Send + Serialize,
     N: Serialize,
 {
-    // generate storage search key
-    let key_builder = StorageKey::builder()
+    let prefix = StorageKey::builder()
         .start_key(filter.get_start_key())
-        .mid_key(filter.get_mid_key());
-    let from_key = key_builder
-        .clone()
-        .lower_closed_bound_end_key(filter.get_range_end_key().0)
-        .build();
-    let to_key = key_builder
-        .upper_open_bound_end_key(filter.get_range_end_key().1)
-        .build();
-
-    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+        .mid_key(filter.get_mid_key())
+        .build()
+        .key();
+    let (start, end) = filter.get_range_end_key();
+    let iter = store.timestamp_range_iter(&prefix, start, end, None, Direction::Forward);
     export_file(iter, filter, export_type, claim)
 }
 
@@ -2429,17 +2422,8 @@ fn process_oplog_export(
     export_type: &str,
     claim: ExportClaim,
 ) -> Result<String> {
-    // OpLog uses timestamp-prefix key format: [timestamp:8][sequence_number:8]
-    let key_builder = StorageKey::timestamp_builder();
-    let from_key = key_builder
-        .clone()
-        .lower_closed_bound_start_key(filter.get_range_start_key().0)
-        .build();
-    let to_key = key_builder
-        .upper_open_bound_start_key(filter.get_range_start_key().1)
-        .build();
-
-    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+    let (start, end) = filter.get_range_start_key();
+    let iter = store.timestamp_range_iter(&[], start, end, None, Direction::Forward);
     export_oplog_file(iter, filter, export_type, claim)
 }
 
@@ -2451,18 +2435,14 @@ fn process_statistics_export(
 ) -> Result<String> {
     let mut iter_vec = Vec::new();
     for core in 0..MAX_CORE_SIZE {
-        let key_builder = StorageKey::builder()
+        let prefix = StorageKey::builder()
             .start_key(filter.get_start_key())
-            .mid_key(Some(core.to_be_bytes().to_vec()));
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(filter.get_range_end_key().0)
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_end_key(filter.get_range_end_key().1)
-            .build();
+            .mid_key(Some(core.to_be_bytes().to_vec()))
+            .build()
+            .key();
+        let (start, end) = filter.get_range_end_key();
         let mut iter = store
-            .boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward)
+            .timestamp_range_iter(&prefix, start, end, None, Direction::Forward)
             .peekable();
         if iter.peek().is_some() {
             iter_vec.push(iter);
@@ -2524,12 +2504,15 @@ where
     claim.rename()
 }
 
-fn export_statistic_file(
-    mut statistics_vec: Vec<Peekable<BoundaryIter<'_, Statistics>>>,
+fn export_statistic_file<I>(
+    mut statistics_vec: Vec<Peekable<I>>,
     filter: &(impl RawEventFilter + KeyExtractor),
     export_type: &str,
     mut claim: ExportClaim,
-) -> Result<String> {
+) -> Result<String>
+where
+    I: Iterator<Item = anyhow::Result<(Box<[u8]>, Statistics)>>,
+{
     // store the first value of all iters in a comparison vector.
     let mut iter_next_values = Vec::with_capacity(statistics_vec.len());
     let mut invalid_data_cnt: u32 = 0;
@@ -2557,8 +2540,17 @@ fn export_statistic_file(
         let (min_index, (key, value)) = iter_next_values.iter().enumerate().fold(
             (0, (&iter_next_values[0].0, &iter_next_values[0].1)),
             |(min_index, (min_key, min_value)), (index, (key, value))| {
-                if key[(key.len() - TIMESTAMP_SIZE)..] < min_key[(min_key.len() - TIMESTAMP_SIZE)..]
-                {
+                let timestamp = i64::from_be_bytes(
+                    key[(key.len() - TIMESTAMP_SIZE)..]
+                        .try_into()
+                        .expect("timestamp length"),
+                );
+                let min_timestamp = i64::from_be_bytes(
+                    min_key[(min_key.len() - TIMESTAMP_SIZE)..]
+                        .try_into()
+                        .expect("timestamp length"),
+                );
+                if timestamp < min_timestamp {
                     (index, (key, value))
                 } else {
                     (min_index, (min_key, min_value))

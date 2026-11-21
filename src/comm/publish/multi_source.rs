@@ -128,18 +128,19 @@ where
         start: i64,
         end: i64,
     ) -> Box<dyn Iterator<Item = FrameResult> + Send + 'db> {
-        let key_builder = StorageKey::builder()
+        let prefix = StorageKey::builder()
             .start_key(source)
-            .mid_key(mid_key.map(<[u8]>::to_vec));
-        let from_key = key_builder
-            .clone()
-            .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(start)))
-            .build();
-        let to_key = key_builder
-            .upper_open_bound_end_key(Some(DateTime::from_timestamp_nanos(end)))
-            .build();
+            .mid_key(mid_key.map(<[u8]>::to_vec))
+            .build()
+            .key();
         let source = source.to_owned();
-        let iter = self.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+        let iter = self.timestamp_range_iter(
+            &prefix,
+            Some(DateTime::from_timestamp_nanos(start)),
+            Some(DateTime::from_timestamp_nanos(end)),
+            None,
+            Direction::Forward,
+        );
         Box::new(iter.map(move |item| {
             let (key, value) = item.map_err(|e| format!("reading the store failed: {e:#}"))?;
             let timestamp = key_timestamp(&key)
