@@ -4,6 +4,16 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0](https://github.com/aicers/giganto/compare/0.35.2...0.36.0) - 2026-11-21
+
+### Added
+
+- [**breaking**] emit GraphQL timestamps in jiff's RFC 3339 form ([#2016](https://github.com/aicers/giganto/pull/2016))
+
+### Other
+
+- automate releases with release-plz ([#2009](https://github.com/aicers/giganto/pull/2009))
+
 ## [0.35.2] - 2026-11-21
 
 ### Fixed
