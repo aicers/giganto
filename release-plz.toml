@@ -1,0 +1,30 @@
+# release-plz opens a release pull request for every change that touches
+# the package and, once that pull request is merged, tags the merge and
+# creates the GitHub Release. See .github/workflows/release-plz.yml.
+#
+# The next version is release-plz's default: below 1.0.0 a breaking change
+# (a `!` title) raises the minor and every other change, `feat` included,
+# raises the patch (`features_always_increment_minor` stays `false`); from
+# 1.0.0 on, SemVer. Every commit that changes a file of the package is
+# listed, under release-plz's default grouping.
+
+[workspace]
+# Nothing is published to crates.io (`publish = false` in Cargo.toml), so
+# the last release is the latest `X.Y.Z` tag, not a registry version.
+git_only = true
+# Release only when a release pull request has just been merged.
+release_always = false
+# Plain `X.Y.Z` tags, never `v`-prefixed, as every earlier release.
+git_tag_name = "{{ version }}"
+git_release_name = "{{ package }} {{ version }}"
+pr_name = "chore: release {{ version }}"
+
+[changelog]
+# The current head of CHANGELOG.md, so a generated section leaves the
+# file's opening as it is.
+header = """# Changelog
+
+This file documents recent notable changes to this project. The format of this
+file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
+this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""

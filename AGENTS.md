@@ -5,23 +5,6 @@ contributing to the `giganto` project (Rust Edition). Read this carefully
 before generating code.
 
 <!-- BEGIN shared:workflow -->
-## Commit messages
-
-- Title: preferably under 50 characters, start with an imperative verb
-  (e.g., `Add`, `Fix`, `Remove`).
-- Do NOT use prefixes such as `feat:`, `chore:`, or `fix:`.
-- Do NOT put issue or PR numbers in the title.
-- Body: wrap at 72 characters, free-form, explain *why* not *what*.
-- Separate title and body with a blank line.
-- Do NOT rely on literal `\n` escapes for a commit body — they land in
-  the subject line as characters, and git reports success. Use a real
-  multiline string, or `git commit -F` with a file or heredoc.
-- Reference issues in the body, not the title, and only the issue the
-  commit delivers: `Closes #N` to close it, or `Part of #N` when the
-  commit addresses part of it. Every new version of the commit you
-  push, after an amend or a rebase, posts another entry on the timeline
-  of each issue it names.
-
 ## Branching and pushing
 
 - NEVER push directly to `main`. Always create a new branch before
@@ -141,6 +124,45 @@ before generating code.
   "Generated with Gemini", or any similar AI attribution to PR
   descriptions or issue comments.
 <!-- END shared:workflow -->
+
+<!-- BEGIN shared:commit-messages -->
+## Commit messages
+
+- Pull requests are squash-merged, and a pull request's title becomes
+  the title of its squash commit. So the title follows Conventional
+  Commits 1.0.0: `<type>[(<scope>)][!]: <description>`.
+- `<type>` is one of `feat`, `fix`, `docs`, `style`, `refactor`,
+  `perf`, `test`, `build`, `ci`, `chore`, or `revert`. A dependency
+  update is `chore(deps)`.
+- A breaking change puts `!` before the colon, as in
+  `feat(api)!: drop the v1 endpoints`. A `BREAKING CHANGE:` footer
+  alone is not enough: merge checks and reviewers read only the title.
+  A breaking change that alters only a wire or stored format takes `!`
+  too, even though no API compatibility check detects it.
+- The description is English and imperative, starts with a lowercase
+  letter, and has no trailing period and no issue or PR number. The
+  merge appends the pull request's number to it, as `(#N)`.
+- Write the description as a line a user of the release would read:
+  what changed for them, not how the code got there.
+- The pull request body carries `Closes #N`, or `Part of #N` when the
+  pull request delivers part of the issue; `Closes #N` closes the issue
+  at merge. The pull request body does not become the squash commit's
+  body: the merge takes the body of the commit message an AgentCoop run
+  suggested on the pull request, else the body of the pull request's
+  only commit, else no body. A `## Changelog` section in the pull
+  request body, where the Changelog rules call for one, is appended
+  after it.
+- Body: wrap at 72 characters, free-form, explain *why* not *what*.
+- Separate title and body with a blank line.
+- Do NOT rely on literal `\n` escapes for a commit body — they land in
+  the subject line as characters, and git reports success. Use a real
+  multiline string, or `git commit -F` with a file or heredoc.
+- Reference issues in the body, not the title, and only the issue the
+  commit delivers: `Closes #N` to close it, or `Part of #N` when the
+  commit addresses part of it. Every new version of the commit you
+  push, after an amend or a rebase, posts another entry on the timeline
+  of each issue it names.
+<!-- END shared:commit-messages -->
 
 <!-- BEGIN shared:agentcoop -->
 ## AgentCoop
@@ -504,28 +526,12 @@ Where the crate handles key material or secrets:
 <!-- BEGIN shared:changelog -->
 ## Changelog
 
-- `CHANGELOG.md` records what changed for a user of the **last release**,
-  not how `main` got there. Before writing an entry, ask whether someone
-  running the last released version could observe it. Work that builds,
-  reworks, or removes something they never had is invisible to them and
-  does not belong.
-- Entries carry NO issue or PR references. A reader of the release notes
-  cannot act on one: the number names something in a tracker they may
-  not be able to open, and git and that tracker already hold the history
-  it points at. `Closes #N` and `Part of #N` are worse still. They are
-  GitHub automation keywords, closing an issue when they appear in a
-  commit message or a pull request body and doing nothing whatever
-  here, so what is left is a command addressed to a bot, stranded in a
-  record of what already shipped.
-- Announce a feature once, under `### Added`, describing what it does.
-  If it was reworked or renamed before the release shipped, that is not
-  a separate `### Changed` entry — no user saw the earlier form.
-- A released file carries no `[Unreleased]` section. Cutting a release
-  turns that heading into the version being released and its link
-  reference into a compare range, and the next change to land opens a
-  new one. An empty section left behind is not cosmetic where a release
-  job builds the notes by finding the heading that matches the tag: it
-  finds nothing, and fails after the tag has already been pushed.
+- `CHANGELOG.md` is generated by the release tool. Nobody edits it
+  outside the release pull request that tool opens: an edit made
+  anywhere else is overwritten by the next release.
+- Its entries are the titles of the pull requests merged since the last
+  release. A pull request's title is therefore its changelog entry, and
+  the Commit messages rules say how to write it.
 <!-- END shared:changelog -->
 
 ## Language
@@ -592,7 +598,8 @@ Where the crate handles key material or secrets:
     `cargo fmt -- --check --config group_imports=StdExternalCrate`,
     `biome ci`, `scripts/fetch-theme.sh` and `mkdocs build --strict`.
   - `Markdown` runs markdownlint over the files the `globs` of the root
-    `.markdownlint-cli2.yaml` select (`**/*.md`; the rules are in
+    `.markdownlint-cli2.yaml` select (`**/*.md`), except `CHANGELOG.md`,
+    which its `ignores` leaves to release-plz (the rules are in
     `.markdownlint.yaml`), and the shared instruction-block drift check,
     which fails when the generated regions of this file stop matching the
     release `.agent-instructions.toml` pins.

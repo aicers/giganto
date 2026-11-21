@@ -1,0 +1,67 @@
+name: Changelog
+
+# Fails a pull request that changes CHANGELOG.md, unless it is the release
+# pull request. release-plz writes the changelog from commit titles, and
+# only in the pull request it opens, so a hand edit elsewhere would
+# conflict with it or be lost.
+#
+# A release pull request is one whose head branch starts with
+# `release-plz-` and whose author is `github-actions[bot]`, both: anyone
+# can name a branch `release-plz-`. There is no label exception.
+#
+# `pull_request_target` with `pull-requests: read` only. It reads the
+# changed files from the API and checks out nothing, so no code from the
+# pull request runs; what it reads from the event reaches the shell only
+# through environment variables.
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  changelog:
+    name: CHANGELOG.md untouched
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Check CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          files="${RUNNER_TEMP}/changed-files.jsonl"
+          # One JSON object per changed file, from every page. A rename is
+          # one entry, holding the old path in `previous_filename`.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}/files?per_page=100" \
+            --jq '.[] | {status, filename, previous_filename}' > "${files}"
+          read_count="$(jq -s length "${files}")"
+          # The API lists at most 3000 files. Never judge a partial list.
+          if [ "${read_count}" != "${CHANGED_FILES}" ]; then
+            echo "::error::Read ${read_count} changed files, but the pull request has ${CHANGED_FILES}."
+            exit 1
+          fi
+          # Paths come from the pull request, so they are printed only as
+          # JSON strings, behind a fixed word: nothing in one can start a
+          # log line of its own.
+          touched="$(jq -s -r '.[]
+            | select(.filename == "CHANGELOG.md" or .previous_filename == "CHANGELOG.md")
+            | "Changed: \(.status | @json) \(.previous_filename // .filename | @json) -> \(.filename | @json)"' "${files}")"
+          if [ -z "${touched}" ]; then
+            echo "CHANGELOG.md is not changed (${read_count} files read)."
+            exit 0
+          fi
+          printf '%s\n' "${touched}"
+          if [[ "${HEAD_REF}" == release-plz-* ]] && [ "${AUTHOR}" = "github-actions[bot]" ]; then
+            echo "This is the release pull request, which release-plz writes CHANGELOG.md in."
+            exit 0
+          fi
+          echo "::error::CHANGELOG.md is written by release-plz in the release pull request. Drop the change; the pull request title becomes its entry."
+          exit 1

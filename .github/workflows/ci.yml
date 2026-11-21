@@ -164,12 +164,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         id: checkout
-      # No `globs` input. The `globs` of the root `.markdownlint-cli2.yaml`
-      # are the one place that decides which files are linted, here and in a
-      # local `markdownlint-cli2` alike; they are recursive, so the
-      # documents under `docs/` are linted. The rules stay in
-      # `.markdownlint.yaml`. The action's default `*.{md,markdown}` is only
-      # added to the config's globs and changes nothing.
+      # No `globs` input. The `globs` and `ignores` of the root
+      # `.markdownlint-cli2.yaml` are the one place that decides which files
+      # are linted, here and in a local `markdownlint-cli2` alike; the globs
+      # are recursive, so the documents under `docs/` are linted, and
+      # `ignores` leaves out `CHANGELOG.md`, which release-plz writes. The
+      # rules stay in `.markdownlint.yaml`. The action's default
+      # `*.{md,markdown}` is only added to the config's globs and changes
+      # nothing.
       - name: markdownlint
         uses: DavidAnson/markdownlint-cli2-action@v25
       # Fails when this repository's copy of the shared instruction blocks
