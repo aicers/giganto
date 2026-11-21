@@ -2,6 +2,7 @@
 name = "giganto"
 version = "0.35.1"
 edition = "2024"
+publish = false
 default-run = "giganto"
 
 [lib]
