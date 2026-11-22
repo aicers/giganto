@@ -4,6 +4,23 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.36.0](https://github.com/aicers/giganto/compare/0.35.2...0.36.0) - 2026-11-22
+
+### Added
+
+- [**breaking**] emit GraphQL timestamps in jiff's RFC 3339 form ([#2016](https://github.com/aicers/giganto/pull/2016))
+
+### Fixed
+
+- keep peer hostname checks independent of the rustls name parser ([#2005](https://github.com/aicers/giganto/pull/2005))
+
+### Other
+
+- *(deps)* update dependencies ([#2019](https://github.com/aicers/giganto/pull/2019))
+- update shared instruction blocks to 0.6.4 ([#2020](https://github.com/aicers/giganto/pull/2020))
+- update shared instruction blocks to 0.6.3 ([#2017](https://github.com/aicers/giganto/pull/2017))
+- automate releases with release-plz ([#2009](https://github.com/aicers/giganto/pull/2009))
+
 ## [0.35.2] - 2026-11-21
 
 ### Fixed
