@@ -6,20 +6,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.36.0](https://github.com/aicers/giganto/compare/0.35.2...0.36.0) - 2026-11-22
 
-### Added
+### Changed
 
-- [**breaking**] emit GraphQL timestamps in jiff's RFC 3339 form ([#2016](https://github.com/aicers/giganto/pull/2016))
-
-### Fixed
-
-- keep peer hostname checks independent of the rustls name parser ([#2005](https://github.com/aicers/giganto/pull/2005))
-
-### Other
-
-- *(deps)* update dependencies ([#2019](https://github.com/aicers/giganto/pull/2019))
-- update shared instruction blocks to 0.6.4 ([#2020](https://github.com/aicers/giganto/pull/2020))
-- update shared instruction blocks to 0.6.3 ([#2017](https://github.com/aicers/giganto/pull/2017))
-- automate releases with release-plz ([#2009](https://github.com/aicers/giganto/pull/2009))
+- **Breaking change:** GraphQL `DateTime` values are written in RFC 3339 with
+  `Z` and the shortest fraction that keeps the value (for example
+  `2026-03-15T15:00:04.12Z`) instead of `+00:00` with 0, 3, 6 or 9 fractional
+  digits; a negative year is written in the extended form (for example
+  `-000001-01-01T00:00:00Z`). Input parsing, the schema, export files and the
+  publish range text are unchanged.
 
 ## [0.35.2] - 2026-11-21
 
