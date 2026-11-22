@@ -1585,10 +1585,7 @@ pub(crate) mod tests {
                     let expected = usize::from(!time.contains("start: \"2262-"));
                     assert_eq!(edges.as_array().unwrap().len(), expected, "{query}");
                     if expected == 1 {
-                        assert_eq!(
-                            edges[0]["node"]["time"],
-                            "1970-01-01T00:00:00.000000001+00:00"
-                        );
+                        assert_eq!(edges[0]["node"]["time"], "1970-01-01T00:00:00.000000001Z");
                     }
                 }
             }

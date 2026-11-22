@@ -140,26 +140,20 @@ async fn sysmon_events_timestamp_format_stability() {
     ];
     let mut seen = HashSet::new();
     let expected_times: HashMap<&str, &str> = HashMap::from([
-        ("ProcessCreateEvent", "2024-03-04T05:06:07+00:00"),
-        (
-            "FileCreationTimeChangedEvent",
-            "2024-03-04T05:06:07.001+00:00",
-        ),
-        ("NetworkConnectionEvent", "2024-03-04T05:06:07.002+00:00"),
-        ("ProcessTerminatedEvent", "2024-03-04T05:06:07.003+00:00"),
-        ("ImageLoadedEvent", "2024-03-04T05:06:07.004+00:00"),
-        ("FileCreateEvent", "2024-03-04T05:06:07.005+00:00"),
-        ("RegistryValueSetEvent", "2024-03-04T05:06:07.006+00:00"),
-        (
-            "RegistryKeyValueRenameEvent",
-            "2024-03-04T05:06:07.007+00:00",
-        ),
-        ("FileCreateStreamHashEvent", "2024-03-04T05:06:07.008+00:00"),
-        ("PipeEventEvent", "2024-03-04T05:06:07.009+00:00"),
-        ("DnsEventEvent", "2024-03-04T05:06:07.010+00:00"),
-        ("FileDeleteEvent", "2024-03-04T05:06:07.011+00:00"),
-        ("ProcessTamperingEvent", "2024-03-04T05:06:07.012+00:00"),
-        ("FileDeleteDetectedEvent", "2024-03-04T05:06:07.013+00:00"),
+        ("ProcessCreateEvent", "2024-03-04T05:06:07Z"),
+        ("FileCreationTimeChangedEvent", "2024-03-04T05:06:07.001Z"),
+        ("NetworkConnectionEvent", "2024-03-04T05:06:07.002Z"),
+        ("ProcessTerminatedEvent", "2024-03-04T05:06:07.003Z"),
+        ("ImageLoadedEvent", "2024-03-04T05:06:07.004Z"),
+        ("FileCreateEvent", "2024-03-04T05:06:07.005Z"),
+        ("RegistryValueSetEvent", "2024-03-04T05:06:07.006Z"),
+        ("RegistryKeyValueRenameEvent", "2024-03-04T05:06:07.007Z"),
+        ("FileCreateStreamHashEvent", "2024-03-04T05:06:07.008Z"),
+        ("PipeEventEvent", "2024-03-04T05:06:07.009Z"),
+        ("DnsEventEvent", "2024-03-04T05:06:07.01Z"),
+        ("FileDeleteEvent", "2024-03-04T05:06:07.011Z"),
+        ("ProcessTamperingEvent", "2024-03-04T05:06:07.012Z"),
+        ("FileDeleteDetectedEvent", "2024-03-04T05:06:07.013Z"),
     ]);
 
     for edge in edges {
@@ -172,23 +166,23 @@ async fn sysmon_events_timestamp_format_stability() {
             "FileCreationTimeChangedEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    "2024-03-04T05:06:07.001000010+00:00"
+                    "2024-03-04T05:06:07.00100001Z"
                 );
                 assert_eq!(
                     node["previousCreationUtcTime"].as_str().unwrap(),
-                    "2024-03-04T05:06:07.000999990+00:00"
+                    "2024-03-04T05:06:07.00099999Z"
                 );
             }
             "FileCreateEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    "2024-03-04T05:06:07.005000020+00:00"
+                    "2024-03-04T05:06:07.00500002Z"
                 );
             }
             "FileCreateStreamHashEvent" => {
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    "2024-03-04T05:06:07.008+00:00"
+                    "2024-03-04T05:06:07.008Z"
                 );
             }
             _ => {}
@@ -242,7 +236,7 @@ async fn sysmon_events_last_selects_latest() {
         node["__typename"].as_str().unwrap(),
         "FileDeleteDetectedEvent"
     );
-    assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:08+00:00");
+    assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:08Z");
 }
 
 #[tokio::test]
@@ -585,7 +579,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "ProcessCreateEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "pc-agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "pc-agent_id");
@@ -597,7 +591,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "FileCreationTimeChangedEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -605,13 +599,13 @@ async fn sysmon_events_with_data_giganto_cluster() {
                 assert_eq!(node["targetFilename"].as_str().unwrap(), "time.log");
                 assert_eq!(
                     node["creationUtcTime"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
             }
             "NetworkConnectionEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -623,7 +617,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "ProcessTerminatedEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -631,7 +625,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
                 assert_eq!(node["image"].as_str().unwrap(), "terminated.exe");
             }
             "ImageLoadedEvent" => {
-                assert_eq!(node["time"].as_str().unwrap(), "2020-06-01T00:01:01+00:00");
+                assert_eq!(node["time"].as_str().unwrap(), "2020-06-01T00:01:01Z");
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
                 assert_eq!(node["processGuid"].as_str().unwrap(), "guid");
@@ -641,7 +635,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "FileCreateEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -651,7 +645,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "RegistryValueSetEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -665,7 +659,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "RegistryKeyValueRenameEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -676,7 +670,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "FileCreateStreamHashEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -687,7 +681,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "PipeEventEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -698,7 +692,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "DnsEventEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -709,7 +703,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "FileDeleteEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -720,7 +714,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "ProcessTamperingEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -731,7 +725,7 @@ async fn sysmon_events_with_data_giganto_cluster() {
             "FileDeleteDetectedEvent" => {
                 assert_eq!(
                     node["time"].as_str().unwrap(),
-                    "2023-11-16T15:03:45.291779203+00:00"
+                    "2023-11-16T15:03:45.291779203Z"
                 );
                 assert_eq!(node["agentName"].as_str().unwrap(), "agent");
                 assert_eq!(node["agentId"].as_str().unwrap(), "agent_id");
@@ -868,7 +862,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{processCreateEvents: {edges: [{node: {agentId: \"pc-agent_id\", agentName: \"pc-agent\", processGuid: \"guid\", processId: \"1234\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{processCreateEvents: {edges: [{node: {agentId: \"pc-agent_id\", agentName: \"pc-agent\", processGuid: \"guid\", processId: \"1234\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_process_create,
     },
     EventCase {
@@ -891,7 +885,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{fileCreateTimeEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"123\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{fileCreateTimeEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"123\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_file_create_time,
     },
     EventCase {
@@ -914,7 +908,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{networkConnectEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"1\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{networkConnectEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"1\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_network_connect,
     },
     EventCase {
@@ -937,7 +931,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{processTerminateEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"77\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{processTerminateEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"77\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_process_terminate,
     },
     EventCase {
@@ -960,7 +954,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{imageLoadEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"99\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{imageLoadEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"99\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_image_load,
     },
     EventCase {
@@ -983,7 +977,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{fileCreateEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"42\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{fileCreateEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"42\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_file_create,
     },
     EventCase {
@@ -1006,7 +1000,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{registryValueSetEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"8\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{registryValueSetEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"8\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_registry_value_set,
     },
     EventCase {
@@ -1029,7 +1023,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{registryKeyRenameEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"8\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{registryKeyRenameEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"8\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_registry_key_rename,
     },
     EventCase {
@@ -1052,7 +1046,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{fileCreateStreamHashEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"9\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{fileCreateStreamHashEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"9\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_file_create_stream_hash,
     },
     EventCase {
@@ -1075,7 +1069,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{pipeEventEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"11\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{pipeEventEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"11\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_pipe_event,
     },
     EventCase {
@@ -1098,7 +1092,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{dnsQueryEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"12\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{dnsQueryEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"12\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_dns_query,
     },
     EventCase {
@@ -1121,7 +1115,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{fileDeleteEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"13\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{fileDeleteEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"13\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_file_delete,
     },
     EventCase {
@@ -1144,7 +1138,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{processTamperEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"14\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{processTamperEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"14\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_process_tamper,
     },
     EventCase {
@@ -1167,7 +1161,7 @@ const EVENT_CASES: &[EventCase] = &[
             }
         }
     }"#,
-        expected: "{fileDeleteDetectedEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"15\", time: \"2020-01-01T00:00:01+00:00\"}}]}}",
+        expected: "{fileDeleteDetectedEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"15\", time: \"2020-01-01T00:00:01Z\"}}]}}",
         setup: setup_file_delete_detected,
     },
 ];
@@ -1193,7 +1187,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{processCreateEvents: {edges: [{node: {agentId: \"pc-agent_id\", agentName: \"pc-agent\", processGuid: \"guid\", processId: \"1234\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{processCreateEvents: {edges: [{node: {agentId: \"pc-agent_id\", agentName: \"pc-agent\", processGuid: \"guid\", processId: \"1234\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1258,7 +1252,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{fileCreateTimeEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"123\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{fileCreateTimeEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"123\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1309,7 +1303,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{networkConnectEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"1\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{networkConnectEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"1\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1369,7 +1363,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{processTerminateEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"77\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{processTerminateEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"77\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1417,7 +1411,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{imageLoadEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"99\", time: \"2020-06-01T00:01:01+00:00\"}}]}}",
+        expected: "{imageLoadEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"99\", time: \"2020-06-01T00:01:01Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1475,7 +1469,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{fileCreateEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"42\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{fileCreateEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"42\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1525,7 +1519,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{registryValueSetEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"44\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{registryValueSetEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"44\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1576,7 +1570,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{registryKeyRenameEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"45\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{registryKeyRenameEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"45\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1627,7 +1621,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{fileCreateStreamHashEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"9\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{fileCreateStreamHashEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"9\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1679,7 +1673,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{pipeEventEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"47\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{pipeEventEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"47\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1729,7 +1723,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{dnsQueryEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"12\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{dnsQueryEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"12\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1780,7 +1774,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{fileDeleteEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"49\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{fileDeleteEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"49\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1832,7 +1826,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{processTamperEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"50\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{processTamperEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"50\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1881,7 +1875,7 @@ const CLUSTER_EVENT_CASES: &[ClusterEventCase] = &[
             }
         }
     }"#,
-        expected: "{fileDeleteDetectedEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"51\", time: \"2023-11-16T15:03:45.291779203+00:00\"}}]}}",
+        expected: "{fileDeleteDetectedEvents: {edges: [{node: {agentId: \"agent_id\", agentName: \"agent\", processGuid: \"guid\", processId: \"51\", time: \"2023-11-16T15:03:45.291779203Z\"}}]}}",
         peer_response: r#"
     {
         "data": {
@@ -1926,7 +1920,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchProcessCreateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchProcessCreateEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_process_create,
     },
     SearchCase {
@@ -1940,7 +1934,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileCreateTimeEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileCreateTimeEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_file_create_time,
     },
     SearchCase {
@@ -1954,7 +1948,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchNetworkConnectEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchNetworkConnectEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_network_connect,
     },
     SearchCase {
@@ -1968,7 +1962,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchProcessTerminateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchProcessTerminateEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_process_terminate,
     },
     SearchCase {
@@ -1982,7 +1976,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchImageLoadEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchImageLoadEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_image_load,
     },
     SearchCase {
@@ -1996,7 +1990,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileCreateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileCreateEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_file_create,
     },
     SearchCase {
@@ -2010,7 +2004,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchRegistryValueSetEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchRegistryValueSetEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_registry_value_set,
     },
     SearchCase {
@@ -2024,7 +2018,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchRegistryKeyRenameEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchRegistryKeyRenameEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_registry_key_rename,
     },
     SearchCase {
@@ -2038,7 +2032,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileCreateStreamHashEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileCreateStreamHashEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_file_create_stream_hash,
     },
     SearchCase {
@@ -2052,7 +2046,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchPipeEventEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchPipeEventEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_pipe_event,
     },
     SearchCase {
@@ -2066,7 +2060,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchDnsQueryEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchDnsQueryEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_dns_query,
     },
     SearchCase {
@@ -2080,7 +2074,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileDeleteEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileDeleteEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_file_delete,
     },
     SearchCase {
@@ -2094,7 +2088,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchProcessTamperEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchProcessTamperEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_process_tamper,
     },
     SearchCase {
@@ -2108,7 +2102,7 @@ const SEARCH_CASES: &[SearchCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileDeleteDetectedEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileDeleteDetectedEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         setup: setup_search_file_delete_detected,
     },
 ];
@@ -2324,7 +2318,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchProcessCreateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchProcessCreateEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2347,7 +2341,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileCreateTimeEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileCreateTimeEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2370,7 +2364,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchNetworkConnectEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchNetworkConnectEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2393,7 +2387,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchProcessTerminateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchProcessTerminateEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2416,7 +2410,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchImageLoadEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchImageLoadEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2439,7 +2433,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileCreateEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileCreateEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2462,7 +2456,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchRegistryValueSetEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchRegistryValueSetEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2485,7 +2479,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchRegistryKeyRenameEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchRegistryKeyRenameEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2508,7 +2502,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileCreateStreamHashEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileCreateStreamHashEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2531,7 +2525,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchPipeEventEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchPipeEventEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2554,7 +2548,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchDnsQueryEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchDnsQueryEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2577,7 +2571,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileDeleteEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileDeleteEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2600,7 +2594,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchProcessTamperEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchProcessTamperEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {
@@ -2623,7 +2617,7 @@ const SEARCH_CLUSTER_CASES: &[SearchClusterCase] = &[
             }
         )
     }"#,
-        expected: "{searchFileDeleteDetectedEvents: [\"2020-01-01T00:01:01+00:00\", \"2020-01-01T01:01:01+00:00\"]}",
+        expected: "{searchFileDeleteDetectedEvents: [\"2020-01-01T00:01:01Z\", \"2020-01-01T01:01:01Z\"]}",
         peer_response: r#"
     {
         "data": {

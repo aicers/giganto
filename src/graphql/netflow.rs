@@ -420,7 +420,7 @@ mod tests {
         let node = res_json["netflow5RawEvents"]["edges"][0]["node"]
             .as_object()
             .unwrap();
-        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07Z");
         assert_eq!(node["dPkts"].as_str().unwrap(), "10");
         assert_eq!(node["dOctets"].as_str().unwrap(), "20");
         assert_eq!(node["first"].as_str().unwrap(), "1.001");
@@ -480,7 +480,7 @@ mod tests {
         let node = res_json["netflow9RawEvents"]["edges"][0]["node"]
             .as_object()
             .unwrap();
-        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07Z");
         assert_eq!(node["sequence"].as_str().unwrap(), "42");
         assert_eq!(node["sourceId"].as_str().unwrap(), "7");
         assert_eq!(node["templateId"].as_i64().unwrap(), 9);
@@ -608,7 +608,7 @@ mod tests {
         assert_giganto_cluster_query(
             query,
             peer_response_mock_data,
-            "{netflow5RawEvents: {edges: [{node: {time: \"2024-03-04T05:06:07+00:00\", \
+            "{netflow5RawEvents: {edges: [{node: {time: \"2024-03-04T05:06:07Z\", \
              srcAddr: \"10.0.0.1\", dstAddr: \"10.0.0.2\", dPkts: \"10\", sequence: \"55\", \
              samplingRate: 100}}]}}",
         )
@@ -716,7 +716,7 @@ mod tests {
         assert_giganto_cluster_query(
             query,
             peer_response_mock_data,
-            "{netflow9RawEvents: {edges: [{node: {time: \"2024-03-04T05:06:07+00:00\", \
+            "{netflow9RawEvents: {edges: [{node: {time: \"2024-03-04T05:06:07Z\", \
              origAddr: \"10.1.0.1\", respAddr: \"10.1.0.2\", sequence: \"42\", \
              contents: \"netflow9_contents\"}}]}}",
         )

@@ -1,0 +1,189 @@
+name: Commit titles
+
+# Checks every commit a push added to `main`'s first-parent path. release-plz
+# builds the changelog from these titles, so one that slipped past the
+# pull-request check is caught here, after the fact.
+#
+# - One parent, a squash merge: the title, with its trailing ` (#N)`, passes
+#   the Conventional title rule with `pr-suffix: "true"`.
+# - Two parents: only the merge of a release pull request, whose message
+#   starts with `Merge pull request #<digits> from aicers/release-plz-`.
+# - Any other number of parents fails.
+#
+# The rule is read only through the `conventional-title` action, one matrix
+# job per single-parent commit; the expression is not copied here.
+#
+# It blocks nothing: the release workflow waits for CI only.
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  commits:
+    name: List pushed commits
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      single: ${{ steps.list.outputs.single }}
+      count: ${{ steps.list.outputs.count }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Writes the single-parent commits for the matrix below and checks
+      # the others itself. It does not fail until the outputs are written,
+      # so the single-parent commits of a push are checked even when one of
+      # its merges is wrong.
+      - id: list
+        name: Classify the commits
+        shell: python3 {0}
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          ZERO = "0" * 40
+          # A release pull request merged as a merge commit, the only merge
+          # `main` takes. ASCII only, matched from the start of the message.
+          RELEASE_MERGE = re.compile(
+              r"Merge pull request #[0-9]+ from aicers/release-plz-", re.ASCII
+          )
+          # GitHub's limit on the jobs one matrix may expand to.
+          MAX_JOBS = 256
+
+
+          def git(*args):
+              # Decoded from bytes rather than with `encoding=`, which turns
+              # on universal newlines and would rewrite a carriage return in
+              # a title to a line feed, hiding it from the title check.
+              return (
+                  subprocess.run(["git", *args], check=True, capture_output=True)
+                  .stdout.decode("utf-8", errors="replace")
+              )
+
+
+          def quoted(text):
+              """`text` in double quotes, with every unprintable character
+              escaped, so a commit title can never start a log line."""
+              out = []
+              for character in text:
+                  if character in '"\\':
+                      out.append("\\" + character)
+                  elif character == "\t":
+                      out.append("\\t")
+                  elif character.isprintable():
+                      out.append(character)
+                  elif ord(character) < 0x10000:
+                      out.append(f"\\u{ord(character):04x}")
+                  else:
+                      out.append(f"\\U{ord(character):08x}")
+              return '"' + "".join(out) + '"'
+
+
+          def has_commit(sha):
+              return (
+                  subprocess.run(
+                      ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+                      capture_output=True,
+                  ).returncode
+                  == 0
+              )
+
+
+          before = os.environ.get("BEFORE", "")
+          after = os.environ["AFTER"]
+
+          if not before or before == ZERO:
+              print(f"No previous head; checking {after} alone.")
+              commits = [after]
+          else:
+              # A force push can leave the old head unreachable from any ref.
+              if not has_commit(before):
+                  subprocess.run(
+                      ["git", "fetch", "--no-tags", "origin", before],
+                      capture_output=True,
+                  )
+              if not has_commit(before):
+                  print(f"::error::Cannot read the previous head {before}.")
+                  sys.exit(1)
+              commits = git(
+                  "rev-list", "--first-parent", "--reverse", f"{before}..{after}"
+              ).split()
+
+          single = []
+          failed = False
+          for sha in commits:
+              parents = git("rev-list", "--parents", "-n", "1", sha).split()[1:]
+              message = git("log", "-1", "--format=%B", sha)
+              # The title is the message's first paragraph. A line break
+              # left in it fails the title check.
+              title = message.split("\n\n", 1)[0].rstrip("\n")
+              shown = f"{sha} ({len(parents)} parents) {quoted(title)}"
+              if len(parents) == 1:
+                  print(f"{shown}: title checked below")
+                  single.append({"sha": sha, "title": title})
+              elif len(parents) == 2 and RELEASE_MERGE.match(message):
+                  print(f"{shown}: release pull request merge")
+              elif len(parents) == 2:
+                  print(f"{shown}: FAIL")
+                  print(
+                      f"::error::{sha} is a merge, and not of a release pull"
+                      " request: its message does not start with 'Merge pull"
+                      " request #<digits> from aicers/release-plz-'."
+                  )
+                  failed = True
+              else:
+                  print(f"{shown}: FAIL")
+                  print(
+                      f"::error::{sha} has {len(parents)} parents. A commit on"
+                      " main has one, or two for a release pull request's merge."
+                  )
+                  failed = True
+
+          if not commits:
+              print("The push added no commit to main's first-parent path.")
+          if len(single) > MAX_JOBS:
+              print(
+                  f"::error::{len(single)} single-parent commits are more than"
+                  f" one matrix can check ({MAX_JOBS}). Check their titles by"
+                  " hand against the Conventional title rule."
+              )
+              single = []
+              failed = True
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"single={json.dumps(single, ensure_ascii=True)}\n")
+              output.write(f"count={len(single)}\n")
+
+          sys.exit(1 if failed else 0)
+
+  title:
+    name: Title of ${{ matrix.commit.sha }}
+    needs: commits
+    if: ${{ !cancelled() && needs.commits.outputs.count != '' && needs.commits.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      # The checkout, which holds the pin the rule is read at.
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        commit: ${{ fromJSON(needs.commits.outputs.single) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: aicers/agent-instructions/conventional-title@main
+        with:
+          title: ${{ matrix.commit.title }}
+          pr-suffix: "true"

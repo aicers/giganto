@@ -6,8 +6,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A UTC datetime backed by [`jiff::Timestamp`].
 ///
-/// Replaces `chrono::DateTime<Utc>` and provides the same RFC 3339
-/// serialization format for both the GraphQL scalar and serde.
+/// The GraphQL scalar, serde and `Display` all print the same RFC 3339
+/// form, [`DateTime::to_rfc3339`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct DateTime(Timestamp);
 
@@ -88,43 +88,21 @@ impl DateTime {
         Self::from_timestamp_nanos(i64::MAX)
     }
 
-    /// Formats the timestamp as RFC 3339, matching chrono's
-    /// `DateTime<Utc>::to_rfc3339()` formatting behavior:
+    /// Formats the timestamp as RFC 3339 using [`jiff::Timestamp`]'s
+    /// `Display`:
     ///
-    /// * No fractional seconds when subsecond nanoseconds are zero.
-    /// * 3 digits (millis) when subsecond nanoseconds are a multiple of
-    ///   1,000,000.
-    /// * 6 digits (micros) when subsecond nanoseconds are a multiple of 1,000.
-    /// * 9 digits (nanos) otherwise.
-    /// * Uses chrono-compatible year formatting, including negative years.
-    /// * Always uses `+00:00` offset (not `Z`).
+    /// * Always uses the `Z` offset.
+    /// * No fractional seconds when subsecond nanoseconds are zero;
+    ///   otherwise the shortest fraction that keeps the value (`.12`, not
+    ///   `.120`).
+    /// * Years outside `0..=9999` use the signed six-digit extended form
+    ///   (`-000001`).
     pub fn to_rfc3339(self) -> String {
-        let dt = self.0.to_zoned_datetime(jiff::tz::TimeZone::UTC).datetime();
-        let (y, mo, d) = (dt.year(), dt.month(), dt.day());
-        let (h, mi, s) = (dt.hour(), dt.minute(), dt.second());
-        let nanos = dt.subsec_nanosecond();
-
-        let year = if (0..=9999).contains(&y) {
-            format!("{y:04}")
-        } else {
-            format!("{y:+05}")
-        };
-
-        let fraction = if nanos == 0 {
-            String::new()
-        } else if nanos % 1_000_000 == 0 {
-            format!(".{:03}", nanos / 1_000_000)
-        } else if nanos % 1_000 == 0 {
-            format!(".{:06}", nanos / 1_000)
-        } else {
-            format!(".{nanos:09}")
-        };
-
-        format!("{year}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}{fraction}+00:00")
+        self.0.to_string()
     }
 
-    /// Formats as `{unix_seconds}.{nanoseconds:09}`, matching chrono's
-    /// `format("%s%.9f")`.
+    /// Formats as `{unix_seconds}.{nanoseconds:09}`, with the seconds
+    /// floored and the nanoseconds always nine digits.
     pub fn format_unix_seconds_with_nanos(self) -> String {
         let nanos = self.0.as_nanosecond();
         let secs = nanos.div_euclid(1_000_000_000);
@@ -153,28 +131,34 @@ mod tests {
     fn rfc3339_no_fractional() {
         let dt = DateTime::from_timestamp_nanos(1_709_528_767_000_000_000);
         let s = dt.to_rfc3339();
-        assert_eq!(s, "2024-03-04T05:06:07+00:00");
+        assert_eq!(s, "2024-03-04T05:06:07Z");
     }
 
     #[test]
     fn rfc3339_millis() {
         let dt = DateTime::from_timestamp_nanos(1_709_528_767_001_000_000);
         let s = dt.to_rfc3339();
-        assert_eq!(s, "2024-03-04T05:06:07.001+00:00");
+        assert_eq!(s, "2024-03-04T05:06:07.001Z");
+    }
+
+    #[test]
+    fn rfc3339_trims_trailing_zeros_of_fraction() {
+        let dt = DateTime::from_timestamp_nanos(1_709_528_767_120_000_000);
+        assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07.12Z");
     }
 
     #[test]
     fn rfc3339_micros() {
         let dt = DateTime::from_timestamp_nanos(1_709_528_767_000_001_000);
         let s = dt.to_rfc3339();
-        assert_eq!(s, "2024-03-04T05:06:07.000001+00:00");
+        assert_eq!(s, "2024-03-04T05:06:07.000001Z");
     }
 
     #[test]
     fn rfc3339_nanos() {
         let dt = DateTime::from_timestamp_nanos(1_709_528_767_000_000_001);
         let s = dt.to_rfc3339();
-        assert_eq!(s, "2024-03-04T05:06:07.000000001+00:00");
+        assert_eq!(s, "2024-03-04T05:06:07.000000001Z");
     }
 
     #[test]
@@ -203,21 +187,21 @@ mod tests {
     fn timestamp_parse_with_z_formats_as_utc_rfc3339() {
         let ts: Timestamp = "2024-03-04T05:06:07Z".parse().unwrap();
         let dt = DateTime::from(ts);
-        assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07Z");
     }
 
     #[test]
     fn timestamp_parse_with_utc_offset_formats_as_utc_rfc3339() {
         let ts: Timestamp = "2024-03-04T05:06:07+00:00".parse().unwrap();
         let dt = DateTime::from(ts);
-        assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07Z");
     }
 
     #[test]
     fn serde_roundtrip() {
         let dt = DateTime::from_timestamp_nanos(1_709_528_767_123_000_000);
         let json = serde_json::to_string(&dt).unwrap();
-        assert_eq!(json, "\"2024-03-04T05:06:07.123+00:00\"");
+        assert_eq!(json, "\"2024-03-04T05:06:07.123Z\"");
         let parsed: DateTime = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, dt);
     }
@@ -225,7 +209,7 @@ mod tests {
     #[test]
     fn rfc3339_negative_nanos() {
         let dt = DateTime::from_timestamp_nanos(-1);
-        assert_eq!(dt.to_rfc3339(), "1969-12-31T23:59:59.999999999+00:00");
+        assert_eq!(dt.to_rfc3339(), "1969-12-31T23:59:59.999999999Z");
     }
 
     #[test]
@@ -238,7 +222,7 @@ mod tests {
     fn timestamp_parse_with_non_utc_offset_normalizes_to_utc_rfc3339() {
         let ts: Timestamp = "2024-03-04T14:06:07+09:00".parse().unwrap();
         let dt = DateTime::from(ts);
-        assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(dt.to_rfc3339(), "2024-03-04T05:06:07Z");
     }
 
     #[test]
@@ -249,7 +233,7 @@ mod tests {
             .unwrap()
             .timestamp();
         let dt = DateTime::from(ts);
-        assert_eq!(dt.to_rfc3339(), "-0001-01-01T00:00:00+00:00");
+        assert_eq!(dt.to_rfc3339(), "-000001-01-01T00:00:00Z");
     }
 
     #[test]
@@ -260,9 +244,62 @@ mod tests {
 
         assert_eq!(
             graphql_value,
-            Value::String("2024-03-04T05:06:07.123+00:00".to_string())
+            Value::String("2024-03-04T05:06:07.123Z".to_string())
         );
-        assert_eq!(serde_json, "\"2024-03-04T05:06:07.123+00:00\"");
+        assert_eq!(serde_json, "\"2024-03-04T05:06:07.123Z\"");
+    }
+
+    #[test]
+    fn graphql_to_value_serde_and_display_agree() {
+        for nanos in [
+            0,
+            -1,
+            1_709_528_767_000_000_000,
+            1_709_528_767_120_000_000,
+            1_709_528_767_123_456_789,
+            i64::MIN,
+            i64::MAX,
+        ] {
+            let dt = DateTime::from_timestamp_nanos(nanos);
+            let display = dt.to_string();
+            assert_eq!(
+                <DateTime as ScalarType>::to_value(&dt),
+                Value::String(display.clone())
+            );
+            assert_eq!(
+                serde_json::to_string(&dt).unwrap(),
+                format!("\"{display}\"")
+            );
+            assert_eq!(display, dt.to_rfc3339());
+        }
+    }
+
+    #[test]
+    fn rfc3339_i64_bounds_roundtrip() {
+        for dt in [DateTime::min_utc(), DateTime::max_utc()] {
+            let s = dt.to_rfc3339();
+            assert!(s.ends_with('Z'), "{s}");
+            let parsed: DateTime = serde_json::from_str(&format!("\"{s}\"")).unwrap();
+            assert_eq!(parsed, dt);
+            let parsed = <DateTime as ScalarType>::parse(Value::String(s)).unwrap();
+            assert_eq!(parsed, dt);
+        }
+    }
+
+    #[test]
+    fn graphql_and_serde_parse_offsets_to_same_instant() {
+        let expected = DateTime::from_timestamp_nanos(1_709_528_767_000_000_000);
+        for input in [
+            "2024-03-04T05:06:07Z",
+            "2024-03-04T05:06:07+00:00",
+            "2024-03-04T14:06:07+09:00",
+        ] {
+            let graphql =
+                <DateTime as ScalarType>::parse(Value::String(input.to_string())).unwrap();
+            assert_eq!(graphql, expected, "{input}");
+            let serde: DateTime = serde_json::from_str(&format!("\"{input}\"")).unwrap();
+            assert_eq!(serde, expected, "{input}");
+        }
     }
 
     #[test]
@@ -271,7 +308,7 @@ mod tests {
             <DateTime as ScalarType>::parse(Value::String("2024-03-04T14:06:07+09:00".to_string()))
                 .unwrap();
 
-        assert_eq!(parsed.to_rfc3339(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(parsed.to_rfc3339(), "2024-03-04T05:06:07Z");
     }
 
     #[test]
@@ -299,7 +336,7 @@ mod tests {
     fn serde_deserialize_zulu_string_succeeds() {
         let parsed: DateTime = serde_json::from_str("\"2024-03-04T05:06:07Z\"").unwrap();
 
-        assert_eq!(parsed.to_rfc3339(), "2024-03-04T05:06:07+00:00");
+        assert_eq!(parsed.to_rfc3339(), "2024-03-04T05:06:07Z");
     }
 
     #[test]

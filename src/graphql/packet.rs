@@ -323,7 +323,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{packets: {edges: [{node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:00+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:01+00:00\", requestTime: \"2023-01-20T00:00:00+00:00\"}}]}}"
+            "{packets: {edges: [{node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:00Z\", requestTime: \"2023-01-20T00:00:00Z\"}}, {node: {packet: \"AAECAw==\", packetTime: \"2023-01-20T00:00:01Z\", requestTime: \"2023-01-20T00:00:00Z\"}}]}}"
         );
 
         let query = r#"
@@ -345,7 +345,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}"
+            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00Z\"}}, {node: {packetTime: \"2023-01-20T00:00:02Z\"}}]}}"
         );
 
         let query = r#"
@@ -367,7 +367,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:02+00:00\"}}]}}"
+            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00Z\"}}, {node: {packetTime: \"2023-01-20T00:00:02Z\"}}]}}"
         );
     }
 
@@ -405,7 +405,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00+00:00\"}}, {node: {packetTime: \"2023-01-20T00:00:01+00:00\"}}]}}"
+            "{packets: {edges: [{node: {packetTime: \"2023-01-20T00:00:00Z\"}}, {node: {packetTime: \"2023-01-20T00:00:01Z\"}}]}}"
         );
     }
 
@@ -493,14 +493,8 @@ mod tests {
 
         let node = packets["edges"][0]["node"].as_object().unwrap();
         assert_eq!(node["packet"].as_str(), Some("AAECAw=="));
-        assert_eq!(
-            node["packetTime"].as_str(),
-            Some("2023-01-20T00:00:00+00:00")
-        );
-        assert_eq!(
-            node["requestTime"].as_str(),
-            Some("2023-01-20T00:00:00+00:00")
-        );
+        assert_eq!(node["packetTime"].as_str(), Some("2023-01-20T00:00:00Z"));
+        assert_eq!(node["requestTime"].as_str(), Some("2023-01-20T00:00:00Z"));
         mock.assert_async().await;
     }
 
@@ -646,7 +640,7 @@ mod tests {
         let res = schema.execute(query).await;
         assert_eq!(
             res.data.to_string(),
-            "{pcap: {requestTime: \"2023-01-20T00:00:00.123456789+00:00\", parsedPcap: \"pcap-data\"}}"
+            "{pcap: {requestTime: \"2023-01-20T00:00:00.123456789Z\", parsedPcap: \"pcap-data\"}}"
         );
         mock.assert_async().await;
     }
@@ -685,12 +679,9 @@ mod tests {
         let node = res_json["packets"]["edges"][0]["node"].as_object().unwrap();
         assert_eq!(
             node["requestTime"].as_str().unwrap(),
-            "2024-03-04T05:06:07+00:00"
+            "2024-03-04T05:06:07Z"
         );
-        assert_eq!(
-            node["packetTime"].as_str().unwrap(),
-            "2024-03-04T05:06:08+00:00"
-        );
+        assert_eq!(node["packetTime"].as_str().unwrap(), "2024-03-04T05:06:08Z");
     }
 
     #[tokio::test]
@@ -719,7 +710,7 @@ mod tests {
         let node = data["pcap"].as_object().unwrap();
         assert_eq!(
             node["requestTime"].as_str().unwrap(),
-            "2024-03-04T05:06:07+00:00"
+            "2024-03-04T05:06:07Z"
         );
     }
 

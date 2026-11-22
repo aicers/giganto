@@ -582,7 +582,7 @@ async fn log_with_data_giganto_cluster() {
     assert_eq!(
         res.data.to_string(),
         format!(
-            "{{logRawEvents: {{edges: [{{node: {{log: \"{encoded_log}\", time: \"2024-03-04T05:06:07+00:00\"}}}}]}}}}",
+            "{{logRawEvents: {{edges: [{{node: {{log: \"{encoded_log}\", time: \"2024-03-04T05:06:07Z\"}}}}]}}}}",
         )
     );
     mock.assert_async().await;
@@ -629,7 +629,7 @@ async fn log_timestamp_fomat_stability() {
     let node = res_json["logRawEvents"]["edges"][0]["node"]
         .as_object()
         .unwrap();
-    assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+    assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07Z");
 }
 
 #[tokio::test]
@@ -712,7 +712,7 @@ async fn oplog_timestamp_fomat_stability() {
     let node = res_json["opLogRawEvents"]["edges"][0]["node"]
         .as_object()
         .unwrap();
-    assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07+00:00");
+    assert_eq!(node["time"].as_str().unwrap(), "2024-03-04T05:06:07Z");
 }
 
 #[tokio::test]

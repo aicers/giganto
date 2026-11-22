@@ -4,5 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    # `chore(deps): ...`, the Conventional title of a dependency update.
+    commit-message:
+      prefix: "chore"
+      include: "scope"
     ignore:
       - dependency-name: "giganto-client"

@@ -1,0 +1,241 @@
+name: Release-plz
+
+# Releases with release-plz, configured in `release-plz.toml`.
+#
+# `release` tags `X.Y.Z` and creates the GitHub Release `giganto X.Y.Z`,
+# with that version's generated changelog section as its notes, when the
+# commit it runs on is the merge of a release pull request, and does
+# nothing otherwise. `upload` then builds the binary at that tag and
+# uploads it to the Release through `release.yml`. `release-pr` opens the
+# release pull request, or updates the one that is open, from every commit
+# since the last `X.Y.Z` tag.
+#
+# TRIGGERS: a `workflow_run` of CI on `main`, acting only on a run that
+# passed on a push, so nothing here ever runs on a commit CI has not
+# passed and nothing here runs CI again. `workflow_dispatch` acts on
+# `main`'s head, and only when dispatched on `main`.
+#
+# Events from GITHUB_TOKEN start no workflow: the release pull request
+# gets no CI and no changelog check by itself, so the `title` job below
+# posts its `Validate PR title` status; and the tag release-plz creates
+# starts no tag-push workflow, so the `upload` job calls `release.yml`
+# directly.
+
+on:
+  workflow_run:
+    # The `name:` of ci.yml, which is what `workflow_run` matches.
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    if: >-
+      ${{
+        (github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push')
+        || (github.event_name == 'workflow_dispatch'
+          && github.ref == 'refs/heads/main')
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Pushes the tag and creates the GitHub Release.
+      contents: write
+      # Looks up the pull request a commit came from, to tell a release
+      # pull request's merge from any other commit.
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      # The commit CI passed on, detached; `main` as checked out on a
+      # dispatch. The full history and the tags, from which release-plz
+      # finds the last release. No credentials in `.git/config`:
+      # release-plz pushes with the token it is given below, and the cargo
+      # builds it runs have no use for one.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'refs/heads/main' }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: sha
+        name: Record the commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - id: release-plz
+        name: Release
+        uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5.148
+        with:
+          command: release
+          version: 0.4.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The tag `upload` builds, only when this run created a release.
+      - id: tag
+        name: Read the released tag
+        env:
+          CREATED: ${{ steps.release-plz.outputs.releases_created }}
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          set -euo pipefail
+          if [ "${CREATED}" != "true" ]; then
+            echo "No release: this commit is not a release pull request's merge."
+            exit 0
+          fi
+          tag="$(jq -r 'if length == 1 then .[0].tag else error("expected one release, got \(length)") end' <<< "${RELEASES}")"
+          if [[ ! "${tag}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release-plz released a tag that is not a version such as 1.2.3: $(jq -R . <<< "${tag}")"
+            exit 1
+          fi
+          echo "Released ${tag}."
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  upload:
+    name: Upload binary
+    needs: release
+    if: ${{ needs.release.outputs.tag != '' }}
+    permissions:
+      # A called workflow's job can hold no more than this job grants;
+      # `release.yml` uploads the binary to the Release.
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+
+  release-pr:
+    name: Release PR
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      # Pushes the release branch.
+      contents: write
+      # Opens, updates or closes the release pull request.
+      pull-requests: write
+    outputs:
+      created: ${{ steps.release-plz.outputs.prs_created }}
+      pr: ${{ steps.release-plz.outputs.pr }}
+    steps:
+      # release-pr refuses a detached HEAD and takes the release pull
+      # request's base from the checked-out branch, so this is the branch
+      # `main`, not the commit `release` ran on.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      # Only while the commit `release` ran on is still `main`'s head. A
+      # run for a commit `main` has since moved past would rebuild the
+      # release pull request from history CI has not passed as a whole; the
+      # run for the newer commit, queued behind this one, does it instead.
+      - id: head
+        name: Check that the commit is still main's head
+        env:
+          EXPECTED: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          if [ -z "${EXPECTED}" ]; then
+            echo "::error::The release job did not report the commit it ran on."
+            exit 1
+          fi
+          if [ "${head}" = "${EXPECTED}" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipping release-pr: this run is for ${EXPECTED}, but main's head is now ${head}."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install Rust
+        if: ${{ steps.head.outputs.current == 'true' }}
+        uses: dtolnay/rust-toolchain@stable
+      - id: release-plz
+        name: Release PR
+        if: ${{ steps.head.outputs.current == 'true' }}
+        uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5.148
+        with:
+          command: release-pr
+          version: 0.4.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The release pull request starts no workflow, so `pr-title.yml` never
+  # checks it. This posts the same check as a commit status of the same
+  # name on its head, which is what the required check reads.
+  # `prs_created` is `true` whenever release-plz created or updated it.
+  title:
+    name: Check release PR title
+    needs: release-pr
+    if: ${{ needs.release-pr.outputs.created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      # The checkout, which holds the pin the rule is read at.
+      contents: read
+      # Reads the release pull request's title and head.
+      pull-requests: read
+      # Posts `Validate PR title`.
+      statuses: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - id: pr
+        name: Read the release pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ fromJSON(needs.release-pr.outputs.pr).number }}
+        run: |
+          set -euo pipefail
+          case "${NUMBER}" in
+            '' | *[!0-9]*)
+              echo "::error::release-plz reported no release pull request number."
+              exit 1
+              ;;
+          esac
+          pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}")"
+          sha="$(jq -r .head.sha <<< "${pr}")"
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not read the head of pull request ${NUMBER}."
+            exit 1
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          # A JSON string is one line whatever the title holds, so it is
+          # written as an output safely and decoded with fromJSON below.
+          echo "title=$(jq -c .title <<< "${pr}")" >> "$GITHUB_OUTPUT"
+      - id: check
+        name: Check the title
+        continue-on-error: true
+        uses: aicers/agent-instructions/conventional-title@main
+        with:
+          title: ${{ fromJSON(steps.pr.outputs.title) }}
+      - name: Post Validate PR title
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pr.outputs.sha }}
+          OUTCOME: ${{ steps.check.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "${OUTCOME}" = "success" ]; then
+            state=success
+            description="The title is a Conventional title"
+          else
+            state=failure
+            description="The title is not a Conventional title"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state="${state}" \
+            -f context="Validate PR title" \
+            -f description="${description}" \
+            -f target_url="${RUN_URL}" > /dev/null
+          echo "Posted Validate PR title: ${state} on ${SHA}"
+          [ "${state}" = "success" ]

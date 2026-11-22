@@ -1,0 +1,39 @@
+name: PR title
+
+# Checks a pull request's title against the organization's Conventional
+# title rule. A squash merge makes the title the commit title on `main`,
+# and release-plz builds the changelog from those.
+#
+# `pull_request_target`, so the check also runs on a pull request from a
+# fork, with the base's workflow and the base's pin. It checks out the
+# base only, never the pull request's head, and runs no code from it; the
+# title reaches the action as an input, never through `${{ }}` in `run:`.
+#
+# Only pull requests into `main`: the title of one into another branch,
+# such as `tis` or `assets`, never becomes a commit title on `main`.
+#
+# The release pull request starts no workflow, since it is opened with
+# GITHUB_TOKEN; `release-plz.yml` posts this check on it as a commit
+# status of the same name.
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  title:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    permissions:
+      # The base checkout, which holds the pin the rule is read at.
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: aicers/agent-instructions/conventional-title@main
+        with:
+          title: ${{ github.event.pull_request.title }}
