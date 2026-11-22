@@ -1835,20 +1835,20 @@ fn sysmon_connection(
     let mut has_next_page: bool = false;
     let mut has_next_value: bool = false;
 
-    let mut process_create_data = process_create_iter.next();
-    let mut file_create_time_data = file_create_time_iter.next();
-    let mut network_connect_data = network_connect_iter.next();
-    let mut process_terminate_data = process_terminate_iter.next();
-    let mut image_load_data = image_load_iter.next();
-    let mut file_create_data = file_create_iter.next();
-    let mut registry_value_set_data = registry_value_set_iter.next();
-    let mut registry_key_rename_data = registry_key_rename_iter.next();
-    let mut file_create_stream_hash_data = file_create_stream_hash_iter.next();
-    let mut pipe_event_data = pipe_event_iter.next();
-    let mut dns_query_data = dns_query_iter.next();
-    let mut file_delete_data = file_delete_iter.next();
-    let mut process_tamper_data = process_tamper_iter.next();
-    let mut file_delete_detected_data = file_delete_detected_iter.next();
+    let mut process_create_data = process_create_iter.next().transpose()?;
+    let mut file_create_time_data = file_create_time_iter.next().transpose()?;
+    let mut network_connect_data = network_connect_iter.next().transpose()?;
+    let mut process_terminate_data = process_terminate_iter.next().transpose()?;
+    let mut image_load_data = image_load_iter.next().transpose()?;
+    let mut file_create_data = file_create_iter.next().transpose()?;
+    let mut registry_value_set_data = registry_value_set_iter.next().transpose()?;
+    let mut registry_key_rename_data = registry_key_rename_iter.next().transpose()?;
+    let mut file_create_stream_hash_data = file_create_stream_hash_iter.next().transpose()?;
+    let mut pipe_event_data = pipe_event_iter.next().transpose()?;
+    let mut dns_query_data = dns_query_iter.next().transpose()?;
+    let mut file_delete_data = file_delete_iter.next().transpose()?;
+    let mut process_tamper_data = process_tamper_iter.next().transpose()?;
+    let mut file_delete_detected_data = file_delete_detected_iter.next().transpose()?;
 
     loop {
         if (result_vec.len() >= size)
@@ -2018,7 +2018,7 @@ fn sysmon_connection(
                             &key, value,
                         )?),
                     ));
-                    process_create_data = process_create_iter.next();
+                    process_create_data = process_create_iter.next().transpose()?;
                 }
             }
             _ if selected == file_create_time_ts => {
@@ -2029,7 +2029,7 @@ fn sysmon_connection(
                             FileCreationTimeChangedEvent::from_key_value(&key, value)?,
                         ),
                     ));
-                    file_create_time_data = file_create_time_iter.next();
+                    file_create_time_data = file_create_time_iter.next().transpose()?;
                 }
             }
             _ if selected == network_connect_ts => {
@@ -2040,7 +2040,7 @@ fn sysmon_connection(
                             NetworkConnectionEvent::from_key_value(&key, value)?,
                         ),
                     ));
-                    network_connect_data = network_connect_iter.next();
+                    network_connect_data = network_connect_iter.next().transpose()?;
                 }
             }
             _ if selected == process_terminate_ts => {
@@ -2051,7 +2051,7 @@ fn sysmon_connection(
                             ProcessTerminatedEvent::from_key_value(&key, value)?,
                         ),
                     ));
-                    process_terminate_data = process_terminate_iter.next();
+                    process_terminate_data = process_terminate_iter.next().transpose()?;
                 }
             }
             _ if selected == image_load_ts => {
@@ -2062,7 +2062,7 @@ fn sysmon_connection(
                             &key, value,
                         )?),
                     ));
-                    image_load_data = image_load_iter.next();
+                    image_load_data = image_load_iter.next().transpose()?;
                 }
             }
             _ if selected == file_create_ts => {
@@ -2073,7 +2073,7 @@ fn sysmon_connection(
                             &key, value,
                         )?),
                     ));
-                    file_create_data = file_create_iter.next();
+                    file_create_data = file_create_iter.next().transpose()?;
                 }
             }
             _ if selected == registry_value_set_ts => {
@@ -2084,7 +2084,7 @@ fn sysmon_connection(
                             &key, value,
                         )?),
                     ));
-                    registry_value_set_data = registry_value_set_iter.next();
+                    registry_value_set_data = registry_value_set_iter.next().transpose()?;
                 }
             }
             _ if selected == registry_key_rename_ts => {
@@ -2095,7 +2095,7 @@ fn sysmon_connection(
                             RegistryKeyValueRenameEvent::from_key_value(&key, value)?,
                         ),
                     ));
-                    registry_key_rename_data = registry_key_rename_iter.next();
+                    registry_key_rename_data = registry_key_rename_iter.next().transpose()?;
                 }
             }
             _ if selected == file_create_stream_hash_ts => {
@@ -2106,7 +2106,8 @@ fn sysmon_connection(
                             FileCreateStreamHashEvent::from_key_value(&key, value)?,
                         ),
                     ));
-                    file_create_stream_hash_data = file_create_stream_hash_iter.next();
+                    file_create_stream_hash_data =
+                        file_create_stream_hash_iter.next().transpose()?;
                 }
             }
             _ if selected == pipe_event_ts => {
@@ -2115,7 +2116,7 @@ fn sysmon_connection(
                         base64_engine.encode(&key),
                         SysmonEvents::PipeEventEvent(PipeEventEvent::from_key_value(&key, value)?),
                     ));
-                    pipe_event_data = pipe_event_iter.next();
+                    pipe_event_data = pipe_event_iter.next().transpose()?;
                 }
             }
             _ if selected == dns_query_ts => {
@@ -2124,7 +2125,7 @@ fn sysmon_connection(
                         base64_engine.encode(&key),
                         SysmonEvents::DnsEventEvent(DnsEventEvent::from_key_value(&key, value)?),
                     ));
-                    dns_query_data = dns_query_iter.next();
+                    dns_query_data = dns_query_iter.next().transpose()?;
                 }
             }
             _ if selected == file_delete_ts => {
@@ -2135,7 +2136,7 @@ fn sysmon_connection(
                             &key, value,
                         )?),
                     ));
-                    file_delete_data = file_delete_iter.next();
+                    file_delete_data = file_delete_iter.next().transpose()?;
                 }
             }
             _ if selected == process_tamper_ts => {
@@ -2146,7 +2147,7 @@ fn sysmon_connection(
                             &key, value,
                         )?),
                     ));
-                    process_tamper_data = process_tamper_iter.next();
+                    process_tamper_data = process_tamper_iter.next().transpose()?;
                 }
             }
             _ if selected == file_delete_detected_ts => {
@@ -2157,7 +2158,7 @@ fn sysmon_connection(
                             FileDeleteDetectedEvent::from_key_value(&key, value)?,
                         ),
                     ));
-                    file_delete_detected_data = file_delete_detected_iter.next();
+                    file_delete_detected_data = file_delete_detected_iter.next().transpose()?;
                 }
             }
             _ => {}
