@@ -5,6 +5,10 @@
 //! A source a peer is in charge of is forwarded to that peer as the same
 //! request, and every wait on the peer is bounded, so a peer that stops
 //! answering fails its own sources and nothing else.
+//!
+//! A multi-source read of periodic time series takes each source as a
+//! time-series-generation-policy ID and reads every series of that policy,
+//! from one snapshot of the local store; see `read_time_series`.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -57,7 +61,7 @@ use crate::comm::{
 };
 use crate::datetime::DateTime;
 use crate::graphql::TIMESTAMP_SIZE;
-use crate::storage::{Database, Direction, RawEventStore, StorageKey};
+use crate::storage::{Database, Direction, RawEventStore, StorageKey, StoreSnapshot};
 use crate::tls_reload::TlsWatch;
 
 /// How long a multi-source read or a re-read with status waits on a peer at
@@ -84,8 +88,9 @@ enum KindLayout {
     /// Keyed by sensor, the requested kind string, and timestamp; served by
     /// the node in charge.
     Log,
-    /// Keyed by sampling-policy ID and timestamp; served from the local store
-    /// only, with `f64` payloads.
+    /// Keyed by series ID and window start; served from the local store only,
+    /// with `f64` payloads. A series ID is a time-series-generation-policy ID
+    /// `P`, or `P/<IP>` for a policy that groups by IP.
     TimeSeries,
 }
 
@@ -328,14 +333,25 @@ impl EventSink for SendStream {
     }
 }
 
+/// What a merge does when one of its inputs breaks off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OnBreak {
+    /// Go on with the other inputs.
+    Continue,
+    /// Stop writing at once.
+    Stop,
+}
+
 /// Merges `inputs` into one stream in time order and writes it to `sink`,
 /// stopping after `count` events and the boundary rule.
 ///
-/// Events with equal timestamps are ordered by source position, and events of
-/// one input keep the input's order. Once `count` events have been written,
-/// writing continues only while the next event has the source and the
-/// timestamp of the event just written, so each source's next read can start
-/// at its last timestamp plus one without losing an event.
+/// Events with equal timestamps are ordered by source position, events with
+/// equal timestamps and source positions by the order of their inputs in
+/// `inputs`, and events of one input keep the input's order. Once `count`
+/// events have been written, writing continues only while the next event has
+/// the source and the timestamp of the event just written, so each source's
+/// next read can start at its last timestamp plus one without losing an
+/// event.
 ///
 /// An input that yields `Err(reason)` leaves the merge with the events it
 /// has already contributed, and the others go on. Returns, per input, the
@@ -353,10 +369,31 @@ where
     S: Stream<Item = Result<SourceEvent, String>> + Unpin,
     K: EventSink,
 {
+    merge_inputs(inputs, count, sink, OnBreak::Continue).await
+}
+
+/// Does what `merge_source_events` does, except that with `OnBreak::Stop` the
+/// first input to break off ends the merge, with nothing more written.
+async fn merge_inputs<S, K>(
+    inputs: &mut [S],
+    count: usize,
+    sink: &mut K,
+    on_break: OnBreak,
+) -> Result<Vec<Option<String>>>
+where
+    S: Stream<Item = Result<SourceEvent, String>> + Unpin,
+    K: EventSink,
+{
+    let stops = |failures: &[Option<String>]| {
+        on_break == OnBreak::Stop && failures.iter().any(Option::is_some)
+    };
     let mut failures: Vec<Option<String>> = vec![None; inputs.len()];
     let mut heads = Vec::with_capacity(inputs.len());
     for (input, failure) in inputs.iter_mut().zip(failures.iter_mut()) {
         heads.push(next_head(input, failure).await);
+    }
+    if stops(&failures) {
+        return Ok(failures);
     }
 
     let mut sent = 0;
@@ -380,6 +417,9 @@ where
             last = Some(order);
         }
         *head = next_head(input, failure).await;
+        if on_break == OnBreak::Stop && failure.is_some() {
+            break;
+        }
     }
     Ok(failures)
 }
@@ -450,6 +490,11 @@ async fn serve_multi_source_range(
     };
     if let Err(reason) = check_sources(&request.sources) {
         return Ok(Err(reason));
+    }
+    // Time series are read from a snapshot of their own store, which
+    // `serve_time_series_sources` opens.
+    if RawEventKind::from_str(&request.kind) == Ok(RawEventKind::PeriodicTimeSeries) {
+        return serve_time_series_sources(send, db, &request).await;
     }
     let kind_store = match open_kind_store(db, &request.kind) {
         Ok(kind_store) => kind_store,
@@ -534,6 +579,136 @@ async fn serve_multi_source_range(
         request.sources.into_iter().map(|(source, _)| source),
         statuses,
     )))
+}
+
+/// Serves a multi-source read of periodic time series, whose sources are
+/// time-series-generation-policy IDs, from one snapshot of the local store.
+async fn serve_time_series_sources(
+    send: &mut SendStream,
+    db: &Database,
+    request: &RequestMultiSourceRange,
+) -> Result<RangeStatus> {
+    let store = match db.periodic_time_series_store() {
+        Ok(store) => store,
+        Err(e) => {
+            return Ok(Err(format!(
+                "failed to open the periodic time series store: {e:#}"
+            )));
+        }
+    };
+    let snapshot = store.snapshot();
+    let failures = read_time_series(
+        &snapshot,
+        &request.sources,
+        request.end,
+        request.count,
+        OnBreak::Continue,
+        send,
+    )
+    .await?;
+    Ok(Ok(request
+        .sources
+        .iter()
+        .zip(failures)
+        .map(|((policy_id, _), failure)| {
+            let status = failure.map_or(SourceStatus::Served, SourceStatus::Failed);
+            (policy_id.clone(), status)
+        })
+        .collect()))
+}
+
+/// Reads the periodic time series of the time-series generation policies in
+/// `sources` from `snapshot`, and writes them to `sink` as one merge.
+///
+/// Each source is a policy ID `P` and the window start to read it from. Every
+/// series ID `snapshot` holds under it — `P` and every `P/...` — is read from
+/// that start to `end` (exclusive) as an input of its own, and each frame
+/// names its series ID as its source. The merge orders frames by window
+/// start, then by the source's position in `sources`, then by series ID in
+/// byte order, and stops after `count` frames and the boundary rule of
+/// `merge_source_events`: all series of one policy at one window start are
+/// written together.
+///
+/// Returns, per source, why it failed: finding its series IDs failed, in
+/// which case it contributes nothing, or one of its series broke off. With
+/// `OnBreak::Stop`, the first series to break off ends the merge.
+///
+/// # Errors
+///
+/// Returns an error if writing to `sink` fails.
+pub(super) async fn read_time_series<K: EventSink>(
+    snapshot: &StoreSnapshot<'_, PeriodicTimeSeries>,
+    sources: &[(String, i64)],
+    end: i64,
+    count: usize,
+    on_break: OnBreak,
+    sink: &mut K,
+) -> Result<Vec<Option<String>>> {
+    let mut failures: Vec<Option<String>> = vec![None; sources.len()];
+    let mut inputs: Vec<MergeInput<'_>> = Vec::new();
+    let mut owners = Vec::new();
+    for (position, ((policy_id, start), failure)) in
+        sources.iter().zip(failures.iter_mut()).enumerate()
+    {
+        match snapshot.series_ids(policy_id) {
+            Ok(series_ids) => {
+                for series_id in series_ids {
+                    inputs.push(series_input(snapshot, series_id, position, *start, end));
+                    owners.push(position);
+                }
+            }
+            Err(e) => {
+                *failure = Some(format!(
+                    "finding the series of policy {policy_id} failed: {e:#}"
+                ));
+                if on_break == OnBreak::Stop {
+                    return Ok(failures);
+                }
+            }
+        }
+    }
+
+    let broken = merge_inputs(&mut inputs, count, sink, on_break).await?;
+    for (position, reason) in owners.into_iter().zip(broken) {
+        if let Some(reason) = reason
+            && let Some(failure) = failures.get_mut(position)
+        {
+            failure.get_or_insert(reason);
+        }
+    }
+    Ok(failures)
+}
+
+/// Returns the merge input that reads the series `series_id` from `snapshot`,
+/// from `start` (inclusive) to `end` (exclusive), as frames of the source at
+/// `position` that name `series_id`.
+fn series_input<'db>(
+    snapshot: &StoreSnapshot<'db, PeriodicTimeSeries>,
+    series_id: String,
+    position: usize,
+    start: i64,
+    end: i64,
+) -> MergeInput<'db> {
+    let key_builder = StorageKey::builder().start_key(&series_id);
+    let from_key = key_builder
+        .clone()
+        .lower_closed_bound_end_key(Some(DateTime::from_timestamp_nanos(start)))
+        .build();
+    let to_key = key_builder
+        .upper_open_bound_end_key(Some(DateTime::from_timestamp_nanos(end)))
+        .build();
+    let rows = snapshot.boundary_iter(&from_key.key(), &to_key.key());
+    Box::pin(stream::iter(rows.map(move |row| {
+        let (key, value) = row.map_err(|e| format!("reading series {series_id} failed: {e:#}"))?;
+        let timestamp = key_timestamp(&key)
+            .ok_or_else(|| format!("series {series_id} has a key without a timestamp"))?;
+        let (timestamp, frame) = encode_frame(&value, timestamp, &series_id)?;
+        Ok(SourceEvent {
+            timestamp,
+            source: position,
+            frame,
+        })
+    })))
 }
 
 async fn serve_raw_data_with_status(
@@ -651,8 +826,9 @@ enum Route {
 }
 
 async fn route_source(source: &str, layout: KindLayout, routing: &Routing<'_>) -> Route {
-    // Time series are stored under sampling-policy IDs, which no sensor set
-    // carries, and are never routed to a peer.
+    // Time series are stored under series IDs derived from
+    // time-series-generation-policy IDs, which no sensor set carries, and are
+    // never routed to a peer.
     if layout == KindLayout::TimeSeries
         || is_current_giganto_in_charge(routing.ingest_sensors.clone(), source).await
     {

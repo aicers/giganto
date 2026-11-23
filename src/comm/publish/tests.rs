@@ -140,9 +140,9 @@ const NODE2: NodeConfig = NodeConfig {
     ingest_sensors: &["src2", "src 2", "ingest src 2"],
 };
 
-/// A sampling-policy ID that no sensor in `NODE1` or `NODE2` carries, so a
-/// time-series read by it cannot be served by way of the in-charge check that
-/// routes sensor reads.
+/// A time-series-generation-policy ID that no sensor in `NODE1` or `NODE2`
+/// carries, so a time-series read by it cannot be served by way of the
+/// in-charge check that routes sensor reads.
 const TIME_SERIES_POLICY_ID: &str = "policy-not-a-sensor";
 
 // Stream types that do not have a time-series generator path.
@@ -4980,6 +4980,148 @@ async fn request_range_data_with_periodic_time_series_honours_range_and_count() 
                     .collect::<Vec<_>>();
                 assert_eq!(timestamps, expected, "count {count}");
             }
+        })
+    })
+    .await;
+}
+
+/// Stores the series of policy `42` — its marker `42` and two per-IP series —
+/// and series of the policies `420` and `4`, which a read of `42` must not
+/// cover.
+fn insert_grouping_policy_series(db: &Database) {
+    let store = db.periodic_time_series_store().unwrap();
+    for (series_id, starts) in [
+        ("42", &[1, 3][..]),
+        ("42/10.0.0.1", &[1, 2]),
+        ("42/10.0.0.2", &[1, 3]),
+        ("420/10.0.0.1", &[1, 2]),
+        ("4/10.0.0.1", &[1]),
+    ] {
+        for start in starts {
+            insert_periodic_time_series_raw_event(&store, series_id, *start);
+        }
+    }
+}
+
+fn policy_range_request(count: usize) -> RequestRange {
+    RequestRange {
+        sensor: "42".to_string(),
+        kind: "timeseries".to_string(),
+        start: 0,
+        end: 1_000,
+        count,
+    }
+}
+
+#[tokio::test]
+async fn request_range_data_reads_every_series_of_a_policy() {
+    const ROWS: [(i64, &str); 6] = [
+        (1, "42"),
+        (1, "42/10.0.0.1"),
+        (1, "42/10.0.0.2"),
+        (2, "42/10.0.0.1"),
+        (3, "42"),
+        (3, "42/10.0.0.2"),
+    ];
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_grouping_policy_series(&harness.db);
+
+            // Once `count` frames are sent, the rest of the window start of
+            // the last one still is.
+            for (count, expected) in [
+                (100, &ROWS[..]),
+                (0, &ROWS[..0]),
+                (1, &ROWS[..3]),
+                (2, &ROWS[..3]),
+                (4, &ROWS[..4]),
+                (5, &ROWS[..]),
+            ] {
+                let mut result_data = harness
+                    .publish
+                    .send_range_request::<(i64, String, Vec<f64>)>(
+                        RANGE_MESSAGE_CODE,
+                        policy_range_request(count),
+                    )
+                    .await;
+
+                assert_eq!(result_data.pop(), Some(None), "missing terminator");
+                let rows: Vec<(i64, String)> = result_data
+                    .into_iter()
+                    .map(|message| {
+                        let (start, series_id, _) = message.expect("data before terminator");
+                        (start, series_id)
+                    })
+                    .collect();
+                let rows: Vec<(i64, &str)> = rows
+                    .iter()
+                    .map(|(start, series_id)| (*start, series_id.as_str()))
+                    .collect();
+                assert_eq!(rows, expected, "count {count}");
+            }
+
+            // A policy with no series answers with the terminator alone.
+            let mut request = policy_range_request(100);
+            request.sensor = "99".to_string();
+            let result_data = harness
+                .publish
+                .send_range_request::<(i64, String, Vec<f64>)>(RANGE_MESSAGE_CODE, request)
+                .await;
+            assert_eq!(result_data, vec![None]);
+        })
+    })
+    .await;
+}
+
+/// A series that cannot be read ends the response after the frames already
+/// sent, without the terminator.
+#[tokio::test]
+async fn request_range_data_of_a_policy_ends_without_terminator_when_a_series_breaks_off() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_grouping_policy_series(&harness.db);
+            harness
+                .db
+                .periodic_time_series_store()
+                .unwrap()
+                .append(&gen_network_event_key("42/10.0.0.1", None, 2), &[0xff])
+                .unwrap();
+
+            let (mut send_pub_req, mut recv_pub_resp) = harness
+                .publish
+                .conn
+                .open_bi()
+                .await
+                .expect("failed to open stream");
+            send_range_data_request(
+                &mut send_pub_req,
+                RANGE_MESSAGE_CODE,
+                policy_range_request(100),
+            )
+            .await
+            .expect("failed to send range request");
+
+            let mut rows = Vec::new();
+            loop {
+                let frame = tokio::time::timeout(
+                    StdDuration::from_secs(5),
+                    receive_range_data::<Option<(i64, String, Vec<f64>)>>(&mut recv_pub_resp),
+                )
+                .await
+                .expect("range response timeout");
+                match frame {
+                    Ok(Some((start, series_id, _))) => rows.push((start, series_id)),
+                    Ok(None) => panic!("a broken-off read must not send the terminator"),
+                    Err(_) => break,
+                }
+            }
+            let rows: Vec<(i64, &str)> = rows
+                .iter()
+                .map(|(start, series_id)| (*start, series_id.as_str()))
+                .collect();
+            // `42/10.0.0.1` breaks off when its row at window start 2 is
+            // read, right after its row at 1 is sent.
+            assert_eq!(rows, [(1, "42"), (1, "42/10.0.0.1")]);
         })
     })
     .await;

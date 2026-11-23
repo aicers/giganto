@@ -156,6 +156,38 @@ mod tests {
         );
     }
 
+    /// A per-IP series of a grouping policy is read by its exact series ID,
+    /// without the policy's other series.
+    #[tokio::test]
+    async fn time_series_of_one_ip_of_a_grouping_policy() {
+        let schema = TestSchema::new();
+        let store = schema.db.periodic_time_series_store().unwrap();
+
+        insert_time_series(&store, "42", 1, vec![9.0]);
+        insert_time_series(&store, "42/10.0.0.1", 1, vec![1.0, 2.0]);
+        insert_time_series(&store, "42/10.0.0.1", 2, vec![3.0]);
+        insert_time_series(&store, "42/10.0.0.10", 1, vec![4.0]);
+        insert_time_series(&store, "42/10.0.0.2", 1, vec![5.0]);
+
+        let query = r#"
+        {
+            periodicTimeSeries (filter: {id: "42/10.0.0.1"}, first: 10) {
+                edges {
+                    node {
+                        id
+                        data
+                    }
+                }
+            }
+        }"#;
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        assert_eq!(
+            res.data.to_string(),
+            "{periodicTimeSeries: {edges: [{node: {id: \"42/10.0.0.1\", data: [1.0, 2.0]}}, {node: {id: \"42/10.0.0.1\", data: [3.0]}}]}}"
+        );
+    }
+
     #[tokio::test]
     async fn time_series_timestamp_fomat_stability() {
         let schema = TestSchema::new();

@@ -51,7 +51,8 @@ use tracing::{debug, error, info, warn};
 
 use self::implement::RequestStreamMessage;
 use self::multi_source::{
-    PEER_RESPONSE_TIMEOUT, Routing, process_multi_source_range, process_raw_data_with_status,
+    OnBreak, PEER_RESPONSE_TIMEOUT, Routing, process_multi_source_range,
+    process_raw_data_with_status, read_time_series,
 };
 use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::{
@@ -2426,18 +2427,42 @@ where
 
 /// Serves a periodic time-series range read from this node's own store.
 ///
-/// A time series is stored under its sampling-policy ID, which no sensor set
-/// carries, so the in-charge check `process_range_data` applies would refuse
-/// every one of them. Nor is it routed to a peer: the client sends the request
-/// to the node that holds the series, and a node that holds none of it answers
-/// with the terminator alone.
+/// The request's `sensor` is a time-series-generation-policy ID `P`, and the
+/// read covers every series of that policy, `P` and every `P/...`, from one
+/// snapshot of the store. Each frame names its series ID, frames come in
+/// window-start order and then series-ID order, and once `count` frames are
+/// sent the rest of the window start of the last one still is; see
+/// `read_time_series`.
+///
+/// A policy ID is not a sensor any sensor set carries, so the in-charge check
+/// `process_range_data` applies would refuse every one of them. Nor is it
+/// routed to a peer: the client sends the request to the node that holds the
+/// series, and a node that holds none of it answers with the terminator alone.
+///
+/// # Errors
+///
+/// Returns an error, after the frames already sent and without the
+/// terminator, if finding the policy's series or reading one of them fails,
+/// so the client sees an incomplete response.
 async fn process_time_series_range_data(
     send: &mut SendStream,
     store: RawEventStore<'_, PeriodicTimeSeries>,
     request_range: RequestRange,
     token: &CancellationToken,
 ) -> Result<()> {
-    process_range_data_in_current_giganto(send, store, request_range, false).await?;
+    let snapshot = store.snapshot();
+    let RequestRange {
+        sensor: policy_id,
+        start,
+        end,
+        count,
+        ..
+    } = request_range;
+    let sources = [(policy_id, start)];
+    let failures = read_time_series(&snapshot, &sources, end, count, OnBreak::Stop, send).await?;
+    if let Some(reason) = failures.into_iter().flatten().next() {
+        bail!("failed to read the periodic time series: {reason}");
+    }
     finish_range_response::<PeriodicTimeSeries>(send, token).await
 }
 
@@ -2658,8 +2683,10 @@ where
 /// Serves a periodic time-series raw-data read from this node's own store.
 ///
 /// Every input is looked up locally, for the reason
-/// `process_time_series_range_data` gives: its ID is a sampling-policy ID, not
-/// a sensor any node is in charge of, and time series are not routed to peers.
+/// `process_time_series_range_data` gives: its ID is a series ID, not a sensor
+/// any node is in charge of, and time series are not routed to peers. Each
+/// input names an exact series ID, `P` or `P/<IP>`, and only that series is
+/// read.
 async fn process_time_series_raw_events(
     send: &mut SendStream,
     store: RawEventStore<'_, PeriodicTimeSeries>,

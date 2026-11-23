@@ -1295,6 +1295,14 @@ async fn handle_data<T>(
         raw_event_kind,
         RawEventKind::PeriodicTimeSeries | RawEventKind::Packet | RawEventKind::OpLog
     );
+    // A Time Series Generator writes a grouping policy's per-IP rows and the
+    // window-completion marker that vouches for them in one frame, and a
+    // reader must never see the marker without the rows or the reverse. So
+    // the rows of a time-series frame are collected here and stored in one
+    // write once the whole frame has been decoded; other kinds are stored
+    // event by event.
+    let writes_frames_whole = raw_event_kind == RawEventKind::PeriodicTimeSeries;
+    let mut frame_rows: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     let mut frame = Box::pin(recv_frame(recv, Vec::new()));
     let mut last_timestamp = 0;
     loop {
@@ -1357,12 +1365,20 @@ async fn handle_data<T>(
                 // This avoids repeated DateTime::now() calls on the hot path.
                 let date_key =
                     (raw_event_kind == RawEventKind::OpLog).then(SequenceGenerator::get_date_key);
+                frame_rows.clear();
+                // Channel-close entries of a frame that is stored whole, whose
+                // ACKs wait until the frame's rows are written.
+                let mut deferred_close_acks: usize = 0;
 
                 for (timestamp, mut raw_event) in recv_buf {
                     last_timestamp = timestamp;
                     if (timestamp == CHANNEL_CLOSE_TIMESTAMP)
                         && (raw_event.as_bytes() == CHANNEL_CLOSE_MESSAGE)
                     {
+                        if writes_frames_whole {
+                            deferred_close_acks += 1;
+                            continue;
+                        }
                         if let Err(e) = send_ack_timestamp(&mut send, timestamp).await {
                             err_msg = Some(format!("Failed to send ack timestamp: {e}"));
                             break;
@@ -1470,6 +1486,10 @@ async fn handle_data<T>(
                     {
                         recv_events_len += raw_event.len();
                     }
+                    if writes_frames_whole {
+                        frame_rows.push((storage_key.key(), raw_event));
+                        continue;
+                    }
                     // Reported through `err_msg` rather than `?` for the same
                     // reason as the ACK below: the flush on the way out is what
                     // everything appended before this event depends on, and
@@ -1524,6 +1544,26 @@ async fn handle_data<T>(
                     }
                 }
 
+                if err_msg.is_some() {
+                    break;
+                }
+
+                // Nothing of a frame stored whole is written until every row
+                // has been decoded, so a row that does not decode leaves the
+                // whole frame unwritten, and nothing of it is acknowledged
+                // before it is written.
+                if !frame_rows.is_empty()
+                    && let Err(e) = store.append_batch(&frame_rows)
+                {
+                    err_msg = Some(format!("Failed to append {raw_event_kind:?} event: {e}"));
+                    break;
+                }
+                for _ in 0..deferred_close_acks {
+                    if let Err(e) = send_ack_timestamp(&mut send, CHANNEL_CLOSE_TIMESTAMP).await {
+                        err_msg = Some(format!("Failed to send ack timestamp: {e}"));
+                        break;
+                    }
+                }
                 if err_msg.is_some() {
                     break;
                 }

@@ -41,7 +41,7 @@ pub use rocksdb::Direction;
 use rocksdb::properties;
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DB, DBIteratorWithThreadMode, Options, ReadOptions,
-    WriteBatch,
+    Snapshot, WriteBatch,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{select, sync::Mutex, task::JoinHandle, time};
@@ -101,9 +101,16 @@ pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 const CUSTOMER_DELETION_JOBS_CF: &str = "customer deletion jobs";
-/// The column family holding periodic time series, keyed by sampling-policy
-/// ID and window start rather than by sensor.
+/// The column family holding periodic time series, keyed by series ID and
+/// window start rather than by sensor.
+///
+/// A series ID is the time-series-generation-policy ID `P` for a policy that
+/// does not group, or `P/<IP>` for one that groups by IP. Reads, deletions and
+/// probes by policy ID therefore cover the keys of `P` and of every `P/...`.
 pub(crate) const PERIODIC_TIME_SERIES_CF: &str = "periodic time series";
+/// The byte between a time-series-generation-policy ID and the IP in the
+/// series ID of a policy that groups by IP.
+const SERIES_ID_GROUP_SEPARATOR: u8 = b'/';
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CustomerDataDeletionStatus {
@@ -119,7 +126,8 @@ pub struct CustomerDataDeletion {
     pub status: CustomerDataDeletionStatus,
     pub completed_at: Option<i64>,
     pub error: Option<String>,
-    /// The sampling-policy IDs whose periodic time series the job deletes.
+    /// The time-series-generation-policy IDs whose periodic time series the
+    /// job deletes.
     ///
     /// Kept last, so that a job already migrated to this format still reads
     /// as the previous one if the migration step runs over it again, and is
@@ -137,6 +145,37 @@ fn key_prefix_range(prefix: &str) -> (Vec<u8>, Vec<u8>) {
     to.extend_from_slice(prefix.as_bytes());
     to.push(0x01);
     (from, to)
+}
+
+/// Returns the two key ranges that hold the periodic time series of the
+/// time-series-generation-policy `policy_id`: `[P 0x00, P 0x01)`, the keys of
+/// the series `P` itself, and `[P /, P 0)`, the keys of every series `P/...`.
+///
+/// `0` is the byte after `/`, so the second range holds exactly the keys that
+/// start with `P/`. Neither range reaches a key of another policy: `P0/...`
+/// starts with `P0`, and a policy ID contains neither `/` nor `0x00`.
+fn policy_series_key_ranges(policy_id: &str) -> [(Vec<u8>, Vec<u8>); 2] {
+    let grouped = |last: u8| {
+        let mut key = Vec::with_capacity(policy_id.len() + 1);
+        key.extend_from_slice(policy_id.as_bytes());
+        key.push(last);
+        key
+    };
+    [
+        key_prefix_range(policy_id),
+        (
+            grouped(SERIES_ID_GROUP_SEPARATOR),
+            grouped(SERIES_ID_GROUP_SEPARATOR + 1),
+        ),
+    ]
+}
+
+/// Returns the first component of a store key, the part before its first
+/// `0x00`, or `None` if the key has no `0x00`.
+fn key_first_component(key: &[u8]) -> Option<&[u8]> {
+    key.iter()
+        .position(|&b| b == 0x00)
+        .and_then(|len| key.get(..len))
 }
 
 // Not a `sensor`+`time` event.
@@ -549,29 +588,47 @@ impl Database {
         Ok(())
     }
 
+    /// Deletes every periodic time series of the time-series-generation
+    /// policy `id`: every key that starts with `id 0x00` or with `id /`.
+    ///
+    /// Both ranges go in one write, so a reader sees either all of the
+    /// policy's series or none of them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be accessed or the write
+    /// fails.
+    pub(crate) fn delete_periodic_time_series(&self, id: &str) -> Result<()> {
+        let cf = self.get_cf_handle(PERIODIC_TIME_SERIES_CF)?;
+        let mut batch = WriteBatch::default();
+        for (from, to) in policy_series_key_ranges(id) {
+            batch.delete_range_cf(cf, from, to);
+        }
+        self.db.write(batch)?;
+        Ok(())
+    }
+
     /// Returns whether the periodic time series column family holds at least
-    /// one window of the sampling policy `id`.
+    /// one window of a series of the time-series generation policy `id`: a
+    /// key that starts with `id 0x00` or with `id /`.
     ///
     /// # Errors
     ///
     /// Returns an error if the column family cannot be accessed or read.
     pub(crate) fn has_periodic_time_series(&self, id: &str) -> Result<bool> {
-        let (from, to) = key_prefix_range(id);
-
         let cf = self.get_cf_handle(PERIODIC_TIME_SERIES_CF)?;
-        let mut read_options = ReadOptions::default();
-        read_options.set_iterate_upper_bound(to);
-        let first = self
-            .db
-            .iterator_cf_opt(
-                cf,
-                read_options,
-                rocksdb::IteratorMode::From(&from, Direction::Forward),
-            )
-            .next()
-            .transpose()
-            .with_context(|| format!("cannot read periodic time series of policy {id}"))?;
-        Ok(first.is_some())
+        for (from, to) in policy_series_key_ranges(id) {
+            let mut read_options = ReadOptions::default();
+            read_options.set_iterate_upper_bound(to);
+            let mut iter = self.db.raw_iterator_cf_opt(cf, read_options);
+            iter.seek(&from);
+            if iter.valid() {
+                return Ok(true);
+            }
+            let status = iter.status();
+            status.with_context(|| format!("cannot read periodic time series of policy {id}"))?;
+        }
+        Ok(false)
     }
 
     #[cfg(test)]
@@ -930,6 +987,36 @@ impl<'db, T> RawEventStore<'db, T> {
         Ok(())
     }
 
+    /// Writes every `(key, value)` row of `rows` in one write, so a reader
+    /// sees either all of them or none of them.
+    ///
+    /// Like `append`, a row replaces whatever its key holds, and of two rows
+    /// with the same key the later one is kept.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write fails, in which case no row is written.
+    pub(crate) fn append_batch(&self, rows: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        let mut batch = WriteBatch::default();
+        for (key, value) in rows {
+            batch.put_cf(self.cf, key, value);
+        }
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    /// Takes a snapshot of the store, which every read made through it sees
+    /// as it was at this moment.
+    #[must_use]
+    pub(crate) fn snapshot(&self) -> StoreSnapshot<'db, T> {
+        StoreSnapshot {
+            db: self.db,
+            cf: self.cf,
+            snapshot: Arc::new(self.db.snapshot()),
+            phantom: PhantomData,
+        }
+    }
+
     /// Appends an event without overwriting a different one stored under the
     /// same key.
     ///
@@ -1116,6 +1203,104 @@ impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
 
     pub fn iter_forward(&self) -> Iter<'db> {
         Iter::new(self.db.iterator_cf(self.cf, rocksdb::IteratorMode::Start))
+    }
+}
+
+/// A point-in-time view of one store: every read made through it sees the
+/// store as it was when `RawEventStore::snapshot` took it, whatever is
+/// written afterwards.
+pub(crate) struct StoreSnapshot<'db, T> {
+    db: &'db DB,
+    cf: &'db ColumnFamily,
+    /// Shared with every iterator made from this view, which keeps it alive
+    /// for as long as any of them reads.
+    snapshot: Arc<Snapshot<'db>>,
+    phantom: PhantomData<T>,
+}
+
+impl<T> StoreSnapshot<'_, T> {
+    fn read_options(&self) -> ReadOptions {
+        let mut read_options = ReadOptions::default();
+        read_options.set_snapshot(&self.snapshot);
+        read_options
+    }
+
+    /// Returns the series IDs the time-series generation policy `policy_id`
+    /// has in this view, in byte order: `policy_id` itself if it has a key,
+    /// then every `policy_id/...` that has one.
+    ///
+    /// Each series is skipped past at its first key, by seeking to
+    /// `id 0x01`, so the rows of a series are not read. A key with no `0x00`
+    /// carries no series ID and is skipped, as retention skips it; so is one
+    /// whose series ID is not UTF-8, which ingest never writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store cannot be read.
+    pub(crate) fn series_ids(&self, policy_id: &str) -> Result<Vec<String>> {
+        let mut ids = Vec::new();
+        for (from, to) in policy_series_key_ranges(policy_id) {
+            let mut read_options = self.read_options();
+            read_options.set_iterate_upper_bound(to);
+            let mut iter = self.db.raw_iterator_cf_opt(self.cf, read_options);
+            iter.seek(&from);
+            while let Some(key) = iter.key() {
+                let next = if let Some(id) = key_first_component(key) {
+                    if let Ok(id) = std::str::from_utf8(id) {
+                        ids.push(id.to_owned());
+                    }
+                    // `id 0x01` sorts after every `id 0x00 ...` key and
+                    // before the key of any other series.
+                    let mut next = id.to_vec();
+                    next.push(0x01);
+                    next
+                } else {
+                    let mut next = key.to_vec();
+                    next.push(0x00);
+                    next
+                };
+                iter.seek(&next);
+            }
+            let status = iter.status();
+            status.with_context(|| format!("cannot read the series of policy {policy_id}"))?;
+        }
+        Ok(ids)
+    }
+}
+
+impl<'db, T: DeserializeOwned> StoreSnapshot<'db, T> {
+    /// Returns the entries of this view from `from` (inclusive) to `to`
+    /// (exclusive), in key order.
+    #[must_use]
+    pub(crate) fn boundary_iter(&self, from: &[u8], to: &[u8]) -> SnapshotIter<'db, T> {
+        let mut read_options = self.read_options();
+        read_options.set_iterate_upper_bound(to);
+        SnapshotIter {
+            inner: BoundaryIter::new(self.db.iterator_cf_opt(
+                self.cf,
+                read_options,
+                rocksdb::IteratorMode::From(from, Direction::Forward),
+            )),
+            _snapshot: Arc::clone(&self.snapshot),
+        }
+    }
+}
+
+/// An iterator over a `StoreSnapshot`.
+///
+/// It holds the snapshot it reads from, so the snapshot outlives it however
+/// long the view that made it lives. `inner` is declared first, so it is
+/// dropped before the snapshot is released.
+pub(crate) struct SnapshotIter<'db, T> {
+    inner: BoundaryIter<'db, T>,
+    _snapshot: Arc<Snapshot<'db>>,
+}
+
+impl<T: DeserializeOwned> Iterator for SnapshotIter<'_, T> {
+    type Item = anyhow::Result<KeyValue<T>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
     }
 }
 
@@ -1614,13 +1799,14 @@ fn retain_cleanup_iteration(
 /// Deletes the periodic time series windows that start in
 /// `[from_timestamp, cutoff)`.
 ///
-/// Series are keyed by sampling-policy ID, then window start, so the
-/// sensor-prefixed range deletes the other column families get match none of
-/// them; walking the names in the `sensors` store would leave every window in
-/// place forever, including those of deleted policies. The IDs are not
-/// recorded anywhere else, so the walk reads them from the keys themselves:
-/// it range-deletes the expired windows of one ID, seeks past every key of
-/// that ID, and repeats until the column family runs out.
+/// Series are keyed by series ID (`P` or `P/<IP>` for a policy `P`), then
+/// window start, so the sensor-prefixed range deletes the other column
+/// families get match none of them; walking the names in the `sensors` store
+/// would leave every window in place forever, including those of deleted
+/// policies. The IDs are not recorded anywhere else, so the walk reads them
+/// from the keys themselves: it range-deletes the expired windows of one ID,
+/// seeks past every key of that ID, and repeats until the column family runs
+/// out.
 ///
 /// A key with no `0x00` byte carries no ID this walk can tell apart from its
 /// timestamp, so it is left alone and skipped. The first such key warns and
@@ -2219,7 +2405,10 @@ mod tests {
         deletion_coordination::CustomerDeletionCoordinator, read_compression_metadata,
         store_compression_metadata,
     };
-    use super::{CUSTOMER_DELETION_JOBS_CF, CustomerDataDeletion, CustomerDataDeletionStatus};
+    use super::{
+        CUSTOMER_DELETION_JOBS_CF, CustomerDataDeletion, CustomerDataDeletionStatus,
+        PeriodicTimeSeries,
+    };
     use crate::datetime::DateTime;
 
     #[test]
@@ -2431,6 +2620,174 @@ mod tests {
         assert!(!db.has_periodic_time_series("1").unwrap());
         assert!(!db.has_periodic_time_series("300").unwrap());
         assert!(!db.has_periodic_time_series("7").unwrap());
+    }
+
+    fn put_series_window(db: &Database, series_id: &str, start: i64) {
+        let mut key = series_id.as_bytes().to_vec();
+        key.push(0x00);
+        key.extend_from_slice(&start.to_be_bytes());
+        let value = bincode::serialize(&PeriodicTimeSeries {
+            id: series_id.to_string(),
+            data: vec![1.0],
+        })
+        .unwrap();
+        db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, &key, &value)
+            .unwrap();
+    }
+
+    /// A policy whose series are all per-IP series has a series, and neither a
+    /// policy whose ID is a prefix of its own nor one whose ID starts with its
+    /// own does.
+    #[test]
+    fn periodic_time_series_probe_covers_the_series_of_a_grouping_policy() {
+        let (_dir, db) = setup_db();
+        put_series_window(&db, "42/10.0.0.1", 1);
+        put_series_window(&db, "42/2001:db8::1", 1);
+
+        assert!(db.has_periodic_time_series("42").unwrap());
+        assert!(!db.has_periodic_time_series("4").unwrap());
+        assert!(!db.has_periodic_time_series("420").unwrap());
+
+        // The probe looks at key prefixes only, so a `42/` key counts even
+        // though it carries no series ID.
+        let (_dir, db) = setup_db();
+        db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, b"42/", b"bare")
+            .unwrap();
+        assert!(db.has_periodic_time_series("42").unwrap());
+    }
+
+    #[test]
+    fn periodic_time_series_deletion_covers_every_series_of_the_policy_only() {
+        let (_dir, db) = setup_db();
+        let owned = ["42", "42/10.0.0.1", "42/10.0.0.2"];
+        let kept = ["4", "4/10.0.0.1", "420", "420/10.0.0.1", "42\x01"];
+        for id in owned.iter().chain(&kept) {
+            put_series_window(&db, id, 1);
+            put_series_window(&db, id, 2);
+        }
+
+        db.delete_periodic_time_series("42").unwrap();
+
+        let store = db.periodic_time_series_store().unwrap();
+        let ids: Vec<String> = store
+            .iter_forward()
+            .map(|item| {
+                let (key, _) = item.unwrap();
+                let id = super::key_first_component(&key).unwrap();
+                String::from_utf8(id.to_vec()).unwrap()
+            })
+            .collect();
+        let mut expected: Vec<String> = kept
+            .iter()
+            .flat_map(|id| [id.to_string(), id.to_string()])
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(ids, expected);
+    }
+
+    #[test]
+    fn series_ids_lists_every_series_of_the_policy_in_byte_order() {
+        let (_dir, db) = setup_db();
+        for id in [
+            "42/10.0.0.2",
+            "42",
+            "42/10.0.0.1",
+            "42/2001:db8::1",
+            "420/10.0.0.1",
+            "4",
+            "4/10.0.0.1",
+            "43",
+        ] {
+            put_series_window(&db, id, 1);
+            put_series_window(&db, id, 2);
+        }
+        // Neither carries a series ID.
+        db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, b"42/", b"bare")
+            .unwrap();
+        db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, b"42/x", b"bare")
+            .unwrap();
+        // Ingest never writes a series ID that is not UTF-8.
+        let mut key = b"42/\xff\x00".to_vec();
+        key.extend_from_slice(&1_i64.to_be_bytes());
+        db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, &key, b"not utf-8")
+            .unwrap();
+
+        let store = db.periodic_time_series_store().unwrap();
+        let snapshot = store.snapshot();
+        assert_eq!(
+            snapshot.series_ids("42").unwrap(),
+            ["42", "42/10.0.0.1", "42/10.0.0.2", "42/2001:db8::1"]
+        );
+        assert_eq!(snapshot.series_ids("4").unwrap(), ["4", "4/10.0.0.1"]);
+        assert_eq!(snapshot.series_ids("420").unwrap(), ["420/10.0.0.1"]);
+        assert_eq!(snapshot.series_ids("7").unwrap(), Vec::<String>::new());
+    }
+
+    /// A snapshot sees neither a row nor a series written after it was taken,
+    /// while the store does.
+    #[test]
+    fn a_snapshot_does_not_see_later_writes() {
+        let (_dir, db) = setup_db();
+        put_series_window(&db, "42/10.0.0.1", 1);
+        let store = db.periodic_time_series_store().unwrap();
+        let snapshot = store.snapshot();
+
+        put_series_window(&db, "42/10.0.0.1", 2);
+        put_series_window(&db, "42/10.0.0.2", 1);
+        put_series_window(&db, "42", 1);
+
+        assert_eq!(snapshot.series_ids("42").unwrap(), ["42/10.0.0.1"]);
+        let mut from = b"42/10.0.0.1\x00".to_vec();
+        let mut to = from.clone();
+        from.extend_from_slice(&0_i64.to_be_bytes());
+        to.extend_from_slice(&i64::MAX.to_be_bytes());
+        let read: Vec<Vec<u8>> = snapshot
+            .boundary_iter(&from, &to)
+            .map(|item| item.unwrap().0.to_vec())
+            .collect();
+        assert_eq!(read.len(), 1);
+        assert_eq!(
+            store.snapshot().series_ids("42").unwrap(),
+            ["42", "42/10.0.0.1", "42/10.0.0.2"]
+        );
+    }
+
+    #[test]
+    fn append_batch_writes_every_row_and_keeps_the_last_of_one_key() {
+        let (_dir, db) = setup_db();
+        let store = db.periodic_time_series_store().unwrap();
+        let key = |id: &str, start: i64| {
+            let mut key = id.as_bytes().to_vec();
+            key.push(0x00);
+            key.extend_from_slice(&start.to_be_bytes());
+            key
+        };
+        store.append(&key("42", 1), b"old").unwrap();
+
+        store
+            .append_batch(&[
+                (key("42/10.0.0.1", 1), b"a".to_vec()),
+                (key("42", 1), b"marker".to_vec()),
+                (key("42/10.0.0.2", 1), b"b".to_vec()),
+                (key("42/10.0.0.2", 1), b"c".to_vec()),
+            ])
+            .unwrap();
+
+        let rows: Vec<(Vec<u8>, Vec<u8>)> = store
+            .iter_forward()
+            .map(|item| {
+                let (key, value) = item.unwrap();
+                (key.to_vec(), value.to_vec())
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (key("42", 1), b"marker".to_vec()),
+                (key("42/10.0.0.1", 1), b"a".to_vec()),
+                (key("42/10.0.0.2", 1), b"c".to_vec()),
+            ]
+        );
     }
 
     fn insert_conn(store: &RawEventStore<Conn>, sensor: &str, timestamp: i64, value: &[u8]) {
@@ -3984,7 +4341,7 @@ mod tests {
 
         let mut kept = Vec::new();
         let mut expired = Vec::new();
-        for id in ["1", "3", "10"] {
+        for id in ["1", "3", "10", "3/10.0.0.1", "3/2001:db8::1", "10/10.0.0.1"] {
             expired.push(insert_series(&db, id, cutoff - 2 * an_hour));
             expired.push(insert_series(&db, id, cutoff - 1));
             kept.push(insert_series(&db, id, cutoff));
