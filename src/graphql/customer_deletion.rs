@@ -3349,17 +3349,21 @@ mod tests {
 
     #[test]
     fn sensor_deletion_only_runs_after_all_event_deletions_succeed() {
+        let delete_series = |id: &str| -> anyhow::Result<()> {
+            assert_eq!(id, "3");
+            Ok(())
+        };
         let sensor_delete_count = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&sensor_delete_count);
         let result = delete_customer_data_with(
             &["piglet.node1.example.test".to_string()],
-            &[],
+            &["3".to_string()],
             |service_fqdn, cf_names| {
                 assert_eq!(service_fqdn, "piglet.node1.example.test");
                 assert_eq!(cf_names, PIGLET_COLUMN_FAMILIES);
                 anyhow::bail!("injected event deletion failure");
             },
-            |_| Ok(()),
+            delete_series,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
                 Ok(())
@@ -3387,6 +3391,21 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(sensor_delete_count.load(Ordering::SeqCst), 0);
+
+        // Once every event range and series is deleted, the sensor is too.
+        let count = Arc::clone(&sensor_delete_count);
+        delete_customer_data_with(
+            &["piglet.node1.example.test".to_string()],
+            &["3".to_string()],
+            |_, _| Ok(()),
+            delete_series,
+            move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(sensor_delete_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

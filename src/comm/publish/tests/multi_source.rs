@@ -19,6 +19,7 @@ use crate::comm::publish::multi_source::{
     EventSink, OnBreak, PEER_RESPONSE_TIMEOUT, Routing, SourceEvent, merge_source_events,
     process_multi_source_range, process_raw_data_with_status, read_time_series,
 };
+use crate::storage::PERIODIC_TIME_SERIES_CF;
 
 /// A short peer timeout, so a test that waits one out stays quick.
 const SHORT_PEER_TIMEOUT: StdDuration = StdDuration::from_millis(500);
@@ -824,6 +825,124 @@ async fn time_series_reads_see_only_the_snapshot_taken_when_served() {
             (3, "42"),
             (3, "42/10.0.0.1"),
         ]
+    );
+}
+
+/// With `OnBreak::Stop`, a series that breaks off at its first row ends the
+/// read before anything is written.
+#[tokio::test]
+async fn a_stopping_time_series_read_ends_at_a_series_that_breaks_off_first() {
+    let temp_dir = tempfile::tempdir().expect("create a temp dir");
+    let db = Database::open(temp_dir.path(), &DbOptions::default()).expect("open a database");
+    insert_time_series(&db, "42/10.0.0.1", &[1, 2]);
+    let store = db
+        .periodic_time_series_store()
+        .expect("open the time-series store");
+    store
+        .append(&gen_network_event_key("42", None, 1), UNDECODABLE)
+        .expect("write an undecodable value");
+
+    let mut sink = SeriesSink {
+        db: db.clone(),
+        late_rows: Vec::new(),
+        written: Vec::new(),
+    };
+    let failures = read_time_series(
+        &store.snapshot(),
+        &[(POLICY.to_string(), 0)],
+        MULTI_SOURCE_END,
+        100,
+        OnBreak::Stop,
+        &mut sink,
+    )
+    .await
+    .expect("an in-memory sink does not fail");
+
+    assert_eq!(sink.written, Vec::new());
+    let [Some(reason)] = failures.as_slice() else {
+        panic!("the policy should fail, got {failures:?}");
+    };
+    assert!(
+        reason.contains("42"),
+        "the reason {reason:?} should name 42"
+    );
+}
+
+/// A key under a series that is too short to end in a window start breaks
+/// that series off, and the policy's other series are still read.
+#[tokio::test]
+async fn a_time_series_read_fails_a_series_key_without_a_window_start() {
+    let temp_dir = tempfile::tempdir().expect("create a temp dir");
+    let db = Database::open(temp_dir.path(), &DbOptions::default()).expect("open a database");
+    insert_time_series(&db, "42/10.0.0.1", &[1]);
+    db.put_cf_for_test(
+        PERIODIC_TIME_SERIES_CF,
+        b"42\x00\x01",
+        &gen_periodic_time_series_raw_event(),
+    )
+    .expect("write a short key");
+    let store = db
+        .periodic_time_series_store()
+        .expect("open the time-series store");
+
+    let mut sink = SeriesSink {
+        db: db.clone(),
+        late_rows: Vec::new(),
+        written: Vec::new(),
+    };
+    let failures = read_time_series(
+        &store.snapshot(),
+        &[(POLICY.to_string(), 0)],
+        i64::MAX,
+        100,
+        OnBreak::Continue,
+        &mut sink,
+    )
+    .await
+    .expect("an in-memory sink does not fail");
+
+    assert_eq!(sink.written, vec![(1, "42/10.0.0.1".to_string())]);
+    let [Some(reason)] = failures.as_slice() else {
+        panic!("the policy should fail, got {failures:?}");
+    };
+    assert!(
+        reason.contains("series 42 has a key without a timestamp"),
+        "unexpected reason {reason:?}"
+    );
+}
+
+/// A multi-source time-series read whose store cannot be opened fails as a
+/// whole and sends no frame.
+#[tokio::test]
+async fn multi_source_time_series_read_fails_whole_when_the_store_cannot_be_opened() {
+    let mut fixture = DirectFixture::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1));
+    fixture
+        .db
+        .drop_cf_for_test(PERIODIC_TIME_SERIES_CF)
+        .expect("drop the time-series column family");
+
+    let request = multi_source_request("timeseries", &[(POLICY, 0)], 100);
+    let body = bincode::serialize(&request).expect("encode the request");
+    let (mut send, client_conn) = open_range_stream("time.series.no.store").await;
+    let token = CancellationToken::new();
+    process_multi_source_range(
+        &mut send,
+        &fixture.db,
+        &body,
+        &fixture.routing(&token, SHORT_PEER_TIMEOUT),
+    )
+    .await
+    .expect("serve the request");
+    let mut recv = client_conn.accept_uni().await.expect("accept the response");
+    let (events, status) = read_status_response::<f64>(&mut recv).await;
+
+    assert_eq!(events, Vec::new());
+    let Err(reason) = status else {
+        panic!("the read should fail as a whole, got {status:?}");
+    };
+    assert!(
+        reason.contains("failed to open the periodic time series store"),
+        "unexpected reason {reason:?}"
     );
 }
 

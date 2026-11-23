@@ -620,19 +620,13 @@ impl Database {
         for (from, to) in policy_series_key_ranges(id) {
             let mut read_options = ReadOptions::default();
             read_options.set_iterate_upper_bound(to);
-            let first = self
-                .db
-                .iterator_cf_opt(
-                    cf,
-                    read_options,
-                    rocksdb::IteratorMode::From(&from, Direction::Forward),
-                )
-                .next()
-                .transpose()
-                .with_context(|| format!("cannot read periodic time series of policy {id}"))?;
-            if first.is_some() {
+            let mut iter = self.db.raw_iterator_cf_opt(cf, read_options);
+            iter.seek(&from);
+            if iter.valid() {
                 return Ok(true);
             }
+            let status = iter.status();
+            status.with_context(|| format!("cannot read periodic time series of policy {id}"))?;
         }
         Ok(false)
     }
@@ -1267,9 +1261,8 @@ impl<T> StoreSnapshot<'_, T> {
                 };
                 iter.seek(&next);
             }
-            iter.status().with_context(|| {
-                format!("cannot read the periodic time series of policy {policy_id}")
-            })?;
+            let status = iter.status();
+            status.with_context(|| format!("cannot read the series of policy {policy_id}"))?;
         }
         Ok(ids)
     }
@@ -2712,6 +2705,11 @@ mod tests {
         db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, b"42/", b"bare")
             .unwrap();
         db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, b"42/x", b"bare")
+            .unwrap();
+        // Ingest never writes a series ID that is not UTF-8.
+        let mut key = b"42/\xff\x00".to_vec();
+        key.extend_from_slice(&1_i64.to_be_bytes());
+        db.put_cf_for_test(super::PERIODIC_TIME_SERIES_CF, &key, b"not utf-8")
             .unwrap();
 
         let store = db.periodic_time_series_store().unwrap();

@@ -491,14 +491,16 @@ async fn serve_multi_source_range(
     if let Err(reason) = check_sources(&request.sources) {
         return Ok(Err(reason));
     }
+    // Time series are read from a snapshot of their own store, which
+    // `serve_time_series_sources` opens.
+    if RawEventKind::from_str(&request.kind) == Ok(RawEventKind::PeriodicTimeSeries) {
+        return serve_time_series_sources(send, db, &request).await;
+    }
     let kind_store = match open_kind_store(db, &request.kind) {
         Ok(kind_store) => kind_store,
         Err(reason) => return Ok(Err(reason)),
     };
     let layout = kind_store.layout;
-    if layout == KindLayout::TimeSeries {
-        return serve_time_series_sources(send, db, &request).await;
-    }
     let mid_key = (layout == KindLayout::Log).then_some(request.kind.as_bytes());
 
     let mut statuses: Vec<Option<SourceStatus>> = vec![None; request.sources.len()];

@@ -2421,6 +2421,55 @@ async fn a_time_series_channel_close_is_acknowledged_after_the_frame_is_written(
     harness.shutdown(b"done").await;
 }
 
+/// A channel-close entry in a time-series frame whose ACK cannot be sent fails
+/// the stream, after the frame's rows have been written.
+#[tokio::test]
+async fn a_time_series_channel_close_that_cannot_be_acknowledged_fails_the_stream() {
+    const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
+    const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
+
+    let (logs, _guard) = capture_logs();
+    let harness = TestHarness::new().await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::PeriodicTimeSeries)
+        .await
+        .unwrap();
+    // Stopped before the frame is sent, so no ACK can be written to it.
+    recv.stop(quinn::VarInt::from_u32(0))
+        .expect("stop the ACK stream");
+    let start = next_timestamp();
+    let frame = [
+        (start, series_row("42/10.0.0.1", 1.0)),
+        (CHANNEL_CLOSE_TIMESTAMP, CHANNEL_CLOSE_MESSAGE.to_vec()),
+        (start, series_row("42", 2.0)),
+    ];
+    send_raw(&mut send, &bincode::serialize(&frame[..]).unwrap())
+        .await
+        .unwrap();
+
+    timeout(std::time::Duration::from_secs(5), send.stopped())
+        .await
+        .expect("the handler should stop reading the stream")
+        .expect("the connection should stay open");
+    let stored: Vec<(String, i64)> = stored_series(&harness.db)
+        .into_iter()
+        .map(|(id, start, _)| (id, start))
+        .collect();
+    assert_eq!(
+        stored,
+        vec![
+            ("42".to_string(), start),
+            ("42/10.0.0.1".to_string(), start)
+        ]
+    );
+    let logs = captured(&logs);
+    assert!(
+        logs.contains("Failed to send ack timestamp"),
+        "the failed ACK should be reported, got {logs:?}"
+    );
+    harness.shutdown(b"done").await;
+}
+
 /// Other kinds are still stored event by event: the events of a frame before
 /// one that does not decode stay stored.
 #[tokio::test]
