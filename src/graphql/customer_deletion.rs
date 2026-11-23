@@ -33,7 +33,6 @@ use crate::{
     datetime::DateTime,
     storage::{
         CustomerDataDeletion, CustomerDataDeletionStatus, CustomerDeletionJobStore, Database,
-        PERIODIC_TIME_SERIES_CF,
         deletion_coordination::{CustomerDeletionCoordinator, DeletionBlocked, DeletionGuard},
     },
 };
@@ -662,18 +661,19 @@ impl CustomerDeletionMutation {
     //
     // None of the three is reached by a node that holds neither a job for this
     // customer, nor a sensor named in the request, nor a periodic time series
-    // of a sampling policy named in it. Such a node would have nothing to do
-    // even with the store to itself, so #1675 has it answer
+    // of a time-series generation policy named in it. Such a node would have
+    // nothing to do even with the store to itself, so #1675 has it answer
     // `NO_LOCAL_TARGET_ON_THIS_NODE` ahead of the maintenance state: telling a
     // caller to retry after shutdown or after retention would send it back for
     // an answer that can never change.
     //
     // Periodic time series carry no sensor or customer, so they are deleted by
-    // the sampling-policy IDs in `periodicTimeSeriesIds`, which only the
-    // Central Manager can map to a customer. The Time Series Generators that
-    // produce those IDs must have stopped producing them before the request is
-    // made: a window written after the deletion is not deleted by it, and is
-    // left for retention to remove.
+    // the time-series-generation-policy IDs in `periodicTimeSeriesIds`, which
+    // only the Central Manager can map to a customer. Each ID `P` covers every
+    // series of that policy: `P` itself and every `P/<IP>`. The Time Series
+    // Generators that produce those IDs must have stopped producing them before
+    // the request is made: a window written after the deletion is not deleted
+    // by it, and is left for retention to remove.
     async fn delete_customer_data(
         &self,
         ctx: &Context<'_>,
@@ -895,7 +895,8 @@ async fn local_targets(provided: &[String], ingest_sensors: &IngestSensors) -> V
 }
 
 /// Returns whether this node holds a periodic time series window of any of
-/// `ids`.
+/// the time-series generation policies `ids`, that is, a window of a series
+/// `P` or `P/<IP>` for some `P` in `ids`.
 ///
 /// # Errors
 ///
@@ -995,7 +996,8 @@ fn restore_previous_job(
 /// Validates the two target lists of a deletion request, deduplicating each.
 ///
 /// `serviceFqdnList` may be empty only when `periodicTimeSeriesIds` is not: a
-/// customer with sampling policies but no Sensor has no event service name.
+/// customer with time-series generation policies but no Sensor has no event
+/// service name.
 fn validate_deletion_targets(
     service_fqdn_list: Vec<String>,
     periodic_time_series_ids: Option<Vec<String>>,
@@ -1011,12 +1013,13 @@ fn validate_deletion_targets(
     Ok((service_fqdn_list, periodic_time_series_ids))
 }
 
-/// Validates the Central Manager's sampling-policy IDs, keeping the first of
-/// each duplicate.
+/// Validates the Central Manager's time-series-generation-policy IDs, keeping
+/// the first of each duplicate.
 ///
 /// An ID is one or more ASCII decimal digits, so it can contain neither the
-/// key separator `0x00` nor anything that would make its key range reach
-/// another ID's. Leading zeros are kept: `"03"` and `"3"` are distinct IDs.
+/// key separator `0x00` nor the series separator `/`, nor anything else that
+/// would make its key ranges reach another ID's. Leading zeros are kept:
+/// `"03"` and `"3"` are distinct IDs.
 fn validate_periodic_time_series_ids(ids: Vec<String>) -> Result<Vec<String>> {
     let mut seen = HashSet::new();
     let mut validated = Vec::with_capacity(ids.len());
@@ -1067,20 +1070,23 @@ fn delete_customer_data_from_db(
         service_fqdn_list,
         periodic_time_series_ids,
         |key_prefix, cf_names| db.delete_customer_event_ranges(key_prefix, cf_names),
+        |id| db.delete_periodic_time_series(id),
         |service_fqdn| db.sensors_store()?.delete(service_fqdn),
     )
 }
 
 /// Deletes the event ranges of every service FQDN and the periodic time series
-/// of every sampling-policy ID, then the sensors.
+/// of every time-series-generation-policy ID, then the sensors.
 ///
-/// A series is keyed by its ID the way an event is keyed by its sensor, so
-/// `delete_event_ranges` removes `[id 0x00, id 0x01)` from the periodic time
-/// series column family just as it removes a sensor's range elsewhere.
+/// A series is keyed by its series ID, `P` or `P/<IP>` for a policy `P`, so
+/// `delete_periodic_time_series` removes every key that starts with `P 0x00`
+/// or with `P /` from the periodic time series column family, and nothing of
+/// another policy.
 fn delete_customer_data_with(
     service_fqdn_list: &[String],
     periodic_time_series_ids: &[String],
     mut delete_event_ranges: impl FnMut(&str, &[&str]) -> AnyhowResult<()>,
+    mut delete_periodic_time_series: impl FnMut(&str) -> AnyhowResult<()>,
     mut delete_sensor: impl FnMut(&str) -> AnyhowResult<()>,
 ) -> AnyhowResult<()> {
     for service_fqdn in service_fqdn_list {
@@ -1094,7 +1100,7 @@ fn delete_customer_data_with(
     }
 
     for id in periodic_time_series_ids {
-        delete_event_ranges(id, &[PERIODIC_TIME_SERIES_CF])
+        delete_periodic_time_series(id)
             .with_context(|| format!("cannot delete periodic time series of policy {id}"))?;
     }
 
@@ -2751,6 +2757,46 @@ mod tests {
         assert!(series_present(&schema.db, "70"));
     }
 
+    /// A policy whose series are all per-IP series, `42/<IP>`, is a local
+    /// target, and its deletion removes them; a policy whose ID is a prefix of
+    /// `42` or has `42` as a prefix is not.
+    #[tokio::test]
+    async fn grouped_series_are_a_local_target_of_their_policy_only() {
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        put_series(&schema.db, &["42/10.0.0.1", "42/10.0.0.2"]);
+
+        for (policy, customer_id) in [("4", 130), ("420", 131)] {
+            let response = schema
+                .execute(&delete_customer_data_with_series_mutation(
+                    &[],
+                    &[policy],
+                    customer_id,
+                ))
+                .await;
+            assert!(response.errors.is_empty(), "{:?}", response.errors);
+            assert_eq!(
+                response.data.to_string(),
+                "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
+            );
+            assert_eq!(job_status(&schema.db, customer_id), None);
+        }
+
+        let response = schema
+            .execute(&delete_customer_data_with_series_mutation(
+                &[],
+                &["42"],
+                132,
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        let completed = wait_for_terminal_job(&schema.db, 132).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert_eq!(completed.periodic_time_series_ids, ["42"]);
+        assert!(!series_present(&schema.db, "42/10.0.0.1"));
+        assert!(!series_present(&schema.db, "42/10.0.0.2"));
+    }
+
     #[tokio::test]
     async fn neither_sensor_nor_series_is_no_local_target() {
         let schema = TestSchema::new_with_ingest_sensors(&[]);
@@ -3181,8 +3227,10 @@ mod tests {
             db.put_cf_for_test(cf, &reproduce_key, b"excluded").unwrap();
         }
         let timestamp = 1_i64.to_be_bytes();
-        let owned_series = ["3", "10"].map(|id| event_key(id, &timestamp));
-        let other_series = ["1", "30", "03"].map(|id| event_key(id, &timestamp));
+        let owned_series =
+            ["3", "10", "3/10.0.0.1", "10/2001:db8::1"].map(|id| event_key(id, &timestamp));
+        let other_series =
+            ["1", "30", "03", "30/10.0.0.1", "1/10.0.0.1"].map(|id| event_key(id, &timestamp));
         for key in owned_series.iter().chain(&other_series) {
             db.put_cf_for_test(PERIODIC_TIME_SERIES_CF, key, b"series")
                 .unwrap();
@@ -3234,6 +3282,56 @@ mod tests {
         assert!(remaining_sensors.contains(other));
     }
 
+    /// A policy's deletion covers its own series, `42` and every `42/<IP>`,
+    /// and no series of a policy whose ID it is a prefix of or that is a
+    /// prefix of it.
+    #[test]
+    fn series_deletion_covers_every_series_of_the_policy_and_no_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let timestamps = [1_i64, 2].map(i64::to_be_bytes);
+        let keys = |ids: &[&str]| -> Vec<Vec<u8>> {
+            ids.iter()
+                .flat_map(|id| timestamps.iter().map(|timestamp| event_key(id, timestamp)))
+                .collect()
+        };
+        let owned = keys(&["42", "42/10.0.0.1", "42/10.0.0.2", "42/2001:db8::1"]);
+        let kept = keys(&[
+            "420",
+            "420/10.0.0.1",
+            "4",
+            "4/10.0.0.1",
+            "4/2",
+            "042/10.0.0.1",
+        ]);
+        for key in owned.iter().chain(&kept) {
+            db.put_cf_for_test(PERIODIC_TIME_SERIES_CF, key, b"series")
+                .unwrap();
+        }
+
+        delete_customer_data_from_db(&db, &[], &["42".to_string()]).unwrap();
+
+        for key in &owned {
+            assert!(
+                db.get_cf_for_test(PERIODIC_TIME_SERIES_CF, key)
+                    .unwrap()
+                    .is_none(),
+                "{key:?} should be deleted"
+            );
+        }
+        for key in &kept {
+            assert!(
+                db.get_cf_for_test(PERIODIC_TIME_SERIES_CF, key)
+                    .unwrap()
+                    .is_some(),
+                "{key:?} should be kept"
+            );
+        }
+        assert!(!db.has_periodic_time_series("42").unwrap());
+        assert!(db.has_periodic_time_series("420").unwrap());
+        assert!(db.has_periodic_time_series("4").unwrap());
+    }
+
     #[test]
     fn missing_target_data_is_a_successful_no_op() {
         let dir = tempfile::tempdir().unwrap();
@@ -3261,6 +3359,7 @@ mod tests {
                 assert_eq!(cf_names, PIGLET_COLUMN_FAMILIES);
                 anyhow::bail!("injected event deletion failure");
             },
+            |_| Ok(()),
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
                 Ok(())
@@ -3273,12 +3372,13 @@ mod tests {
         let result = delete_customer_data_with(
             &["piglet.node1.example.test".to_string()],
             &["3".to_string()],
-            |key_prefix, cf_names| {
-                if key_prefix == "3" {
-                    assert_eq!(cf_names, [PERIODIC_TIME_SERIES_CF]);
-                    anyhow::bail!("injected series deletion failure");
-                }
+            |key_prefix, _| {
+                assert_ne!(key_prefix, "3", "a series is not deleted as an event range");
                 Ok(())
+            },
+            |id| {
+                assert_eq!(id, "3");
+                anyhow::bail!("injected series deletion failure");
             },
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);

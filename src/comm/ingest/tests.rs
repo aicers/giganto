@@ -2291,6 +2291,164 @@ async fn periodic_time_series_and_packet_writes_still_overwrite() {
     harness.shutdown(b"done").await;
 }
 
+fn series_row(id: &str, value: f64) -> Vec<u8> {
+    bincode::serialize(&PeriodicTimeSeries {
+        id: id.to_string(),
+        data: vec![value],
+    })
+    .unwrap()
+}
+
+/// Returns each stored key's series ID and window start, with its value, in
+/// key order.
+fn stored_series(db: &Database) -> Vec<(String, i64, Vec<u8>)> {
+    stored_kvs(&db.periodic_time_series_store().unwrap())
+        .into_iter()
+        .map(|(key, value)| {
+            let id_len = key.iter().position(|&b| b == 0).expect("a series key");
+            let id = String::from_utf8(key[..id_len].to_vec()).unwrap();
+            (id, key_timestamp(&key), value)
+        })
+        .collect()
+}
+
+/// Waits for the handler to end the stream without acknowledging anything.
+async fn assert_stream_ends_without_ack(recv: &mut quinn::RecvStream) {
+    let rest = timeout(std::time::Duration::from_secs(5), recv.read_to_end(64))
+        .await
+        .expect("handler should finish the response stream")
+        .expect("handler should send FIN without a reset or excessive data");
+    assert!(rest.is_empty(), "nothing may be acknowledged, got {rest:?}");
+}
+
+/// A frame's per-IP rows and its window-completion marker are stored
+/// together, each under its series ID, and acknowledged once written.
+#[tokio::test]
+async fn a_time_series_frame_is_stored_whole() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::PeriodicTimeSeries)
+        .await
+        .unwrap();
+    let start = next_timestamp();
+    let frame = [
+        (start, series_row("42/10.0.0.1", 1.0)),
+        (start, series_row("42/2001:db8::1", 2.0)),
+        (start, series_row("42", 3.0)),
+    ];
+
+    let ack = send_batch_and_receive_ack(&mut send, &mut recv, &frame).await;
+
+    assert_eq!(ack, start);
+    assert_eq!(
+        stored_series(&harness.db),
+        vec![
+            ("42".to_string(), start, frame[2].1.clone()),
+            ("42/10.0.0.1".to_string(), start, frame[0].1.clone()),
+            ("42/2001:db8::1".to_string(), start, frame[1].1.clone()),
+        ]
+    );
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+/// A row that does not decode leaves every row of its frame unstored, rows
+/// before it included, and fails the stream with nothing acknowledged.
+#[tokio::test]
+async fn a_time_series_frame_with_an_undecodable_row_stores_none_of_its_rows() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::PeriodicTimeSeries)
+        .await
+        .unwrap();
+    let start = next_timestamp();
+    let frame = [
+        (start, series_row("42/10.0.0.1", 1.0)),
+        (start, series_row("42", 2.0)),
+        (start, vec![0xff]),
+    ];
+    send_raw(&mut send, &bincode::serialize(&frame[..]).unwrap())
+        .await
+        .unwrap();
+
+    assert_stream_ends_without_ack(&mut recv).await;
+    assert_eq!(stored_series(&harness.db), Vec::new());
+    harness.shutdown(b"done").await;
+}
+
+/// A channel-close entry in a time-series frame is acknowledged only once the
+/// frame's rows are written.
+#[tokio::test]
+async fn a_time_series_channel_close_is_acknowledged_after_the_frame_is_written() {
+    const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
+    const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
+
+    let harness = TestHarness::new().await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::PeriodicTimeSeries)
+        .await
+        .unwrap();
+    let start = next_timestamp();
+    let frame = [
+        (start, series_row("42/10.0.0.1", 1.0)),
+        (CHANNEL_CLOSE_TIMESTAMP, CHANNEL_CLOSE_MESSAGE.to_vec()),
+        (start, series_row("42", 2.0)),
+    ];
+    send_raw(&mut send, &bincode::serialize(&frame[..]).unwrap())
+        .await
+        .unwrap();
+
+    let ack = with_timeout(
+        "receive_ack_timestamp",
+        std::time::Duration::from_secs(5),
+        receive_ack_timestamp(&mut recv),
+    )
+    .await
+    .expect("receive ack");
+    assert_eq!(ack, CHANNEL_CLOSE_TIMESTAMP);
+    let stored: Vec<(String, i64)> = stored_series(&harness.db)
+        .into_iter()
+        .map(|(id, start, _)| (id, start))
+        .collect();
+    assert_eq!(
+        stored,
+        vec![
+            ("42".to_string(), start),
+            ("42/10.0.0.1".to_string(), start)
+        ]
+    );
+    send.finish().expect("failed to shutdown stream");
+    harness.shutdown(b"done").await;
+}
+
+/// Other kinds are still stored event by event: the events of a frame before
+/// one that does not decode stay stored.
+#[tokio::test]
+async fn a_log_frame_keeps_the_events_before_an_undecodable_one() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, RawEventKind::Log)
+        .await
+        .unwrap();
+    let timestamp = next_timestamp();
+    let log = bincode::serialize(&Log {
+        kind: "log_kind".to_string(),
+        log: vec![1],
+    })
+    .unwrap();
+    let frame = [(timestamp, log.clone()), (timestamp + 1, vec![0xff])];
+    send_raw(&mut send, &bincode::serialize(&frame[..]).unwrap())
+        .await
+        .unwrap();
+
+    assert_stream_ends_without_ack(&mut recv).await;
+    assert_eq!(
+        stored_timestamps_and_values(&harness.db.log_store().unwrap()),
+        vec![(timestamp, log)]
+    );
+    harness.shutdown(b"done").await;
+}
+
 #[tokio::test]
 async fn a_collision_at_the_largest_timestamp_is_dropped_and_logged() {
     let (logs, _guard) = capture_logs();

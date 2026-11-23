@@ -16,8 +16,8 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use super::*;
 use crate::comm::publish::multi_source::{
-    EventSink, PEER_RESPONSE_TIMEOUT, Routing, SourceEvent, merge_source_events,
-    process_multi_source_range, process_raw_data_with_status,
+    EventSink, OnBreak, PEER_RESPONSE_TIMEOUT, Routing, SourceEvent, merge_source_events,
+    process_multi_source_range, process_raw_data_with_status, read_time_series,
 };
 
 /// A short peer timeout, so a test that waits one out stays quick.
@@ -493,6 +493,338 @@ async fn multi_source_range_reads_time_series_by_policy_id() {
         })
     })
     .await;
+}
+
+// ---------------------------------------------------------------------------
+// Time series by time-series-generation-policy ID
+// ---------------------------------------------------------------------------
+
+/// A grouping policy: its window-completion marker `42` and two per-IP series.
+const POLICY: &str = "42";
+/// Another grouping policy, with a marker `7` and one per-IP series.
+const OTHER_POLICY: &str = "7";
+
+/// Stores the series of `POLICY`, and a series of policy `420`, which a read
+/// of `POLICY` must not cover.
+fn insert_policy_series(db: &Database) {
+    insert_time_series(db, "42", &[1, 3]);
+    insert_time_series(db, "42/10.0.0.1", &[1, 2]);
+    insert_time_series(db, "42/10.0.0.2", &[1, 3]);
+    insert_time_series(db, "420/10.0.0.1", &[1, 2]);
+    insert_time_series(db, "4/10.0.0.1", &[1]);
+}
+
+fn insert_other_policy_series(db: &Database) {
+    insert_time_series(db, "7", &[1, 2]);
+    insert_time_series(db, "7/10.0.0.1", &[1]);
+}
+
+/// Every row of `POLICY` from `insert_policy_series`, in the order a read
+/// returns them.
+const POLICY_ROWS: [(i64, &str); 6] = [
+    (1, "42"),
+    (1, "42/10.0.0.1"),
+    (1, "42/10.0.0.2"),
+    (2, "42/10.0.0.1"),
+    (3, "42"),
+    (3, "42/10.0.0.2"),
+];
+
+fn series_order(events: &[Event<f64>]) -> Vec<(i64, &str)> {
+    events
+        .iter()
+        .map(|(timestamp, source, _)| (*timestamp, source.as_str()))
+        .collect()
+}
+
+async fn time_series_read(
+    harness: &TestHarness,
+    sources: &[(&str, i64)],
+    count: usize,
+) -> (Vec<Event<f64>>, Vec<(String, SourceStatus)>) {
+    let request = multi_source_request("timeseries", sources, count);
+    let (events, status) =
+        request_with_status::<f64, _>(&harness.publish, MessageCode::MultiSourceRange, request)
+            .await;
+    (events, statuses(status))
+}
+
+#[tokio::test]
+async fn multi_source_range_reads_every_series_of_a_policy() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_policy_series(&harness.db);
+
+            let (events, statuses) = time_series_read(harness, &[(POLICY, 0)], 100).await;
+
+            assert_eq!(series_order(&events), POLICY_ROWS);
+            let expected =
+                bincode::deserialize::<PeriodicTimeSeries>(&gen_periodic_time_series_raw_event())
+                    .expect("decode the stored series")
+                    .data;
+            assert!(events.iter().all(|(_, _, data)| *data == expected));
+            assert_eq!(statuses, served(&[POLICY]));
+
+            // A later start applies to every series of the policy.
+            let (events, _) = time_series_read(harness, &[(POLICY, 2)], 100).await;
+            assert_eq!(series_order(&events), POLICY_ROWS[3..]);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn multi_source_range_completes_the_window_start_at_the_count() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_policy_series(&harness.db);
+
+            for (count, expected) in [
+                (1, &POLICY_ROWS[..3]),
+                (2, &POLICY_ROWS[..3]),
+                (4, &POLICY_ROWS[..4]),
+                (5, &POLICY_ROWS[..]),
+            ] {
+                let (events, statuses) = time_series_read(harness, &[(POLICY, 0)], count).await;
+                assert_eq!(series_order(&events), expected, "count {count}");
+                assert_eq!(statuses, served(&[POLICY]), "count {count}");
+            }
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn multi_source_range_orders_policies_at_one_window_start_by_request() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_policy_series(&harness.db);
+            insert_other_policy_series(&harness.db);
+
+            let (events, statuses) =
+                time_series_read(harness, &[(OTHER_POLICY, 0), (POLICY, 0)], 100).await;
+            assert_eq!(
+                series_order(&events),
+                [
+                    (1, "7"),
+                    (1, "7/10.0.0.1"),
+                    (1, "42"),
+                    (1, "42/10.0.0.1"),
+                    (1, "42/10.0.0.2"),
+                    (2, "7"),
+                    (2, "42/10.0.0.1"),
+                    (3, "42"),
+                    (3, "42/10.0.0.2"),
+                ]
+            );
+            assert_eq!(statuses, served(&[OTHER_POLICY, POLICY]));
+
+            let (events, statuses) =
+                time_series_read(harness, &[(POLICY, 0), (OTHER_POLICY, 0)], 100).await;
+            assert_eq!(
+                series_order(&events)[..5],
+                [
+                    (1, "42"),
+                    (1, "42/10.0.0.1"),
+                    (1, "42/10.0.0.2"),
+                    (1, "7"),
+                    (1, "7/10.0.0.1"),
+                ]
+            );
+            assert_eq!(statuses, served(&[POLICY, OTHER_POLICY]));
+        })
+    })
+    .await;
+}
+
+/// `count` leaving rows of a policy unsent, or all of them, does not fail it.
+#[tokio::test]
+async fn multi_source_range_serves_policies_the_count_cut_short() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_policy_series(&harness.db);
+            insert_other_policy_series(&harness.db);
+            let sources = [(OTHER_POLICY, 0), (POLICY, 0)];
+
+            // Stops before any row of `POLICY` is reached.
+            let (events, statuses) = time_series_read(harness, &sources, 2).await;
+            assert_eq!(series_order(&events), [(1, "7"), (1, "7/10.0.0.1")]);
+            assert_eq!(statuses, served(&[OTHER_POLICY, POLICY]));
+
+            // Stops partway through `POLICY`, after its rows at window start 1.
+            let (events, statuses) = time_series_read(harness, &sources, 4).await;
+            assert_eq!(
+                series_order(&events),
+                [
+                    (1, "7"),
+                    (1, "7/10.0.0.1"),
+                    (1, "42"),
+                    (1, "42/10.0.0.1"),
+                    (1, "42/10.0.0.2"),
+                ]
+            );
+            assert_eq!(statuses, served(&[OTHER_POLICY, POLICY]));
+
+            let (events, statuses) = time_series_read(harness, &sources, 0).await;
+            assert_eq!(events, Vec::new());
+            assert_eq!(statuses, served(&[OTHER_POLICY, POLICY]));
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn multi_source_range_serves_a_policy_without_series() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_policy_series(&harness.db);
+
+            let (events, statuses) = time_series_read(harness, &[("99", 0), ("4", 0)], 100).await;
+
+            // `4` has only the series `4/10.0.0.1`, not `42/...`.
+            assert_eq!(series_order(&events), [(1, "4/10.0.0.1")]);
+            assert_eq!(statuses, served(&["99", "4"]));
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn multi_source_range_fails_a_policy_whose_series_breaks_off() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            insert_policy_series(&harness.db);
+            insert_other_policy_series(&harness.db);
+            harness
+                .db
+                .periodic_time_series_store()
+                .expect("open the time-series store")
+                .append(&gen_network_event_key("42/10.0.0.2", None, 2), UNDECODABLE)
+                .expect("write an undecodable value");
+
+            let (events, statuses) =
+                time_series_read(harness, &[(POLICY, 0), (OTHER_POLICY, 0)], 100).await;
+
+            // `42/10.0.0.2` leaves the read at window start 2; the other
+            // series go on.
+            assert_eq!(
+                series_order(&events),
+                [
+                    (1, "42"),
+                    (1, "42/10.0.0.1"),
+                    (1, "42/10.0.0.2"),
+                    (1, "7"),
+                    (1, "7/10.0.0.1"),
+                    (2, "42/10.0.0.1"),
+                    (2, "7"),
+                    (3, "42"),
+                ]
+            );
+            assert_eq!(statuses.len(), 2);
+            assert_eq!(statuses[0].0, POLICY);
+            assert_failed(&statuses[0].1, &["42/10.0.0.2"]);
+            assert_eq!(
+                statuses[1],
+                (OTHER_POLICY.to_string(), SourceStatus::Served)
+            );
+        })
+    })
+    .await;
+}
+
+/// Collects the `(window start, series ID)` of every frame a time-series read
+/// writes, and writes `late_rows` to `db` before the first one.
+struct SeriesSink {
+    db: Database,
+    late_rows: Vec<(&'static str, i64)>,
+    written: Vec<(i64, String)>,
+}
+
+impl EventSink for SeriesSink {
+    fn emit(&mut self, event: SourceEvent) -> impl Future<Output = anyhow::Result<()>> + Send {
+        for (series_id, start) in self.late_rows.drain(..) {
+            insert_time_series(&self.db, series_id, &[start]);
+        }
+        let frame = bincode::deserialize::<Option<Event<f64>>>(&event.frame)
+            .expect("decode a frame")
+            .expect("an event frame");
+        assert_eq!(frame.0, event.timestamp);
+        self.written.push((frame.0, frame.1));
+        std::future::ready(Ok(()))
+    }
+}
+
+/// A read sees the store as it was when the request was served: neither a
+/// row written after that, of an existing series or of a series that did not
+/// exist yet, nor one written while the read is sending its frames.
+#[tokio::test]
+async fn time_series_reads_see_only_the_snapshot_taken_when_served() {
+    let temp_dir = tempfile::tempdir().expect("create a temp dir");
+    let db = Database::open(temp_dir.path(), &DbOptions::default()).expect("open a database");
+    insert_time_series(&db, "42/10.0.0.1", &[1]);
+    let store = db
+        .periodic_time_series_store()
+        .expect("open the time-series store");
+    let snapshot = store.snapshot();
+
+    // Written after the snapshot, before the read starts.
+    insert_time_series(&db, "42/10.0.0.1", &[2]);
+    insert_time_series(&db, "42/10.0.0.2", &[1]);
+    insert_time_series(&db, "42", &[1]);
+
+    let mut sink = SeriesSink {
+        db: db.clone(),
+        // Written while the read is sending its frames.
+        late_rows: vec![("42/10.0.0.1", 3), ("42/10.0.0.3", 1), ("42", 3)],
+        written: Vec::new(),
+    };
+    let failures = read_time_series(
+        &snapshot,
+        &[(POLICY.to_string(), 0)],
+        MULTI_SOURCE_END,
+        100,
+        OnBreak::Continue,
+        &mut sink,
+    )
+    .await
+    .expect("an in-memory sink does not fail");
+
+    assert_eq!(failures, vec![None]);
+    assert_eq!(sink.written, vec![(1, "42/10.0.0.1".to_string())]);
+
+    // A read served afterwards sees every row.
+    let mut sink = SeriesSink {
+        db: db.clone(),
+        late_rows: Vec::new(),
+        written: Vec::new(),
+    };
+    read_time_series(
+        &store.snapshot(),
+        &[(POLICY.to_string(), 0)],
+        MULTI_SOURCE_END,
+        100,
+        OnBreak::Continue,
+        &mut sink,
+    )
+    .await
+    .expect("an in-memory sink does not fail");
+    let written: Vec<(i64, &str)> = sink
+        .written
+        .iter()
+        .map(|(start, id)| (*start, id.as_str()))
+        .collect();
+    assert_eq!(
+        written,
+        [
+            (1, "42"),
+            (1, "42/10.0.0.1"),
+            (1, "42/10.0.0.2"),
+            (1, "42/10.0.0.3"),
+            (2, "42/10.0.0.1"),
+            (3, "42"),
+            (3, "42/10.0.0.1"),
+        ]
+    );
 }
 
 #[tokio::test]
