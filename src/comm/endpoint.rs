@@ -11,6 +11,11 @@
 //! [`Standing::Unready`], and every connection is closed without anything sent
 //! back. Nothing in this release gives the node an `entry_id`, so in
 //! production every connection is closed that way.
+//!
+//! Once ready, the entry announces in its `hello_ack` the record kinds it
+//! accepts: exactly those [`convert`] turns into Giganto structs.
+
+mod convert;
 
 use std::{
     collections::VecDeque,
@@ -354,7 +359,8 @@ async fn handle_connection(
 /// While the node has no `entry_id` its standing is [`Standing::Unready`],
 /// which closes the connection on its first message, before any `hello_ack`
 /// could carry the nil `entry_id` put here. Once it has one, every endpoint
-/// is [`Standing::Active`]: no list narrows that down yet.
+/// is [`Standing::Active`]: no list narrows that down yet. The entry accepts
+/// the kinds of [`convert::ACCEPTED_KINDS`], each at schema version 1.
 fn server_config(entry_id: Option<Uuid>) -> ServerConfig {
     let standing = if entry_id.is_some() {
         Standing::Active
@@ -363,7 +369,7 @@ fn server_config(entry_id: Option<Uuid>) -> ServerConfig {
     };
     let channel = ServerChannel::Telemetry {
         entry_id: entry_id.unwrap_or_else(Uuid::nil),
-        accepted_kinds: Vec::new(),
+        accepted_kinds: convert::accepted_kinds(),
     };
     let receive_limit = standing.receive_limit();
     ServerConfig::new(channel, receive_limit).with_standing(move |t| {
@@ -553,7 +559,7 @@ mod tests {
     use senta_protocol::{
         auth::tls::CONTROL_ALPN,
         connection::{
-            ENDPOINT_RECEIVE_LIMIT, EndpointAction, EndpointChannel, EndpointConfig,
+            AcceptedKind, ENDPOINT_RECEIVE_LIMIT, EndpointAction, EndpointChannel, EndpointConfig,
             EndpointConnection, Envelope, Frame, FrameDecoder, Hello, HelloAck, Message,
             PING_INTERVAL, PROTOCOL_VERSION, Ping, Pong, SERVER_ACTIVE_RECEIVE_LIMIT,
             TelemetryEntry, Unsupported, VersionRange,
@@ -933,19 +939,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_ready_entry_answers_with_its_entry_id_and_no_kinds() {
+    async fn a_ready_entry_answers_with_its_entry_id_and_accepted_kinds() {
         let node = Node::new();
         let material = node.material(&node.cert, &node.ca.bundle_pem());
         let running = Running::start(material, Some(ENTRY_ID)).await;
 
         let mut stream = running.connect(node.ca.root.pem()).await;
         let (_endpoint, entry) = handshake(&mut stream).await;
+        let expected_kinds: Vec<AcceptedKind> = [
+            1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 22, 23, 25, 26, 1000, 1100, 1101,
+        ]
+        .into_iter()
+        .map(|kind| AcceptedKind {
+            kind,
+            schema_min: 1,
+            schema_max: 1,
+        })
+        .collect();
         assert_eq!(
             entry,
             TelemetryEntry {
                 entry_id: ENTRY_ID,
-                accepted_kinds: Vec::new(),
+                accepted_kinds: expected_kinds,
             }
+        );
+        assert!(
+            entry
+                .accepted_kinds
+                .windows(2)
+                .all(|pair| pair[0].kind < pair[1].kind),
+            "the kinds are announced in ascending order"
         );
         ping_pong(&mut stream).await;
 
