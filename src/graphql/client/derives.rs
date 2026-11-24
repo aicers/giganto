@@ -640,3 +640,107 @@ pub struct Export;
     response_derives = "Clone, Default, PartialEq"
 )]
 pub struct Statistics;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/driver_load_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct DriverLoadEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/create_remote_thread_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct CreateRemoteThreadEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/raw_access_read_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct RawAccessReadEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/process_access_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct ProcessAccessEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/registry_object_add_del_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct RegistryObjectAddDelEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_driver_load_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchDriverLoadEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_create_remote_thread_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchCreateRemoteThreadEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_raw_access_read_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchRawAccessReadEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_process_access_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchProcessAccessEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/search_registry_object_add_del_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct SearchRegistryObjectAddDelEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/endpoint_windows_event_log_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct EndpointWindowsEventLogEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/endpoint_journald_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct EndpointJournaldEvents;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/client/schema/schema.graphql",
+    query_path = "src/graphql/client/schema/endpoint_auditd_events.graphql",
+    response_derives = "Clone, Default, PartialEq"
+)]
+pub struct EndpointAuditdEvents;

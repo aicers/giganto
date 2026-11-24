@@ -320,6 +320,8 @@ pub(super) fn insert_process_create_event_with_agent_id(
         parent_image: "parent.exe".to_string(),
         parent_command_line: "parent.exe".to_string(),
         parent_user: "parent_user".to_string(),
+        endpoint: None,
+        logon_id_full: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -343,6 +345,7 @@ pub(super) fn insert_file_create_time_event(
         creation_utc_time: creation_ts,
         previous_creation_utc_time: prev_ts,
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -373,6 +376,7 @@ pub(super) fn insert_network_connect_event(
         destination_hostname: "dst-host".to_string(),
         destination_port: 4321,
         destination_port_name: "dst".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -391,6 +395,7 @@ pub(super) fn insert_process_terminated_event(
         process_id: 77,
         image: "terminated.exe".to_string(),
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -419,6 +424,7 @@ pub(super) fn insert_image_loaded_event(
         signature: "signature".to_string(),
         signature_status: "Valid".to_string(),
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -440,6 +446,7 @@ pub(super) fn insert_file_create_event(
         target_filename: "created.txt".to_string(),
         creation_utc_time: creation_ts,
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -461,6 +468,7 @@ pub(super) fn insert_registry_value_set_event(
         target_object: "\\Registry\\Machine\\Key".to_string(),
         details: "REG_SZ".to_string(),
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -482,6 +490,7 @@ pub(super) fn insert_registry_key_rename_event(
         target_object: "\\Registry\\Machine\\Key\\Old".to_string(),
         new_name: "NewName".to_string(),
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -504,6 +513,7 @@ pub(super) fn insert_file_create_stream_hash_event(
         hash: vec!["SHA256=stream".to_string()],
         contents: "stream-bytes".to_string(),
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -524,6 +534,7 @@ pub(super) fn insert_pipe_event_raw_event(
         pipe_name: "\\\\.\\pipe\\example".to_string(),
         image: "proc.exe".to_string(),
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -541,6 +552,7 @@ pub(super) fn insert_dns_event(store: &RawEventStore<DnsEvent>, sensor: &str, ti
         query_results: vec!["93.184.216.34".to_string()],
         image: "proc.exe".to_string(),
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -563,6 +575,7 @@ pub(super) fn insert_file_delete_event(
         hashes: vec!["SHA256=old".to_string()],
         is_executable: false,
         archived: false,
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -582,6 +595,7 @@ pub(super) fn insert_process_tampering_event(
         image: "proc.exe".to_string(),
         tamper_type: "ThreadSuspend".to_string(),
         user: "user".to_string(),
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();
@@ -603,6 +617,7 @@ pub(super) fn insert_file_delete_detected_event(
         target_filename: "suspect.log".to_string(),
         hashes: vec!["SHA256=suspect".to_string()],
         is_executable: true,
+        endpoint: None,
     };
     let value = bincode::serialize(&event).unwrap();
     store.append(&key, &value).unwrap();

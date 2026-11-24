@@ -1,0 +1,60 @@
+query DriverLoadEvents(
+  $filter: SysmonEventFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  driverLoadEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        time
+        agentName
+        agentId
+        imageLoaded
+        hashes
+        signed
+        signature
+        signatureStatus
+        endpoint {
+          ...EndpointHeaderFields
+        }
+      }
+    }
+  }
+}
+
+fragment EndpointHeaderFields on EndpointHeader {
+  endpointId
+  stream
+  seq
+  eventTime
+  collectedAt
+  clockOffset {
+    offsetMs
+    uncertaintyMs
+    measuredAt
+  }
+  hostname
+  ips
+  defaultRouteIp
+  netStateSource
+  osFamily
+  osVersion
+  collectionMode
+  processKey
+  schema
+}

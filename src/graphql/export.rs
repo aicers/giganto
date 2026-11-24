@@ -24,7 +24,11 @@ use async_graphql::{Context, InputObject, Object, Result};
 use giganto_client::{
     RawEventKind,
     ingest::{
-        log::{Log, OpLog, SecuLog},
+        endpoint::EndpointHeader,
+        log::{
+            AuditRecord, Auditd, EventData, Journald, Log, LogField, LogValue, OpLog, SecuLog,
+            WindowsEventLog,
+        },
         netflow::{Netflow5, Netflow9},
         network::{
             Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt,
@@ -32,9 +36,11 @@ use giganto_client::{
         },
         statistics::Statistics,
         sysmon::{
-            DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-            FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-            ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+            CreateRemoteThread, DnsEvent, DriverLoad, FileCreate, FileCreateStreamHash,
+            FileCreationTimeChanged, FileDelete, FileDeleteDetected, ImageLoaded,
+            NetworkConnection, PipeEvent, ProcessAccess, ProcessCreate, ProcessTampering,
+            ProcessTerminated, RawAccessRead, RegistryKeyValueRename, RegistryObjectAddDel,
+            RegistryValueSet,
         },
         timeseries::PeriodicTimeSeries,
     },
@@ -49,6 +55,7 @@ use tracing::{error, info, warn};
 use super::{
     IpRange, NodeName, PortRange, RawEventFilter, TIMESTAMP_SIZE, TimeRange, check_address,
     check_agent_id, check_port,
+    endpoint_header::to_hex,
     netflow::{millis_to_secs, tcp_flags},
     statistics::MAX_CORE_SIZE,
 };
@@ -91,7 +98,7 @@ const ADDRESS_PROTOCOL: [&str; 21] = [
     "icmp",
     "network connect",
 ];
-const SYSMON_EVENT_TYPES: [&str; 14] = [
+const SYSMON_EVENT_TYPES: [&str; 19] = [
     "process create",
     "file create time",
     "process terminate",
@@ -106,6 +113,11 @@ const SYSMON_EVENT_TYPES: [&str; 14] = [
     "file delete",
     "process tamper",
     "file delete detected",
+    "driver load",
+    "create remote thread",
+    "raw access read",
+    "process access",
+    "registry object add del",
 ];
 const LOG_EVENT_TYPES: [&str; 2] = ["log", "secu log"];
 
@@ -817,6 +829,8 @@ struct ProcessCreateJsonOutput {
     parent_image: String,
     parent_command_line: String,
     parent_user: String,
+    endpoint: Option<EndpointJsonOutput>,
+    logon_id_full: Option<u64>,
 }
 
 #[derive(Serialize, Debug)]
@@ -832,6 +846,7 @@ struct FileCreateTimeJsonOutput {
     creation_utc_time: i64,
     previous_creation_utc_time: i64,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -856,6 +871,7 @@ struct NetworkConnectJsonOutput {
     destination_hostname: String,
     destination_port: u16,
     destination_port_name: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -868,6 +884,7 @@ struct ProcessTerminateJsonOutput {
     process_id: u32,
     image: String,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -890,6 +907,7 @@ struct ImageLoadJsonOutput {
     signature: String,
     signature_status: String,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -904,6 +922,7 @@ struct FileCreateJsonOutput {
     target_filename: String,
     creation_utc_time: i64,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -919,6 +938,7 @@ struct RegistryValueSetJsonOutput {
     target_object: String,
     details: String,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -934,6 +954,7 @@ struct RegistryKeyRenameJsonOutput {
     target_object: String,
     new_name: String,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -950,6 +971,7 @@ struct FileCreateStreamHashJsonOutput {
     hash: Vec<String>,
     contents: String,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -964,6 +986,7 @@ struct PipeEventJsonOutput {
     pipe_name: String,
     image: String,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -979,6 +1002,7 @@ struct DnsQueryJsonOutput {
     query_results: Vec<String>, // divided by ';'
     image: String,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -995,6 +1019,7 @@ struct FileDeleteJsonOutput {
     hashes: Vec<String>,
     is_executable: bool,
     archived: bool,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1008,6 +1033,7 @@ struct ProcessTamperJsonOutput {
     image: String,
     tamper_type: String,
     user: String,
+    endpoint: Option<EndpointJsonOutput>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1023,6 +1049,242 @@ struct FileDeleteDetectedJsonOutput {
     target_filename: String,
     hashes: Vec<String>,
     is_executable: bool,
+    endpoint: Option<EndpointJsonOutput>,
+}
+
+/// The JSON form of an endpoint record's host header.
+#[derive(Serialize, Debug)]
+struct EndpointJsonOutput {
+    endpoint_id: String,
+    stream: String,
+    seq: u64,
+    event_time: String,
+    collected_at: String,
+    clock_offset: Option<ClockOffsetJsonOutput>,
+    hostname: String,
+    ips: Vec<String>,
+    default_route_ip: Option<String>,
+    net_state_source: String,
+    os_family: String,
+    os_version: String,
+    collection_mode: String,
+    process_key: Option<String>,
+    schema: u16,
+}
+
+#[derive(Serialize, Debug)]
+struct ClockOffsetJsonOutput {
+    offset_ms: i64,
+    uncertainty_ms: u32,
+    measured_at: String,
+}
+
+impl From<&EndpointHeader> for EndpointJsonOutput {
+    fn from(header: &EndpointHeader) -> Self {
+        Self {
+            endpoint_id: header.endpoint_id.to_string(),
+            stream: header.stream.to_string(),
+            seq: header.seq,
+            event_time: format_nanos(header.event_time),
+            collected_at: format_nanos(header.collected_at),
+            clock_offset: header
+                .clock_offset
+                .as_ref()
+                .map(|offset| ClockOffsetJsonOutput {
+                    offset_ms: offset.offset_ms,
+                    uncertainty_ms: offset.uncertainty_ms,
+                    measured_at: format_nanos(offset.measured_at),
+                }),
+            hostname: header.hostname.clone(),
+            ips: header.ips.iter().map(ToString::to_string).collect(),
+            default_route_ip: header.default_route_ip.map(|ip| ip.to_string()),
+            net_state_source: header.net_state_source.to_string(),
+            os_family: header.os_family.to_string(),
+            os_version: header.os_version.clone(),
+            collection_mode: header.collection_mode.to_string(),
+            process_key: header.process_key.as_deref().map(to_hex),
+            schema: header.schema,
+        }
+    }
+}
+
+/// Formats nanoseconds since the Unix epoch the way the `time` key is.
+fn format_nanos(nanos: i64) -> String {
+    DateTime::from_timestamp_nanos(nanos).format_unix_seconds_with_nanos()
+}
+
+#[derive(Serialize, Debug)]
+struct DriverLoadJsonOutput {
+    time: String,
+    sensor: String,
+    agent_name: String,
+    agent_id: String,
+    image_loaded: String,
+    hashes: Vec<String>,
+    signed: bool,
+    signature: String,
+    signature_status: String,
+    endpoint: Option<EndpointJsonOutput>,
+}
+
+#[derive(Serialize, Debug)]
+struct CreateRemoteThreadJsonOutput {
+    time: String,
+    sensor: String,
+    agent_name: String,
+    agent_id: String,
+    source_process_guid: String,
+    source_process_id: u32,
+    source_image: String,
+    target_process_guid: String,
+    target_process_id: u32,
+    target_image: String,
+    new_thread_id: u32,
+    start_address: String,
+    start_module: String,
+    start_function: String,
+    source_user: String,
+    target_user: String,
+    endpoint: Option<EndpointJsonOutput>,
+}
+
+#[derive(Serialize, Debug)]
+struct RawAccessReadJsonOutput {
+    time: String,
+    sensor: String,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    device: String,
+    user: String,
+    endpoint: Option<EndpointJsonOutput>,
+}
+
+#[derive(Serialize, Debug)]
+struct ProcessAccessJsonOutput {
+    time: String,
+    sensor: String,
+    agent_name: String,
+    agent_id: String,
+    source_process_guid: String,
+    source_process_id: u32,
+    source_thread_id: u32,
+    source_image: String,
+    target_process_guid: String,
+    target_process_id: u32,
+    target_image: String,
+    granted_access: u64,
+    call_trace: String,
+    source_user: String,
+    target_user: String,
+    endpoint: Option<EndpointJsonOutput>,
+}
+
+#[derive(Serialize, Debug)]
+struct RegistryObjectAddDelJsonOutput {
+    time: String,
+    sensor: String,
+    agent_name: String,
+    agent_id: String,
+    event_type: String,
+    process_guid: String,
+    process_id: u32,
+    image: String,
+    target_object: String,
+    user: String,
+    endpoint: Option<EndpointJsonOutput>,
+}
+
+#[derive(Serialize, Debug)]
+struct EventDataJsonOutput {
+    name: Option<String>,
+    value: String,
+}
+
+impl From<&EventData> for EventDataJsonOutput {
+    fn from(data: &EventData) -> Self {
+        Self {
+            name: data.name.clone(),
+            value: data.value.clone(),
+        }
+    }
+}
+
+/// A field whose value is in `text` when it is text and in `bytes`, as
+/// lowercase hexadecimal, otherwise.
+#[derive(Serialize, Debug)]
+struct LogFieldJsonOutput {
+    name: String,
+    text: Option<String>,
+    bytes: Option<String>,
+}
+
+impl From<&LogField> for LogFieldJsonOutput {
+    fn from(field: &LogField) -> Self {
+        let (text, bytes) = match &field.value {
+            LogValue::Text(text) => (Some(text.clone()), None),
+            LogValue::Bytes(bytes) => (None, Some(to_hex(bytes))),
+        };
+        Self {
+            name: field.name.clone(),
+            text,
+            bytes,
+        }
+    }
+}
+
+#[derive(Serialize, Debug)]
+struct AuditRecordJsonOutput {
+    record_type: String,
+    fields: Vec<LogFieldJsonOutput>,
+}
+
+impl From<&AuditRecord> for AuditRecordJsonOutput {
+    fn from(record: &AuditRecord) -> Self {
+        Self {
+            record_type: record.record_type.clone(),
+            fields: record.fields.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Debug)]
+struct WindowsEventLogJsonOutput {
+    time: String,
+    sensor: String,
+    channel: Option<String>,
+    provider: Option<String>,
+    event_id: Option<u16>,
+    version: Option<u8>,
+    level: Option<u8>,
+    task: Option<u16>,
+    opcode: Option<u8>,
+    keywords: Option<u64>,
+    record_id: Option<u64>,
+    computer: Option<String>,
+    user_sid: Option<String>,
+    event_data: Option<Vec<EventDataJsonOutput>>,
+    user_data_xml: Option<String>,
+    endpoint: EndpointJsonOutput,
+}
+
+#[derive(Serialize, Debug)]
+struct JournaldJsonOutput {
+    time: String,
+    sensor: String,
+    fields: Option<Vec<LogFieldJsonOutput>>,
+    endpoint: EndpointJsonOutput,
+}
+
+#[derive(Serialize, Debug)]
+struct AuditdJsonOutput {
+    time: String,
+    sensor: String,
+    serial: Option<u64>,
+    records: Option<Vec<AuditRecordJsonOutput>>,
+    endpoint: EndpointJsonOutput,
 }
 
 #[derive(Serialize, Debug)]
@@ -1657,6 +1919,8 @@ impl JsonOutput<ProcessCreateJsonOutput> for ProcessCreate {
             parent_image: self.parent_image.clone(),
             parent_command_line: self.parent_command_line.clone(),
             parent_user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
+            logon_id_full: self.logon_id_full,
         })
     }
 }
@@ -1679,6 +1943,7 @@ impl JsonOutput<FileCreateTimeJsonOutput> for FileCreationTimeChanged {
             creation_utc_time: self.creation_utc_time,
             previous_creation_utc_time: self.previous_creation_utc_time,
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1710,6 +1975,7 @@ impl JsonOutput<NetworkConnectJsonOutput> for NetworkConnection {
             destination_hostname: self.destination_hostname.clone(),
             destination_port: self.destination_port,
             destination_port_name: self.destination_port_name.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1729,6 +1995,7 @@ impl JsonOutput<ProcessTerminateJsonOutput> for ProcessTerminated {
             process_id: self.process_id,
             image: self.image.clone(),
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1754,6 +2021,7 @@ impl JsonOutput<ImageLoadJsonOutput> for ImageLoaded {
             signature: self.signature.clone(),
             signature_status: self.signature_status.clone(),
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1771,6 +2039,7 @@ impl JsonOutput<FileCreateJsonOutput> for FileCreate {
             target_filename: self.target_filename.clone(),
             creation_utc_time: self.creation_utc_time,
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1793,6 +2062,7 @@ impl JsonOutput<RegistryValueSetJsonOutput> for RegistryValueSet {
             target_object: self.target_object.clone(),
             details: self.details.clone(),
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1815,6 +2085,7 @@ impl JsonOutput<RegistryKeyRenameJsonOutput> for RegistryKeyValueRename {
             target_object: self.target_object.clone(),
             new_name: self.new_name.clone(),
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1838,6 +2109,7 @@ impl JsonOutput<FileCreateStreamHashJsonOutput> for FileCreateStreamHash {
             hash: self.hash.clone(),
             contents: self.contents.clone(),
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1855,6 +2127,7 @@ impl JsonOutput<PipeEventJsonOutput> for PipeEvent {
             pipe_name: self.pipe_name.clone(),
             image: self.image.clone(),
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1873,6 +2146,7 @@ impl JsonOutput<DnsQueryJsonOutput> for DnsEvent {
             query_results: self.query_results.clone(),
             image: self.image.clone(),
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1892,6 +2166,7 @@ impl JsonOutput<FileDeleteJsonOutput> for FileDelete {
             hashes: self.hashes.clone(),
             is_executable: self.is_executable,
             archived: self.archived,
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1908,6 +2183,7 @@ impl JsonOutput<ProcessTamperJsonOutput> for ProcessTampering {
             image: self.image.clone(),
             tamper_type: self.tamper_type.clone(),
             user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
         })
     }
 }
@@ -1930,6 +2206,173 @@ impl JsonOutput<FileDeleteDetectedJsonOutput> for FileDeleteDetected {
             target_filename: self.target_filename.clone(),
             hashes: self.hashes.clone(),
             is_executable: self.is_executable,
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
+        })
+    }
+}
+
+impl JsonOutput<DriverLoadJsonOutput> for DriverLoad {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<DriverLoadJsonOutput> {
+        Ok(DriverLoadJsonOutput {
+            time,
+            sensor,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            image_loaded: self.image_loaded.clone(),
+            hashes: self.hashes.clone(),
+            signed: self.signed,
+            signature: self.signature.clone(),
+            signature_status: self.signature_status.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
+        })
+    }
+}
+
+impl JsonOutput<CreateRemoteThreadJsonOutput> for CreateRemoteThread {
+    fn convert_json_output(
+        &self,
+        time: String,
+        sensor: String,
+    ) -> Result<CreateRemoteThreadJsonOutput> {
+        Ok(CreateRemoteThreadJsonOutput {
+            time,
+            sensor,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            source_process_guid: self.source_process_guid.clone(),
+            source_process_id: self.source_process_id,
+            source_image: self.source_image.clone(),
+            target_process_guid: self.target_process_guid.clone(),
+            target_process_id: self.target_process_id,
+            target_image: self.target_image.clone(),
+            new_thread_id: self.new_thread_id,
+            start_address: self.start_address.clone(),
+            start_module: self.start_module.clone(),
+            start_function: self.start_function.clone(),
+            source_user: self.source_user.clone(),
+            target_user: self.target_user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
+        })
+    }
+}
+
+impl JsonOutput<RawAccessReadJsonOutput> for RawAccessRead {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<RawAccessReadJsonOutput> {
+        Ok(RawAccessReadJsonOutput {
+            time,
+            sensor,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            device: self.device.clone(),
+            user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
+        })
+    }
+}
+
+impl JsonOutput<ProcessAccessJsonOutput> for ProcessAccess {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<ProcessAccessJsonOutput> {
+        Ok(ProcessAccessJsonOutput {
+            time,
+            sensor,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            source_process_guid: self.source_process_guid.clone(),
+            source_process_id: self.source_process_id,
+            source_thread_id: self.source_thread_id,
+            source_image: self.source_image.clone(),
+            target_process_guid: self.target_process_guid.clone(),
+            target_process_id: self.target_process_id,
+            target_image: self.target_image.clone(),
+            granted_access: self.granted_access,
+            call_trace: self.call_trace.clone(),
+            source_user: self.source_user.clone(),
+            target_user: self.target_user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
+        })
+    }
+}
+
+impl JsonOutput<RegistryObjectAddDelJsonOutput> for RegistryObjectAddDel {
+    fn convert_json_output(
+        &self,
+        time: String,
+        sensor: String,
+    ) -> Result<RegistryObjectAddDelJsonOutput> {
+        Ok(RegistryObjectAddDelJsonOutput {
+            time,
+            sensor,
+            agent_name: self.agent_name.clone(),
+            agent_id: self.agent_id.clone(),
+            event_type: self.event_type.clone(),
+            process_guid: self.process_guid.clone(),
+            process_id: self.process_id,
+            image: self.image.clone(),
+            target_object: self.target_object.clone(),
+            user: self.user.clone(),
+            endpoint: self.endpoint.as_ref().map(EndpointJsonOutput::from),
+        })
+    }
+}
+
+impl JsonOutput<WindowsEventLogJsonOutput> for WindowsEventLog {
+    fn convert_json_output(
+        &self,
+        time: String,
+        sensor: String,
+    ) -> Result<WindowsEventLogJsonOutput> {
+        Ok(WindowsEventLogJsonOutput {
+            time,
+            sensor,
+            channel: self.channel.clone(),
+            provider: self.provider.clone(),
+            event_id: self.event_id,
+            version: self.version,
+            level: self.level,
+            task: self.task,
+            opcode: self.opcode,
+            keywords: self.keywords,
+            record_id: self.record_id,
+            computer: self.computer.clone(),
+            user_sid: self.user_sid.clone(),
+            event_data: self
+                .event_data
+                .as_ref()
+                .map(|data| data.iter().map(Into::into).collect()),
+            user_data_xml: self.user_data_xml.clone(),
+            endpoint: (&self.endpoint).into(),
+        })
+    }
+}
+
+impl JsonOutput<JournaldJsonOutput> for Journald {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<JournaldJsonOutput> {
+        Ok(JournaldJsonOutput {
+            time,
+            sensor,
+            fields: self
+                .fields
+                .as_ref()
+                .map(|fields| fields.iter().map(Into::into).collect()),
+            endpoint: (&self.endpoint).into(),
+        })
+    }
+}
+
+impl JsonOutput<AuditdJsonOutput> for Auditd {
+    fn convert_json_output(&self, time: String, sensor: String) -> Result<AuditdJsonOutput> {
+        Ok(AuditdJsonOutput {
+            time,
+            sensor,
+            serial: self.serial,
+            records: self
+                .records
+                .as_ref()
+                .map(|records| records.iter().map(Into::into).collect()),
+            endpoint: (&self.endpoint).into(),
         })
     }
 }
@@ -2399,6 +2842,16 @@ fn export_by_protocol(
         "netflow5" => spawn_export!(netflow5_store, process_export),
         "netflow9" => spawn_export!(netflow9_store, process_export),
         "secu log" => spawn_export!(secu_log_store, process_export),
+        "driver load" => spawn_export!(driver_load_store, process_export),
+        "create remote thread" => spawn_export!(create_remote_thread_store, process_export),
+        "raw access read" => spawn_export!(raw_access_read_store, process_export),
+        "process access" => spawn_export!(process_access_store, process_export),
+        "registry object add del" => spawn_export!(registry_object_add_del_store, process_export),
+        "endpoint windows event log" => {
+            spawn_export!(endpoint_windows_event_log_store, process_export)
+        }
+        "endpoint journald" => spawn_export!(endpoint_journald_store, process_export),
+        "endpoint auditd" => spawn_export!(endpoint_auditd_store, process_export),
         none => return Err(anyhow!("{none}: Unknown protocol").into()),
     };
 

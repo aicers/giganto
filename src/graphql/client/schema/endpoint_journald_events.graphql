@@ -1,0 +1,58 @@
+query EndpointJournaldEvents(
+  $filter: EndpointLogFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  endpointJournaldEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        time
+        fields {
+          name
+          text
+          bytes
+        }
+        endpoint {
+          ...EndpointHeaderFields
+        }
+      }
+    }
+  }
+}
+
+fragment EndpointHeaderFields on EndpointHeader {
+  endpointId
+  stream
+  seq
+  eventTime
+  collectedAt
+  clockOffset {
+    offsetMs
+    uncertaintyMs
+    measuredAt
+  }
+  hostname
+  ips
+  defaultRouteIp
+  netStateSource
+  osFamily
+  osVersion
+  collectionMode
+  processKey
+  schema
+}

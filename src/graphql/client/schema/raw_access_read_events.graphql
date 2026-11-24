@@ -1,0 +1,60 @@
+query RawAccessReadEvents(
+  $filter: SysmonEventFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  rawAccessReadEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        time
+        agentName
+        agentId
+        processGuid
+        processId
+        image
+        device
+        user
+        endpoint {
+          ...EndpointHeaderFields
+        }
+      }
+    }
+  }
+}
+
+fragment EndpointHeaderFields on EndpointHeader {
+  endpointId
+  stream
+  seq
+  eventTime
+  collectedAt
+  clockOffset {
+    offsetMs
+    uncertaintyMs
+    measuredAt
+  }
+  hostname
+  ips
+  defaultRouteIp
+  netStateSource
+  osFamily
+  osVersion
+  collectionMode
+  processKey
+  schema
+}

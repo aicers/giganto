@@ -35,6 +35,7 @@ use crate::graphql::export::tests::fixture::{
 use crate::graphql::tests::TestSchema;
 use crate::storage::{Database, DbOptions, Direction, KeyExtractor, TimestampKeyExtractor};
 
+mod endpoint;
 mod fixture;
 
 #[tokio::test]

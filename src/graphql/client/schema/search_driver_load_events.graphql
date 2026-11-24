@@ -1,0 +1,3 @@
+query SearchDriverLoadEvents($filter: SearchFilter!) {
+  searchDriverLoadEvents(filter: $filter)
+}

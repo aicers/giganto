@@ -212,6 +212,7 @@ impl NodeConfig {
 
 mod fixtures {
     use super::*;
+    use crate::graphql::endpoint_header::fixtures as endpoint_fixtures;
     #[allow(clippy::type_complexity)]
     #[derive(Clone, Copy)]
     pub(super) struct RawEventCase {
@@ -3765,6 +3766,8 @@ mod fixtures {
             parent_command_line: "pcmd".to_string(),
             agent_id: "agent_id".to_string(),
             parent_user: "puser".to_string(),
+            endpoint: None,
+            logon_id_full: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -3791,6 +3794,7 @@ mod fixtures {
             previous_creation_utc_time: 900,
             agent_id: "agent_id".to_string(),
             user: "user".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -3826,6 +3830,7 @@ mod fixtures {
             destination_port: 80,
             destination_port_name: "http".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -3849,6 +3854,7 @@ mod fixtures {
             image: "image".to_string(),
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -3882,6 +3888,7 @@ mod fixtures {
             signature_status: "status".to_string(),
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -3907,8 +3914,25 @@ mod fixtures {
             creation_utc_time: 1000,
             agent_id: "agent_id".to_string(),
             user: "user".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
+    }
+
+    /// Serializes a `FileCreate` record carrying an endpoint header.
+    pub(super) fn gen_file_create_raw_event_with_endpoint() -> Vec<u8> {
+        bincode::serialize(&endpoint_fixtures::file_create(Some(
+            endpoint_fixtures::full_header(),
+        )))
+        .unwrap()
+    }
+
+    /// Serializes a `FileDelete` record carrying an endpoint header.
+    pub(super) fn gen_file_delete_raw_event_with_endpoint() -> Vec<u8> {
+        bincode::serialize(&endpoint_fixtures::file_delete(Some(
+            endpoint_fixtures::full_header(),
+        )))
+        .unwrap()
     }
 
     pub(super) fn insert_file_create_raw_event(
@@ -3933,6 +3957,7 @@ mod fixtures {
             event_type: "type".to_string(),
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -3959,6 +3984,7 @@ mod fixtures {
             event_type: "type".to_string(),
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -3986,6 +4012,7 @@ mod fixtures {
             contents: "contents".to_string(),
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -4011,6 +4038,7 @@ mod fixtures {
             event_type: "type".to_string(),
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -4037,6 +4065,7 @@ mod fixtures {
             image: "image".to_string(),
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -4064,6 +4093,7 @@ mod fixtures {
             is_executable: true,
             archived: true,
             user: "user".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -4088,6 +4118,7 @@ mod fixtures {
             tamper_type: "type".to_string(),
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -4114,6 +4145,7 @@ mod fixtures {
             is_executable: true,
             user: "user".to_string(),
             agent_id: "agent_id".to_string(),
+            endpoint: None,
         };
         bincode::serialize(&body).unwrap()
     }
@@ -4337,7 +4369,15 @@ mod fixtures {
                 gen_malformed_dns_raw_event,
             ),
             (RequestStreamRecord::FileCreate, gen_file_create_raw_event),
+            (
+                RequestStreamRecord::FileCreate,
+                gen_file_create_raw_event_with_endpoint,
+            ),
             (RequestStreamRecord::FileDelete, gen_file_delete_raw_event),
+            (
+                RequestStreamRecord::FileDelete,
+                gen_file_delete_raw_event_with_endpoint,
+            ),
             (RequestStreamRecord::Log, gen_log_raw_event),
         ]
     }

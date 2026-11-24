@@ -281,6 +281,59 @@ type ConnRawEventEdge {
 	cursor: String!
 }
 
+type CreateRemoteThreadEvent {
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	sourceProcessGuid: String!
+	sourceProcessId: StringNumberU32!
+	sourceImage: String!
+	targetProcessGuid: String!
+	targetProcessId: StringNumberU32!
+	targetImage: String!
+	newThreadId: StringNumberU32!
+	startAddress: String!
+	startModule: String!
+	startFunction: String!
+	sourceUser: String!
+	targetUser: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
+}
+
+type CreateRemoteThreadEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [CreateRemoteThreadEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [CreateRemoteThreadEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type CreateRemoteThreadEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: CreateRemoteThreadEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
 enum CustomerDataDeletionRequestStatus {
 	"""
 	Terminal mutation response: this node accepted the request and started the deletion job.
@@ -695,6 +748,12 @@ type DnsEventEvent {
 	queryResults: [String!]!
 	image: String!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type DnsEventEventConnection {
@@ -868,6 +927,425 @@ type DnsRawEventEdge {
 	cursor: String!
 }
 
+type DriverLoadEvent {
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	imageLoaded: String!
+	hashes: [String!]!
+	signed: Boolean!
+	signature: String!
+	signatureStatus: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
+}
+
+type DriverLoadEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [DriverLoadEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [DriverLoadEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type DriverLoadEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: DriverLoadEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
+"""
+One record of an auditd event.
+"""
+type EndpointAuditRecord {
+	"""
+	Record Type
+	"""
+	recordType: String!
+	"""
+	Fields
+	"""
+	fields: [EndpointLogField!]!
+}
+
+"""
+An auditd event an endpoint sent.
+"""
+type EndpointAuditdEvent {
+	"""
+	Event Time
+	
+	The time the record is stored under.
+	"""
+	time: DateTime!
+	"""
+	Serial Number
+	"""
+	serial: StringNumberU64
+	"""
+	Records
+	"""
+	records: [EndpointAuditRecord!]
+	"""
+	Endpoint Header
+	"""
+	endpoint: EndpointHeader!
+}
+
+type EndpointAuditdEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [EndpointAuditdEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [EndpointAuditdEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type EndpointAuditdEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: EndpointAuditdEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
+"""
+A measured offset of an endpoint's clock.
+"""
+type EndpointClockOffset {
+	"""
+	Clock Offset
+	
+	The offset of the endpoint's clock, in milliseconds.
+	"""
+	offsetMs: StringNumberI64!
+	"""
+	Uncertainty
+	
+	The uncertainty of the offset, in milliseconds.
+	"""
+	uncertaintyMs: StringNumberU32!
+	"""
+	Measurement Time
+	"""
+	measuredAt: DateTime!
+}
+
+"""
+An `EventData` element of a Windows event log record.
+"""
+type EndpointEventData {
+	"""
+	Name
+	
+	`null` for an unnamed element.
+	"""
+	name: String
+	"""
+	Value
+	"""
+	value: String!
+}
+
+"""
+The host header identifying the endpoint, stream and collection a record
+came from.
+"""
+type EndpointHeader {
+	"""
+	Endpoint ID
+	
+	A lowercase hyphenated UUID.
+	"""
+	endpointId: String!
+	"""
+	Stream ID
+	
+	A lowercase hyphenated UUID.
+	"""
+	stream: String!
+	"""
+	Sequence Number
+	"""
+	seq: StringNumberU64!
+	"""
+	Event Time
+	
+	The time the event occurred on the endpoint.
+	"""
+	eventTime: DateTime!
+	"""
+	Collection Time
+	
+	The time the endpoint collected the event.
+	"""
+	collectedAt: DateTime!
+	"""
+	Clock Offset
+	
+	`null` when the endpoint did not measure it.
+	"""
+	clockOffset: EndpointClockOffset
+	"""
+	Hostname
+	"""
+	hostname: String!
+	"""
+	IP Addresses
+	"""
+	ips: [String!]!
+	"""
+	Default Route IP Address
+	"""
+	defaultRouteIp: String
+	"""
+	Network State Source
+	
+	`observed`, `inferred`, `unknown`, or another value as sent.
+	"""
+	netStateSource: String!
+	"""
+	OS Family
+	
+	`windows`, `linux`, `macos`, or another value as sent.
+	"""
+	osFamily: String!
+	"""
+	OS Version
+	"""
+	osVersion: String!
+	"""
+	Collection Mode
+	
+	`extended`, `essential`, or another value as sent.
+	"""
+	collectionMode: String!
+	"""
+	Process Key
+	
+	Lowercase hexadecimal.
+	"""
+	processKey: String
+	"""
+	Schema Version
+	"""
+	schema: Int!
+}
+
+"""
+A journald record an endpoint sent.
+"""
+type EndpointJournaldEvent {
+	"""
+	Event Time
+	
+	The time the record is stored under.
+	"""
+	time: DateTime!
+	"""
+	Fields
+	"""
+	fields: [EndpointLogField!]
+	"""
+	Endpoint Header
+	"""
+	endpoint: EndpointHeader!
+}
+
+type EndpointJournaldEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [EndpointJournaldEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [EndpointJournaldEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type EndpointJournaldEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: EndpointJournaldEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
+"""
+A named field of a journald or auditd record.
+
+Exactly one of `text` and `bytes` is non-null.
+"""
+type EndpointLogField {
+	"""
+	Name
+	"""
+	name: String!
+	"""
+	Text Value
+	
+	The value when it is text.
+	"""
+	text: String
+	"""
+	Bytes Value
+	
+	The value in lowercase hexadecimal when it is not text.
+	"""
+	bytes: String
+}
+
+"""
+Filters for endpoint log queries.
+"""
+input EndpointLogFilter {
+	time: TimeRange
+	"""
+	Sensor
+	
+	The endpoint ID the records are stored under.
+	"""
+	sensor: String!
+}
+
+"""
+A Windows event log record an endpoint sent.
+"""
+type EndpointWindowsEventLogEvent {
+	"""
+	Event Time
+	
+	The time the record is stored under.
+	"""
+	time: DateTime!
+	"""
+	Channel
+	"""
+	channel: String
+	"""
+	Provider
+	"""
+	provider: String
+	"""
+	Event ID
+	"""
+	eventId: Int
+	"""
+	Version
+	"""
+	version: Int
+	"""
+	Level
+	"""
+	level: Int
+	"""
+	Task
+	"""
+	task: Int
+	"""
+	Opcode
+	"""
+	opcode: Int
+	"""
+	Keywords
+	"""
+	keywords: StringNumberU64
+	"""
+	Record ID
+	"""
+	recordId: StringNumberU64
+	"""
+	Computer
+	"""
+	computer: String
+	"""
+	User SID
+	"""
+	userSid: String
+	"""
+	Event Data
+	"""
+	eventData: [EndpointEventData!]
+	"""
+	User Data XML
+	"""
+	userDataXml: String
+	"""
+	Endpoint Header
+	"""
+	endpoint: EndpointHeader!
+}
+
+type EndpointWindowsEventLogEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [EndpointWindowsEventLogEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [EndpointWindowsEventLogEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type EndpointWindowsEventLogEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: EndpointWindowsEventLogEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
 """
 Filters for exporting events.
 
@@ -905,6 +1383,12 @@ type FileCreateEvent {
 	targetFilename: String!
 	creationUtcTime: DateTime!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type FileCreateEventConnection {
@@ -948,6 +1432,12 @@ type FileCreateStreamHashEvent {
 	hash: [String!]!
 	contents: String!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type FileCreateStreamHashEventConnection {
@@ -990,6 +1480,12 @@ type FileCreationTimeChangedEvent {
 	creationUtcTime: DateTime!
 	previousCreationUtcTime: DateTime!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type FileCreationTimeChangedEventConnection {
@@ -1032,6 +1528,12 @@ type FileDeleteDetectedEvent {
 	targetFilename: String!
 	hashes: [String!]!
 	isExecutable: Boolean!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type FileDeleteDetectedEventConnection {
@@ -1075,6 +1577,12 @@ type FileDeleteEvent {
 	hashes: [String!]!
 	isExecutable: Boolean!
 	archived: Boolean!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type FileDeleteEventConnection {
@@ -1558,6 +2066,12 @@ type ImageLoadedEvent {
 	signature: String!
 	signatureStatus: String!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type ImageLoadedEventConnection {
@@ -2355,6 +2869,12 @@ type NetworkConnectionEvent {
 	destinationHostname: String!
 	destinationPort: Int!
 	destinationPortName: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type NetworkConnectionEventConnection {
@@ -2773,6 +3293,12 @@ type PipeEventEvent {
 	pipeName: String!
 	image: String!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type PipeEventEventConnection {
@@ -2818,6 +3344,58 @@ input PortRange {
 	end: Int
 }
 
+type ProcessAccessEvent {
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	sourceProcessGuid: String!
+	sourceProcessId: StringNumberU32!
+	sourceThreadId: StringNumberU32!
+	sourceImage: String!
+	targetProcessGuid: String!
+	targetProcessId: StringNumberU32!
+	targetImage: String!
+	grantedAccess: StringNumberU64!
+	callTrace: String!
+	sourceUser: String!
+	targetUser: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
+}
+
+type ProcessAccessEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [ProcessAccessEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [ProcessAccessEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type ProcessAccessEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: ProcessAccessEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
 type ProcessCreateEvent {
 	time: DateTime!
 	agentName: String!
@@ -2843,6 +3421,20 @@ type ProcessCreateEvent {
 	parentImage: String!
 	parentCommandLine: String!
 	parentUser: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
+	"""
+	Full Logon ID
+	
+	The 64-bit logon ID an endpoint sent; `logonId` then holds it if it fits
+	in 32 bits and `4294967295` otherwise. `null` unless an endpoint sent
+	the record.
+	"""
+	logonIdFull: StringNumberU64
 }
 
 type ProcessCreateEventConnection {
@@ -2883,6 +3475,12 @@ type ProcessTamperingEvent {
 	image: String!
 	tamperType: String!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type ProcessTamperingEventConnection {
@@ -2922,6 +3520,12 @@ type ProcessTerminatedEvent {
 	processId: StringNumberU32!
 	image: String!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type ProcessTerminatedEventConnection {
@@ -3079,6 +3683,16 @@ type Query {
 	searchFileDeleteEvents(filter: SearchFilter!): [DateTime!]!
 	searchProcessTamperEvents(filter: SearchFilter!): [DateTime!]!
 	searchFileDeleteDetectedEvents(filter: SearchFilter!): [DateTime!]!
+	driverLoadEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): DriverLoadEventConnection!
+	createRemoteThreadEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): CreateRemoteThreadEventConnection!
+	rawAccessReadEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): RawAccessReadEventConnection!
+	processAccessEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): ProcessAccessEventConnection!
+	registryObjectAddDelEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): RegistryObjectAddDelEventConnection!
+	searchDriverLoadEvents(filter: SearchFilter!): [DateTime!]!
+	searchCreateRemoteThreadEvents(filter: SearchFilter!): [DateTime!]!
+	searchRawAccessReadEvents(filter: SearchFilter!): [DateTime!]!
+	searchProcessAccessEvents(filter: SearchFilter!): [DateTime!]!
+	searchRegistryObjectAddDelEvents(filter: SearchFilter!): [DateTime!]!
 	sysmonEvents(filter: SysmonEventFilter!, after: String, before: String, first: Int, last: Int): SysmonEventsConnection!
 	secuLogRawEvents(filter: SecuLogFilter!, after: String, before: String, first: Int, last: Int): SecuLogRawEventConnection!
 	netflow5RawEvents(filter: NetflowFilter!, after: String, before: String, first: Int, last: Int): Netflow5RawEventConnection!
@@ -3087,6 +3701,18 @@ type Query {
 	Returns the aggregated customer data deletion job for the requested customer.
 	"""
 	customerDataDeletionResult(customerId: StringNumberU32!, requestFromPeer: Boolean): CustomerDataDeletionResult
+	"""
+	Returns the Windows event log records an endpoint sent.
+	"""
+	endpointWindowsEventLogEvents(filter: EndpointLogFilter!, after: String, before: String, first: Int, last: Int): EndpointWindowsEventLogEventConnection!
+	"""
+	Returns the journald records an endpoint sent.
+	"""
+	endpointJournaldEvents(filter: EndpointLogFilter!, after: String, before: String, first: Int, last: Int): EndpointJournaldEventConnection!
+	"""
+	Returns the auditd events an endpoint sent.
+	"""
+	endpointAuditdEvents(filter: EndpointLogFilter!, after: String, before: String, first: Int, last: Int): EndpointAuditdEventConnection!
 }
 
 """
@@ -3239,6 +3865,52 @@ type RadiusRawEventEdge {
 	cursor: String!
 }
 
+type RawAccessReadEvent {
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	device: String!
+	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
+}
+
+type RawAccessReadEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [RawAccessReadEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [RawAccessReadEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type RawAccessReadEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: RawAccessReadEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
 """
 Represents an event extracted from the RDP protocol.
 """
@@ -3348,6 +4020,12 @@ type RegistryKeyValueRenameEvent {
 	targetObject: String!
 	newName: String!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type RegistryKeyValueRenameEventConnection {
@@ -3379,6 +4057,53 @@ type RegistryKeyValueRenameEventEdge {
 	cursor: String!
 }
 
+type RegistryObjectAddDelEvent {
+	time: DateTime!
+	agentName: String!
+	agentId: String!
+	eventType: String!
+	processGuid: String!
+	processId: StringNumberU32!
+	image: String!
+	targetObject: String!
+	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
+}
+
+type RegistryObjectAddDelEventConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [RegistryObjectAddDelEventEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [RegistryObjectAddDelEvent!]!
+}
+
+"""
+An edge in a connection.
+"""
+type RegistryObjectAddDelEventEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: RegistryObjectAddDelEvent!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
 type RegistryValueSetEvent {
 	time: DateTime!
 	agentName: String!
@@ -3390,6 +4115,12 @@ type RegistryValueSetEvent {
 	targetObject: String!
 	details: String!
 	user: String!
+	"""
+	Endpoint Header
+	
+	`null` unless an endpoint sent the record.
+	"""
+	endpoint: EndpointHeader
 }
 
 type RegistryValueSetEventConnection {
@@ -3933,7 +4664,7 @@ input SysmonEventFilter {
 	agentId: String
 }
 
-union SysmonEvents = ProcessCreateEvent | FileCreationTimeChangedEvent | NetworkConnectionEvent | ProcessTerminatedEvent | ImageLoadedEvent | FileCreateEvent | RegistryValueSetEvent | RegistryKeyValueRenameEvent | FileCreateStreamHashEvent | PipeEventEvent | DnsEventEvent | FileDeleteEvent | ProcessTamperingEvent | FileDeleteDetectedEvent
+union SysmonEvents = ProcessCreateEvent | FileCreationTimeChangedEvent | NetworkConnectionEvent | ProcessTerminatedEvent | ImageLoadedEvent | FileCreateEvent | RegistryValueSetEvent | RegistryKeyValueRenameEvent | FileCreateStreamHashEvent | PipeEventEvent | DnsEventEvent | FileDeleteEvent | ProcessTamperingEvent | FileDeleteDetectedEvent | DriverLoadEvent | CreateRemoteThreadEvent | RawAccessReadEvent | ProcessAccessEvent | RegistryObjectAddDelEvent
 
 type SysmonEventsConnection {
 	"""

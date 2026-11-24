@@ -1,6 +1,8 @@
 #[cfg(feature = "cluster")]
 mod client;
 pub(crate) mod customer_deletion;
+pub(crate) mod endpoint_header;
+mod endpoint_log;
 mod export;
 #[cfg(test)]
 pub(crate) use export::{ExportTestControl, register_export_test_control};
@@ -83,6 +85,7 @@ pub struct Query(
     security::SecurityLogQuery,
     netflow::NetflowQuery,
     customer_deletion::CustomerDeletionQuery,
+    endpoint_log::EndpointLogQuery,
 );
 
 #[derive(Default, MergedObject)]
