@@ -6569,6 +6569,76 @@ async fn time_series_generator_cancelled_before_replay_end_runs_cleanup() {
     .await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn time_series_generator_replay_end_write_failure_ends_subscription() {
+    const START: i64 = 50;
+    const FAILING_ID: u32 = 16;
+    const WITNESS_ID: u32 = 17;
+    with_log_capture(|log_capture| async move {
+        with_test_harness(|harness| {
+            Box::pin(async move {
+                let (paused_tx, paused_rx) = oneshot::channel();
+                let (resume_tx, resume_rx) = oneshot::channel();
+                REPLAY_END_HOOKS
+                    .get_or_init(StdMutex::default)
+                    .lock()
+                    .unwrap()
+                    .insert(FAILING_ID.to_string(), (paused_tx, resume_rx));
+
+                let _failing = subscribe_conn_generator(
+                    &mut harness.publish,
+                    conn_generator_request(FAILING_ID, START),
+                )
+                .await;
+                tokio::time::timeout(StdDuration::from_secs(10), paused_rx)
+                    .await
+                    .unwrap()
+                    .unwrap();
+
+                // A second subscription on the same connection reaches the
+                // realtime loop, which ends and cleans up once the server
+                // sees the connection close. That is the signal that the
+                // paused subscription's next write can only fail.
+                let mut witness = subscribe_conn_generator(
+                    &mut harness.publish,
+                    conn_generator_request(WITNESS_ID, START),
+                )
+                .await;
+                assert_replay_end(&mut witness, START).await;
+                assert_eq!(
+                    registered_target_sensors(&harness.stream_direct_channels).await,
+                    vec![SENSOR_TIME_SERIES_GENERATOR_THREE.to_string(); 2]
+                );
+
+                harness.publish.conn.close(0_u32.into(), b"");
+                wait_for_registered_sensors(
+                    &harness.stream_direct_channels,
+                    "the witness subscription did not observe the closed connection",
+                    |sensors| sensors.len() == 1,
+                )
+                .await;
+                resume_tx.send(()).unwrap();
+
+                // The failed replay-end write ends the subscription the way a
+                // failed replayed record does: reported under its task name,
+                // after its cleanup has run.
+                assert_log_contains(
+                    &log_capture,
+                    "publish-stream-src3-Conn-16 failed: Failed to write the time series generator replay-end frame",
+                )
+                .await;
+                assert_eq!(
+                    registered_target_sensors(&harness.stream_direct_channels).await,
+                    Vec::<String>::new(),
+                    "expected no channel keys to survive the failed replay-end write"
+                );
+            })
+        })
+        .await;
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn semi_supervised_delivers_negative_timestamps() {
     with_test_harness(|harness| {
