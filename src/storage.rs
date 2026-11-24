@@ -109,7 +109,10 @@ pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 50] = [
     "endpoint journald",
     "endpoint auditd",
 ];
-const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
+/// The column family naming every sensor whose events are stored, with the
+/// time it was last active; retention walks these names.
+pub(crate) const SENSORS_CF: &str = "sensors";
+const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = [SENSORS_CF];
 const CUSTOMER_DELETION_JOBS_CF: &str = "customer deletion jobs";
 /// The column family holding periodic time series, keyed by series ID and
 /// window start rather than by sensor.
@@ -305,6 +308,9 @@ impl Database {
         cfs_name.push(CUSTOMER_DELETION_JOBS_CF);
         cfs_name.push(endpoint::ENDPOINT_ENTRY_CF);
         cfs_name.push(endpoint::ENDPOINT_EVENTS_CF);
+        cfs_name.push(endpoint::ENDPOINT_STREAMS_CF);
+        cfs_name.push(endpoint::ENDPOINT_LOSSES_CF);
+        cfs_name.push(endpoint::ENDPOINT_LAST_RECEIVED_CF);
 
         let cfs = cfs_name
             .into_iter()
@@ -575,7 +581,7 @@ impl Database {
 
     /// Returns the store for connection sensors
     pub fn sensors_store(&self) -> Result<SensorStore<'_>> {
-        let cf = self.get_cf_handle("sensors")?;
+        let cf = self.get_cf_handle(SENSORS_CF)?;
         Ok(SensorStore { db: &self.db, cf })
     }
 
@@ -654,6 +660,34 @@ impl Database {
     pub(crate) fn get_cf_for_test(&self, cf_name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let cf = self.get_cf_handle(cf_name)?;
         Ok(self.db.get_cf(cf, key)?)
+    }
+
+    /// Runs one retention cleanup that deletes the events of every sensor in
+    /// the `sensors` column family older than `cutoff`.
+    #[cfg(test)]
+    pub(crate) fn retain_older_than_for_test(&self, cutoff: i64) -> Result<()> {
+        retain_cleanup_iteration(
+            self,
+            RetentionCutoffs {
+                data: cutoff,
+                oplog: 0,
+            },
+            0_i64.to_be_bytes(),
+            &AtomicBool::new(false),
+        )
+    }
+
+    /// Returns every key and value of `cf_name`, in key order.
+    #[cfg(test)]
+    pub(crate) fn entries_for_test(&self, cf_name: &str) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let cf = self.get_cf_handle(cf_name)?;
+        self.db
+            .iterator_cf(cf, rocksdb::IteratorMode::Start)
+            .map(|item| {
+                item.map(|(key, value)| (key.to_vec(), value.to_vec()))
+                    .map_err(Into::into)
+            })
+            .collect()
     }
 
     /// Drops the column family `cf_name`, so opening its store fails.
@@ -1022,11 +1056,15 @@ impl Database {
 /// The column family is identified by its handle's address because a store
 /// keeps no name for it; the handle lives as long as the database.
 fn append_unique_lock(cf: &ColumnFamily, prefix: &[u8]) -> &'static Mutex<()> {
+    &APPEND_UNIQUE_LOCKS[append_unique_lock_index(cf, prefix)]
+}
+
+/// Returns the index in `APPEND_UNIQUE_LOCKS` of the lock for the keys of
+/// `cf` that start with `prefix`, always below the lock count.
+fn append_unique_lock_index(cf: &ColumnFamily, prefix: &[u8]) -> usize {
     let hash = APPEND_UNIQUE_LOCK_HASHER.hash_one((ptr::from_ref(cf).addr(), prefix));
     let lock_count = u64::try_from(APPEND_UNIQUE_LOCKS.len()).expect("the lock count fits in u64");
-    let index =
-        usize::try_from(hash % lock_count).expect("a remainder below the lock count fits in usize");
-    &APPEND_UNIQUE_LOCKS[index]
+    usize::try_from(hash % lock_count).expect("a remainder below the lock count fits in usize")
 }
 
 /// Where `RawEventStore::append_unique` put an event, or why it did not.
@@ -2594,11 +2632,11 @@ mod tests {
             assert_eq!(checked_db, 3);
             assert_eq!(
                 checked_cf,
-                // The customer deletion jobs and the two endpoint families
+                // The customer deletion jobs and the five endpoint families
                 // are in neither list.
                 3 * (RAW_DATA_COLUMN_FAMILY_NAMES.len()
                     + super::META_DATA_COLUMN_FAMILY_NAMES.len()
-                    + 3)
+                    + 6)
             );
             drop(db);
         }

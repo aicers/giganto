@@ -85,7 +85,6 @@ pub(super) fn accepted_kinds() -> Vec<AcceptedKind> {
 }
 
 /// A senta record converted into the giganto-client struct it is stored as.
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConvertedRecord {
     /// The storage sensor: the header's `endpoint_id`, lowercase hyphenated.
@@ -97,9 +96,9 @@ pub(crate) struct ConvertedRecord {
     pub(crate) event: EndpointEvent,
 }
 
-#[cfg_attr(not(test), expect(dead_code))]
 impl ConvertedRecord {
     /// Returns the Giganto event kind the record is stored as.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn kind(&self) -> RawEventKind {
         self.event.kind()
     }
@@ -108,7 +107,6 @@ impl ConvertedRecord {
 /// The giganto-client struct of a converted endpoint record.
 ///
 /// The structs are boxed: they differ in size by several hundred bytes.
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EndpointEvent {
     ProcessCreate(Box<ProcessCreate>),
@@ -135,9 +133,9 @@ pub(crate) enum EndpointEvent {
     Auditd(Box<Auditd>),
 }
 
-#[cfg_attr(not(test), expect(dead_code))]
 impl EndpointEvent {
     /// Returns the Giganto event kind of the struct.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn kind(&self) -> RawEventKind {
         match self {
             Self::ProcessCreate(_) => RawEventKind::ProcessCreate,
@@ -164,10 +162,72 @@ impl EndpointEvent {
             Self::Auditd(_) => RawEventKind::Auditd,
         }
     }
+
+    /// Returns the raw-data column family the struct is stored in: the one
+    /// module ingest stores its kind in, and the GraphQL, export and publish
+    /// paths read.
+    pub(crate) fn column_family(&self) -> &'static str {
+        match self {
+            Self::ProcessCreate(_) => "process create",
+            Self::FileCreateTime(_) => "file create time",
+            Self::NetworkConnect(_) => "network connect",
+            Self::ProcessTerminate(_) => "process terminate",
+            Self::DriverLoad(_) => "driver load",
+            Self::ImageLoad(_) => "image load",
+            Self::CreateRemoteThread(_) => "create remote thread",
+            Self::RawAccessRead(_) => "raw access read",
+            Self::ProcessAccess(_) => "process access",
+            Self::FileCreate(_) => "file create",
+            Self::RegistryObjectAddDel(_) => "registry object add del",
+            Self::RegistryValueSet(_) => "registry value set",
+            Self::RegistryKeyRename(_) => "registry key rename",
+            Self::FileCreateStreamHash(_) => "file create stream hash",
+            Self::PipeEvent(_) => "pipe event",
+            Self::DnsQuery(_) => "dns query",
+            Self::FileDelete(_) => "file delete",
+            Self::ProcessTamper(_) => "process tamper",
+            Self::FileDeleteDetected(_) => "file delete detected",
+            Self::WindowsEventLog(_) => "endpoint windows event log",
+            Self::Journald(_) => "endpoint journald",
+            Self::Auditd(_) => "endpoint auditd",
+        }
+    }
+
+    /// Returns the struct's bincode 1 serialization, the value module ingest
+    /// stores for its kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the struct cannot be serialized.
+    pub(crate) fn to_bincode(&self) -> bincode::Result<Vec<u8>> {
+        match self {
+            Self::ProcessCreate(event) => bincode::serialize(event),
+            Self::FileCreateTime(event) => bincode::serialize(event),
+            Self::NetworkConnect(event) => bincode::serialize(event),
+            Self::ProcessTerminate(event) => bincode::serialize(event),
+            Self::DriverLoad(event) => bincode::serialize(event),
+            Self::ImageLoad(event) => bincode::serialize(event),
+            Self::CreateRemoteThread(event) => bincode::serialize(event),
+            Self::RawAccessRead(event) => bincode::serialize(event),
+            Self::ProcessAccess(event) => bincode::serialize(event),
+            Self::FileCreate(event) => bincode::serialize(event),
+            Self::RegistryObjectAddDel(event) => bincode::serialize(event),
+            Self::RegistryValueSet(event) => bincode::serialize(event),
+            Self::RegistryKeyRename(event) => bincode::serialize(event),
+            Self::FileCreateStreamHash(event) => bincode::serialize(event),
+            Self::PipeEvent(event) => bincode::serialize(event),
+            Self::DnsQuery(event) => bincode::serialize(event),
+            Self::FileDelete(event) => bincode::serialize(event),
+            Self::ProcessTamper(event) => bincode::serialize(event),
+            Self::FileDeleteDetected(event) => bincode::serialize(event),
+            Self::WindowsEventLog(event) => bincode::serialize(event),
+            Self::Journald(event) => bincode::serialize(event),
+            Self::Auditd(event) => bincode::serialize(event),
+        }
+    }
 }
 
 /// Why a record could not be converted.
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum ConvertError {
     /// The record's kind is not one of [`ACCEPTED_KINDS`].
@@ -197,7 +257,6 @@ pub(crate) enum ConvertError {
 /// [`ACCEPTED_KINDS`], [`ConvertError::Body`] when the body does not decode
 /// for the kind, and [`ConvertError::TimeOutOfRange`] when a header or body
 /// time does not fit an `i64` count of nanoseconds.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn convert(record: Record) -> Result<ConvertedRecord, ConvertError> {
     let Record {
         header,
@@ -317,12 +376,12 @@ fn convert_collection_mode(mode: SentaCollectionMode) -> CollectionMode {
     }
 }
 
-/// Returns the text tag senta writes a header enum's value as.
+/// Returns the text tag senta writes an enum's value as.
 ///
 /// senta-protocol has no public accessor for the tag, so it is read back from
 /// the value's CBOR. Should that fail, the value's `Debug` form stands in, so
 /// that an unknown value never fails a conversion.
-fn wire_tag<T: Serialize + Debug>(value: &T) -> String {
+pub(super) fn wire_tag<T: Serialize + Debug>(value: &T) -> String {
     cbor::to_vec(value)
         .ok()
         .and_then(|bytes| cbor::from_slice::<String>(&bytes).ok())

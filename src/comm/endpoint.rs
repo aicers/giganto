@@ -16,14 +16,22 @@
 //!
 //! Once ready, the entry announces in its `hello_ack` the record kinds it
 //! accepts: exactly those [`convert`] turns into Giganto structs.
+//!
+//! An admitted connection's telemetry messages go, one at a time and in
+//! order, to the generation's telemetry streams, [`EndpointFlows`], which
+//! store each batch's records together with the stream's state in one synced
+//! write before the batch is acknowledged. An endpoint whose records are
+//! stored joins the generation's sensor sets under its endpoint id.
 
 mod active_list;
 mod convert;
+mod receiver;
+mod sensors;
 
 use std::{
     collections::VecDeque,
     net::SocketAddr,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::Duration,
 };
 
@@ -35,8 +43,12 @@ use senta_protocol::{
         tls::{TELEMETRY_ALPN, alpn_matches, peer_spki_hash},
     },
     connection::{
-        ConnectionKind, Frame, IDLE_TIMEOUT, ServerAction, ServerChannel, ServerConfig,
+        ConnectionKind, Envelope, Frame, IDLE_TIMEOUT, ServerAction, ServerChannel, ServerConfig,
         ServerConnection, StandingVerdict,
+    },
+    telemetry::{
+        ReceiverConnection, ReceiverOutput, TELEMETRY_MESSAGE_KINDS, TelemetryDecodeError,
+        TelemetryMessage,
     },
 };
 use tokio::{
@@ -48,11 +60,15 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 pub(crate) use self::active_list::{ApplyFailure, ApplyRefusal, EndpointList, ListAck, ListState};
 use self::active_list::{CloseCommand, PendingConnection, store_duplicate_key};
+use self::receiver::{Delivered, Handled};
+pub(crate) use self::{receiver::EndpointFlows, sensors::EndpointSensors};
 use crate::{
     cancellation::{TaskTracker, drain_with_report},
+    datetime::DateTime,
     server::endpoint_server_config,
     storage::Database,
     tls_reload::{TlsMaterial, TlsWatch},
@@ -63,6 +79,9 @@ const ENDPOINT_DRAIN_LABEL: &str = "endpoint";
 
 /// The size of the buffer each connection reads into.
 const READ_BUFFER_SIZE: usize = 16 * 1024;
+
+/// How often the entry forgets the telemetry streams closed long enough ago.
+const PRUNE_INTERVAL: Duration = Duration::from_hours(24);
 
 /// How long closing a connection may spend writing what is left to write, the
 /// frames the protocol sent before it closed and then TLS `close_notify`,
@@ -138,12 +157,15 @@ impl EndpointTls {
     }
 }
 
-/// What every connection of the entry shares: the node's active list and the
-/// generation's database, where duplicate keys are recorded.
+/// What every connection of the entry shares: the node's active list, the
+/// generation's database, where duplicate keys are recorded, its telemetry
+/// streams and its sensor sets.
 #[derive(Clone)]
 struct Entry {
     list: Arc<EndpointList>,
     database: Database,
+    flows: Arc<EndpointFlows>,
+    sensors: Arc<EndpointSensors>,
 }
 
 /// The endpoint entry before its listener is bound.
@@ -165,20 +187,28 @@ pub(crate) struct BoundServer {
 
 impl Server {
     /// Creates the entry at `address`, serving `tls_config` until a TLS
-    /// reload replaces it through `endpoint_tls`, and admitting connections
-    /// by `list`.
+    /// reload replaces it through `endpoint_tls`, admitting connections by
+    /// `list`, handing their telemetry to `flows`, and adding the endpoints
+    /// whose records are stored to `sensors`.
     pub(crate) fn new(
         address: SocketAddr,
         tls_config: Arc<rustls::ServerConfig>,
         endpoint_tls: Arc<EndpointTls>,
         list: Arc<EndpointList>,
         database: Database,
+        flows: Arc<EndpointFlows>,
+        sensors: EndpointSensors,
     ) -> Self {
         Self {
             address,
             tls_config,
             endpoint_tls,
-            entry: Entry { list, database },
+            entry: Entry {
+                list,
+                database,
+                flows,
+                sensors: Arc::new(sensors),
+            },
         }
     }
 
@@ -226,7 +256,7 @@ impl BoundServer {
     }
 
     /// Serves the bound listener until `token` is cancelled, then drains every
-    /// connection task it started, and the lease timer.
+    /// connection task it started, the lease timer and the stream pruning.
     ///
     /// Each connection runs in its own task, the TLS handshake included, so a
     /// slow or stalled handshake holds up no other connection. When
@@ -263,6 +293,14 @@ impl BoundServer {
         // The tracker's drain waits for the timer, so its handle is not kept.
         if let Err(e) = timer {
             warn!("Endpoint entry: the lease timer was not started: {e}");
+        }
+        let flows = Arc::clone(&entry.flows);
+        let pruning = tracker.spawn("endpoint-stream-pruning", move |token| {
+            run_pruning(flows, token)
+        });
+        // Drained with the tracker too.
+        if let Err(e) = pruning {
+            warn!("Endpoint entry: closed telemetry streams will not be forgotten: {e}");
         }
         let mut acceptor = TlsAcceptor::from(tls_config);
         // A `TlsWatch` whose sender is gone reports the closure on every poll,
@@ -334,6 +372,28 @@ impl BoundServer {
     }
 }
 
+/// Forgets the telemetry streams closed long enough ago, when the entry starts
+/// and every [`PRUNE_INTERVAL`] after, until `token` is cancelled.
+async fn run_pruning(flows: Arc<EndpointFlows>, token: CancellationToken) {
+    let mut interval = tokio::time::interval(PRUNE_INTERVAL);
+    loop {
+        select! {
+            biased;
+            () = token.cancelled() => return,
+            _ = interval.tick() => {
+                let flows = Arc::clone(&flows);
+                // Run to the end once started: it holds the streams' lock and
+                // writes, neither of which an abort could stop.
+                let pruned =
+                    tokio::task::spawn_blocking(move || flows.prune(Timestamp::now())).await;
+                if let Err(e) = pruned {
+                    error!("Endpoint entry: forgetting closed telemetry streams failed: {e}");
+                }
+            }
+        }
+    }
+}
+
 /// Runs one endpoint connection: the TLS handshake, bounded by
 /// [`IDLE_TIMEOUT`], the ALPN check, then the protocol until either side
 /// closes, the active list closes it, or `token` is cancelled.
@@ -401,11 +461,25 @@ async fn run_admitted_by_list<S: AsyncRead + AsyncWrite + Unpin>(
         .list
         .open_connection(spki_sha256, remote.ip(), stop.clone());
     let registration = pending.registration();
-    let ended = serve(tls, remote, server_config(pending, entry.database), &stop).await;
+    let admitted = Arc::new(OnceLock::new());
+    let config = server_config(pending, entry.database, Arc::clone(&admitted));
+    let mut session = Session {
+        flows: entry.flows,
+        sensors: Arc::clone(&entry.sensors),
+        admitted,
+        receiver: None,
+        sensor: None,
+        stop: stop.clone(),
+    };
+    let ended = serve(tls, remote, config, &stop, &mut session).await;
     let command = registration.command();
-    // The connection has stopped processing messages: it leaves the list,
-    // and an update waiting for it may answer.
+    // The connection has stopped processing messages, its last call on the
+    // telemetry streams included: it leaves the list, and an update waiting
+    // for it may answer.
     drop(registration);
+    if let Some(sensor) = session.sensor.take() {
+        entry.sensors.remove(&sensor).await;
+    }
     if let Ended::Stopped { unsent } = ended {
         let error = match &command {
             Some(CloseCommand::Error(frame)) => Some(frame),
@@ -419,26 +493,135 @@ async fn run_admitted_by_list<S: AsyncRead + AsyncWrite + Unpin>(
 ///
 /// Its `hello_ack` carries the `entry_id` stored when the connection was
 /// built. The first `hello` is judged by the active list, which admits the
-/// connection or refuses it as its standing calls for; every later message of
-/// an admitted connection is taken as from [`Standing::Active`]. The entry
-/// accepts the kinds of [`convert::ACCEPTED_KINDS`], each at schema version 1.
-fn server_config(pending: PendingConnection, database: Database) -> ServerConfig {
+/// connection or refuses it as its standing calls for; the endpoint id of an
+/// admitted connection is put in `admitted`. Every later message of an
+/// admitted connection is taken as from [`Standing::Active`], and the
+/// telemetry messages are delivered to the caller. The entry accepts the
+/// kinds of [`convert::ACCEPTED_KINDS`], each at schema version 1.
+fn server_config(
+    pending: PendingConnection,
+    database: Database,
+    admitted: Arc<OnceLock<Uuid>>,
+) -> ServerConfig {
     let channel = ServerChannel::Telemetry {
         entry_id: pending.hello_ack_entry_id(),
         accepted_kinds: convert::accepted_kinds(),
     };
-    let mut admitted = false;
-    ServerConfig::new(channel, Standing::Unready.receive_limit()).with_standing(move |t| {
-        if admitted {
-            return allowed(&Standing::Active, ConnectionKind::Telemetry, t).to_standing_verdict();
+    ServerConfig::new(channel, Standing::Unready.receive_limit())
+        .with_known_kinds(TELEMETRY_MESSAGE_KINDS)
+        .with_standing(move |t| {
+            if admitted.get().is_some() {
+                return allowed(&Standing::Active, ConnectionKind::Telemetry, t)
+                    .to_standing_verdict();
+            }
+            let admission = pending.admit();
+            if let Some((at, duplicate_key)) = admission.duplicate_key {
+                store_duplicate_key(&database, at, duplicate_key);
+            }
+            if admission.verdict == StandingVerdict::Accept {
+                match admission.endpoint_id {
+                    Some(endpoint_id) => {
+                        let _ = admitted.set(endpoint_id);
+                    }
+                    None => return StandingVerdict::Close,
+                }
+            }
+            admission.verdict
+        })
+}
+
+/// What a connection's telemetry needs beside its protocol state.
+struct Session {
+    flows: Arc<EndpointFlows>,
+    sensors: Arc<EndpointSensors>,
+    /// The endpoint id the active list admitted the connection as, set at
+    /// its `hello`.
+    admitted: Arc<OnceLock<Uuid>>,
+    /// The connection's stream state, made when its `hello` is admitted.
+    receiver: Option<ReceiverConnection>,
+    /// The sensor the connection added to the sensor sets, once its records
+    /// were first stored.
+    sensor: Option<String>,
+    /// The token the active list stops the connection through.
+    stop: CancellationToken,
+}
+
+/// What [`Session::deliver`] asks [`serve`] to do next.
+enum Next {
+    /// Send these frames, then handle the frames received after the message.
+    Reply(Vec<Frame>),
+    /// The connection was stopped before its message was handled.
+    Stopped,
+    /// Close the connection without a word.
+    Close,
+}
+
+impl Session {
+    /// Handles a delivered telemetry message on a blocking thread, holding
+    /// the `ReceiverStream` lock, and waits for it to end: once started, the
+    /// call runs to its end whatever happens to the connection meanwhile.
+    async fn deliver(&mut self, envelope: &Envelope, remote: SocketAddr) -> Next {
+        let delivered = match TelemetryMessage::decode(envelope.t(), envelope.body()) {
+            Ok(message) => Delivered::Message(message),
+            Err(TelemetryDecodeError::BatchTooLarge { stream }) => Delivered::BatchTooLarge(stream),
+            Err(e) => {
+                debug!("Endpoint connection from {remote}: {e}; closing");
+                return Next::Close;
+            }
+        };
+        let Some(mut receiver) = self.receiver.take() else {
+            warn!("Endpoint connection from {remote}: a telemetry message before admission");
+            return Next::Close;
+        };
+        let flows = Arc::clone(&self.flows);
+        let stop = self.stop.clone();
+        let handled = tokio::task::spawn_blocking(move || {
+            let handled = flows.handle(&stop, &mut receiver, delivered);
+            (receiver, handled)
+        })
+        .await;
+        let (receiver, handled) = match handled {
+            Ok(handled) => handled,
+            Err(e) => {
+                error!(
+                    "Endpoint connection from {remote}: handling a telemetry message failed: {e}"
+                );
+                return Next::Close;
+            }
+        };
+        let endpoint_id = receiver.endpoint_id();
+        self.receiver = Some(receiver);
+        let (output, stored_at) = match handled {
+            Handled::Stopped => return Next::Stopped,
+            Handled::Done { output, stored_at } => (output, stored_at),
+        };
+        if let Some(received) = stored_at
+            && self.sensor.is_none()
+        {
+            let sensor = endpoint_id.to_string();
+            self.sensors.add(&sensor, DateTime::from(received)).await;
+            self.sensor = Some(sensor);
         }
-        let admission = pending.admit();
-        if let Some((at, duplicate_key)) = admission.duplicate_key {
-            store_duplicate_key(&database, at, duplicate_key);
+        match output {
+            ReceiverOutput::Disconnect => {
+                debug!("Endpoint connection from {remote}: closed by its telemetry stream");
+                Next::Close
+            }
+            ReceiverOutput::Reply(messages) => {
+                let mut frames = Vec::with_capacity(messages.len());
+                for message in messages {
+                    match message.to_frame() {
+                        Ok(frame) => frames.push(frame),
+                        Err(e) => {
+                            error!("Endpoint connection from {remote}: cannot encode a reply: {e}");
+                            return Next::Close;
+                        }
+                    }
+                }
+                Next::Reply(frames)
+            }
         }
-        admitted = admission.verdict == StandingVerdict::Accept;
-        admission.verdict
-    })
+    }
 }
 
 /// How [`serve`] ended.
@@ -454,12 +637,15 @@ enum Ended {
 }
 
 /// Runs the protocol on an established TLS stream, configured by `config`,
-/// until the connection closes or `token` is cancelled.
+/// until the connection closes or `token` is cancelled, handing the telemetry
+/// messages to `session`.
+#[allow(clippy::too_many_lines)] // One arm per action, each short.
 async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     tls: &mut S,
     remote: SocketAddr,
     config: ServerConfig,
     token: &CancellationToken,
+    session: &mut Session,
 ) -> Ended {
     let origin = Instant::now();
     let mut connection = ServerConnection::new(config, Duration::ZERO);
@@ -500,6 +686,9 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                          endpoint crate version {}",
                         handshake.version, handshake.hello.crate_version
                     );
+                    session.receiver = session.admitted.get().map(|endpoint_id| {
+                        ReceiverConnection::new(*endpoint_id, convert::accepted_kinds())
+                    });
                 }
                 ServerAction::Send(frame) => {
                     let mut liveness = Liveness {
@@ -538,16 +727,34 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                     "Endpoint connection from {remote} refused {:?}",
                     unsupported.kind
                 ),
-                // No message kind of this entry's own is registered, so the
-                // helper answers every other `t` with `unsupported` and never
-                // delivers one. Should it, the body cannot be handled here.
+                // A telemetry message. The frames received after it wait
+                // until it has been handled and its replies sent.
                 ServerAction::Deliver(envelope) => {
-                    let reason = connection.reject_body();
-                    debug!(
-                        "Endpoint connection from {remote} delivered unhandled {:?}: {reason:?}",
-                        envelope.t()
-                    );
-                    return Ended::Closed;
+                    match session.deliver(&envelope, remote).await {
+                        Next::Reply(frames) => {
+                            for frame in frames {
+                                let mut liveness = Liveness {
+                                    connection: &mut connection,
+                                    origin,
+                                    due: &mut actions,
+                                };
+                                match send(tls, frame.as_bytes(), &mut liveness, remote, token)
+                                    .await
+                                {
+                                    Sent::Written => {}
+                                    Sent::Stopped { unsent } => return Ended::Stopped { unsent },
+                                    Sent::Failed => return Ended::Closed,
+                                }
+                            }
+                        }
+                        Next::Stopped => return Ended::Stopped { unsent: Vec::new() },
+                        Next::Close => {
+                            let reason = connection.reject_body();
+                            debug!("Endpoint connection from {remote} closed: {reason:?}");
+                            return Ended::Closed;
+                        }
+                    }
+                    actions.extend(connection.accept_body(Timestamp::now(), origin.elapsed()));
                 }
             }
         }
@@ -732,7 +939,46 @@ async fn close<S: AsyncWrite + Unpin>(tls: &mut S, token: &CancellationToken) {
 }
 
 #[cfg(test)]
+impl Entry {
+    /// Returns an entry over `list`, `database` and `flows`, with sensor sets
+    /// of its own.
+    fn for_test(list: &Arc<EndpointList>, database: &Database, flows: &Arc<EndpointFlows>) -> Self {
+        Self {
+            list: Arc::clone(list),
+            database: database.clone(),
+            flows: Arc::clone(flows),
+            sensors: Arc::new(EndpointSensors::new(
+                database.clone(),
+                crate::comm::new_ingest_sensors(database),
+                crate::comm::new_runtime_ingest_sensors(),
+                None,
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Session {
+    /// Returns the session of a connection no list admits, over `database`.
+    fn for_test(database: &Database) -> Self {
+        let flows = Arc::new(EndpointFlows::new(database.clone()));
+        let list = Arc::new(EndpointList::new(Duration::from_secs(60)));
+        let entry = Entry::for_test(&list, database, &flows);
+        Self {
+            flows,
+            sensors: entry.sensors,
+            admitted: Arc::new(OnceLock::new()),
+            receiver: None,
+            sensor: None,
+            stop: CancellationToken::new(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    mod telemetry;
+
     use std::{
         net::Ipv4Addr,
         pin::Pin,
@@ -754,13 +1000,20 @@ mod tests {
         telemetry_codes::TelemetryError,
     };
     use tempfile::TempDir;
-    use tokio::{io::ReadBuf, sync::watch, task::JoinHandle};
+    use tokio::{
+        io::ReadBuf,
+        sync::{Notify, watch},
+        task::JoinHandle,
+    };
     use uuid::Uuid;
 
     use super::*;
     use crate::{
-        comm::endpoint::active_list::tests::{
-            ENTRY_ID, diff, encode, entry, error_of, full, suspended,
+        comm::{
+            IngestSensors, RunTimeIngestSensors,
+            endpoint::active_list::tests::{
+                ENTRY_ID, diff, encode, entry, error_of, full, suspended,
+            },
         },
         storage::DbOptions,
         test_bootroot::{
@@ -811,7 +1064,12 @@ mod tests {
         tls_tx: Option<watch::Sender<Arc<TlsMaterial>>>,
         list: Arc<EndpointList>,
         db: Database,
-        _db_dir: TempDir,
+        flows: Arc<EndpointFlows>,
+        ingest_sensors: IngestSensors,
+        runtime_ingest_sensors: RunTimeIngestSensors,
+        sensor_change: Arc<Notify>,
+        /// The database's directory, when the entry made the database.
+        db_dir: Option<TempDir>,
     }
 
     impl Running {
@@ -837,22 +1095,46 @@ mod tests {
 
         /// Starts an unready entry whose lease is `lease` long.
         async fn start_with_lease(material: Arc<TlsMaterial>, lease: Duration) -> Self {
+            let db_dir = tempfile::tempdir().expect("tempdir");
+            let db =
+                Database::open(db_dir.path(), &DbOptions::default()).expect("open the database");
+            let ingest_sensors = crate::comm::new_ingest_sensors(&db);
+            let mut running = Self::start_on(material, lease, db, ingest_sensors).await;
+            running.db_dir = Some(db_dir);
+            running
+        }
+
+        /// Starts an unready entry whose lease is `lease` long, over `db`
+        /// and `ingest_sensors`.
+        async fn start_on(
+            material: Arc<TlsMaterial>,
+            lease: Duration,
+            db: Database,
+            ingest_sensors: IngestSensors,
+        ) -> Self {
             let endpoint_tls = Arc::new(EndpointTls::default());
             let tls_config = endpoint_tls
                 .build(&material)
                 .expect("the endpoint TLS configuration is built");
             let (tls_tx, tls_watch) = test_tls_watch(material);
-            let db_dir = tempfile::tempdir().expect("tempdir");
-            let db =
-                Database::open(db_dir.path(), &DbOptions::default()).expect("open the database");
             let list = Arc::new(EndpointList::new(lease));
             list.load_entry_id(&db);
+            let flows = Arc::new(EndpointFlows::new(db.clone()));
+            let runtime_ingest_sensors = crate::comm::new_runtime_ingest_sensors();
+            let sensor_change = Arc::new(Notify::new());
             let server = Server::new(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
                 tls_config,
                 endpoint_tls,
                 Arc::clone(&list),
                 db.clone(),
+                Arc::clone(&flows),
+                EndpointSensors::new(
+                    db.clone(),
+                    ingest_sensors.clone(),
+                    runtime_ingest_sensors.clone(),
+                    Some(Arc::clone(&sensor_change)),
+                ),
             )
             .bind()
             .await
@@ -867,7 +1149,11 @@ mod tests {
                 tls_tx: Some(tls_tx),
                 list,
                 db,
-                _db_dir: db_dir,
+                flows,
+                ingest_sensors,
+                runtime_ingest_sensors,
+                sensor_change,
+                db_dir: None,
             }
         }
 
@@ -890,7 +1176,7 @@ mod tests {
             entry_id: Uuid,
         ) -> Result<ListAck, ApplyRefusal> {
             self.list
-                .apply(&encode(update), &entry_id.to_string(), &self.db)
+                .apply(&encode(update), &entry_id.to_string(), &self.flows)
                 .await
         }
 
@@ -1646,6 +1932,9 @@ mod tests {
             written: Vec::new(),
         };
         let remote = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let db_dir = tempfile::tempdir().expect("tempdir");
+        let database =
+            Database::open(db_dir.path(), &DbOptions::default()).expect("open the database");
 
         let started = Instant::now();
         let channel = ServerChannel::Telemetry {
@@ -1655,7 +1944,13 @@ mod tests {
         let config = ServerConfig::new(channel, Standing::Active.receive_limit());
         let served = tokio::time::timeout(
             IDLE_TIMEOUT,
-            serve(&mut stream, remote, config, &CancellationToken::new()),
+            serve(
+                &mut stream,
+                remote,
+                config,
+                &CancellationToken::new(),
+                &mut Session::for_test(&database),
+            ),
         )
         .await;
         assert!(
@@ -2058,11 +2353,15 @@ mod tests {
             accepted_kinds: Vec::new(),
         };
         let config = ServerConfig::new(channel, Standing::Unready.receive_limit());
+        let db_dir = tempfile::tempdir().expect("tempdir");
+        let database =
+            Database::open(db_dir.path(), &DbOptions::default()).expect("open the database");
+        let mut session = Session::for_test(&database);
         let serving = tokio::spawn({
             let token = token.clone();
             async move {
                 let remote = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-                serve(&mut entry_side, remote, config, &token).await
+                serve(&mut entry_side, remote, config, &token, &mut session).await
             }
         });
 
@@ -2135,18 +2434,16 @@ mod tests {
             Database::open(db_dir.path(), &DbOptions::default()).expect("open the database");
         let list = Arc::new(EndpointList::new(DEFAULT_LEASE_LENGTH));
         list.load_entry_id(&database);
+        let flows = Arc::new(EndpointFlows::new(database.clone()));
         let entries = vec![entry(1, KEY_ACTIVE, EntryState::Active)];
-        list.apply(&encode(&full(1, entries)), &ENTRY_ID.to_string(), &database)
+        list.apply(&encode(&full(1, entries)), &ENTRY_ID.to_string(), &flows)
             .await
             .expect("the full list applies");
 
         let (mut endpoint_side, mut entry_side) = tokio::io::duplex(PIPE_CAPACITY);
         let token = CancellationToken::new();
         let running = tokio::spawn({
-            let entry = Entry {
-                list: Arc::clone(&list),
-                database: database.clone(),
-            };
+            let entry = Entry::for_test(&list, &database, &flows);
             let token = token.clone();
             async move {
                 let remote = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
@@ -2170,7 +2467,7 @@ mod tests {
         list.apply(
             &encode(&diff(1, 2, vec![entry(1, KEY_ACTIVE, suspended())], vec![])),
             &ENTRY_ID.to_string(),
-            &database,
+            &flows,
         )
         .await
         .expect("the diff applies");

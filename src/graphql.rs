@@ -54,7 +54,9 @@ pub(crate) use crate::graphql::standalone::{
 use crate::{
     cancellation::TaskTracker,
     comm::{
-        IngestSensors, PcapSensors, endpoint::EndpointList, ingest::implement::EventFilter,
+        IngestSensors, PcapSensors,
+        endpoint::{EndpointFlows, EndpointList},
+        ingest::implement::EventFilter,
         peer::Peers,
     },
     settings::{ConfigVisible, Settings},
@@ -272,6 +274,9 @@ pub(crate) fn schema(
     // The node's endpoint active list, which outlives the generation; REview
     // drives it through the endpoint list fields.
     endpoint_list: Arc<EndpointList>,
+    // The generation's endpoint telemetry streams, which an active list
+    // update moves to a new `entry_id`.
+    endpoint_flows: Arc<EndpointFlows>,
 ) -> Schema {
     let schema = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -288,6 +293,7 @@ pub(crate) fn schema(
         .data(PcapReaperTracker(pcap_reaper_tracker))
         .data(deletion_coordination)
         .data(endpoint_list)
+        .data(endpoint_flows)
         .data(runtime_ingest_sensors)
         .data(stream_direct_channels);
     let schema = peer.add_data(schema);
@@ -1282,6 +1288,8 @@ pub(crate) mod tests {
         pub(crate) deletion_coordination: Arc<CustomerDeletionCoordinator>,
         /// The endpoint active list the schema was built with.
         pub(crate) endpoint_list: Arc<crate::comm::endpoint::EndpointList>,
+        /// The endpoint telemetry streams the schema was built with.
+        pub(crate) endpoint_flows: Arc<crate::comm::endpoint::EndpointFlows>,
         pub(crate) ingest_sensors: IngestSensors,
         pub(super) runtime_ingest_sensors: RunTimeIngestSensors,
         pub(super) pcap_sensors: PcapSensors,
@@ -1351,6 +1359,7 @@ pub(crate) mod tests {
                 senta_protocol::auth::active_list::DEFAULT_LEASE_LENGTH,
             ));
             endpoint_list.load_entry_id(&db);
+            let endpoint_flows = Arc::new(crate::comm::endpoint::EndpointFlows::new(db.clone()));
             let schema = schema(
                 NodeName(node_name.to_string()),
                 db.clone(),
@@ -1370,6 +1379,7 @@ pub(crate) mod tests {
                 crate::cancellation::TaskTracker::new(),
                 Arc::clone(&deletion_coordination),
                 Arc::clone(&endpoint_list),
+                Arc::clone(&endpoint_flows),
             );
 
             Self {
@@ -1382,6 +1392,7 @@ pub(crate) mod tests {
                 top_level_tracker,
                 deletion_coordination,
                 endpoint_list,
+                endpoint_flows,
                 ingest_sensors,
                 runtime_ingest_sensors,
                 pcap_sensors,

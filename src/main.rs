@@ -795,6 +795,17 @@ async fn run_generation(
     // The active list outlives the generation; the `entry_id` is this
     // database's.
     process.endpoint_list.load_entry_id(&database);
+    // The endpoint entry's telemetry streams are this database's, whether or
+    // not the entry runs: the active list's updates move them to a new
+    // `entry_id`. Reading their state blocks, so it is read on a blocking
+    // thread; a failure is logged and read again at the next use.
+    let endpoint_flows = Arc::new(endpoint::EndpointFlows::new(database.clone()));
+    {
+        let flows = Arc::clone(&endpoint_flows);
+        if let Err(e) = tokio::task::spawn_blocking(move || flows.load()).await {
+            error!("Endpoint entry: reading the telemetry streams failed: {e}");
+        }
+    }
 
     let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
 
@@ -898,6 +909,7 @@ async fn run_generation(
         web_reaper_tracker.clone(),
         Arc::clone(&deletion_coordination),
         Arc::clone(&process.endpoint_list),
+        Arc::clone(&endpoint_flows),
     );
 
     let web_addr = settings.config.visible.graphql_srv_addr;
@@ -1023,6 +1035,13 @@ async fn run_generation(
                         Arc::clone(&process.endpoint_tls),
                         Arc::clone(&process.endpoint_list),
                         database.clone(),
+                        Arc::clone(&endpoint_flows),
+                        endpoint::EndpointSensors::new(
+                            database.clone(),
+                            ingest_sensors.clone(),
+                            runtime_ingest_sensors.clone(),
+                            notify_sensor_change.clone(),
+                        ),
                     );
                     let handle = top_level_tracker
                         .spawn_observed("endpoint", move |token| async move {

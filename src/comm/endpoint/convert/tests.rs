@@ -1938,3 +1938,67 @@ fn the_accepted_kinds_are_exactly_the_converted_kinds() {
         }
     }
 }
+
+/// Appends `value` under `key` through the store module ingest uses for
+/// `kind`.
+fn append_through_kind_store(db: &crate::storage::Database, kind: RawEventKind, key: &[u8]) {
+    let value = b"value";
+    match kind {
+        RawEventKind::ProcessCreate => db.process_create_store().unwrap().append(key, value),
+        RawEventKind::FileCreateTime => db.file_create_time_store().unwrap().append(key, value),
+        RawEventKind::NetworkConnect => db.network_connect_store().unwrap().append(key, value),
+        RawEventKind::ProcessTerminate => db.process_terminate_store().unwrap().append(key, value),
+        RawEventKind::DriverLoad => db.driver_load_store().unwrap().append(key, value),
+        RawEventKind::ImageLoad => db.image_load_store().unwrap().append(key, value),
+        RawEventKind::CreateRemoteThread => {
+            db.create_remote_thread_store().unwrap().append(key, value)
+        }
+        RawEventKind::RawAccessRead => db.raw_access_read_store().unwrap().append(key, value),
+        RawEventKind::ProcessAccess => db.process_access_store().unwrap().append(key, value),
+        RawEventKind::FileCreate => db.file_create_store().unwrap().append(key, value),
+        RawEventKind::RegistryObjectAddDel => db
+            .registry_object_add_del_store()
+            .unwrap()
+            .append(key, value),
+        RawEventKind::RegistryValueSet => db.registry_value_set_store().unwrap().append(key, value),
+        RawEventKind::RegistryKeyRename => {
+            db.registry_key_rename_store().unwrap().append(key, value)
+        }
+        RawEventKind::FileCreateStreamHash => db
+            .file_create_stream_hash_store()
+            .unwrap()
+            .append(key, value),
+        RawEventKind::PipeEvent => db.pipe_event_store().unwrap().append(key, value),
+        RawEventKind::DnsQuery => db.dns_query_store().unwrap().append(key, value),
+        RawEventKind::FileDelete => db.file_delete_store().unwrap().append(key, value),
+        RawEventKind::ProcessTamper => db.process_tamper_store().unwrap().append(key, value),
+        RawEventKind::FileDeleteDetected => {
+            db.file_delete_detected_store().unwrap().append(key, value)
+        }
+        RawEventKind::WindowsEventLog => db
+            .endpoint_windows_event_log_store()
+            .unwrap()
+            .append(key, value),
+        RawEventKind::Journald => db.endpoint_journald_store().unwrap().append(key, value),
+        RawEventKind::Auditd => db.endpoint_auditd_store().unwrap().append(key, value),
+        other => panic!("{other:?} is not an endpoint kind"),
+    }
+    .expect("append through the kind's store");
+}
+
+#[test]
+fn every_kind_is_stored_in_the_column_family_its_store_reads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = crate::storage::Database::open(dir.path(), &crate::storage::DbOptions::default())
+        .expect("open the database");
+    for (index, kind) in ACCEPTED_KINDS.into_iter().enumerate() {
+        let event = empty_event(kind);
+        let key = u64::try_from(index).unwrap().to_be_bytes();
+        append_through_kind_store(&db, event.kind(), &key);
+        assert_eq!(
+            db.get_cf_for_test(event.column_family(), &key).unwrap(),
+            Some(b"value".to_vec()),
+            "kind {kind}"
+        );
+    }
+}
