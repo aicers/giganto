@@ -190,6 +190,9 @@ pub(crate) const ENDPOINT: Uuid = Uuid::from_u128(0x0b1c_2d3e_4f50_6172_8394_a5b
 const OTHER_ENDPOINT: Uuid = Uuid::from_u128(0x0b1c_2d3e_4f50_6172_8394_a5b6_c7d8_e9f1);
 const STREAM: Uuid = Uuid::from_u128(0x5a);
 const OTHER_STREAM: Uuid = Uuid::from_u128(0x5b);
+// The crate a log target starts with: these tests also run in `gen_schema`,
+// which compiles the same modules under its own name.
+const CRATE_NAME: &str = env!("CARGO_CRATE_NAME");
 /// 2023-11-14T22:13:20Z.
 pub(crate) const BASE: i64 = 1_700_000_000_000_000_000;
 pub(crate) const PROCESS_CREATE_CF: &str = "process create";
@@ -644,7 +647,7 @@ fn a_failed_write_leaves_neither_records_nor_state() {
     drop(guard);
     assert!(
         logs.contents().contains(&format!(
-            "ERROR giganto::comm::endpoint::receiver: Endpoint {ENDPOINT}, stream {STREAM}: \
+            "ERROR {CRATE_NAME}::comm::endpoint::receiver: Endpoint {ENDPOINT}, stream {STREAM}: \
              the batch was not written"
         )),
         "{}",
@@ -837,7 +840,7 @@ fn an_unconvertible_record_is_a_loss_and_the_rest_is_stored() {
     drop(guard);
     assert!(
         logs.contents().contains(&format!(
-            "WARN giganto::comm::endpoint::receiver: Endpoint {ENDPOINT}, stream {STREAM}: \
+            "WARN {CRATE_NAME}::comm::endpoint::receiver: Endpoint {ENDPOINT}, stream {STREAM}: \
              record 2 is not stored: "
         )),
         "{}",
