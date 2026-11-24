@@ -1748,6 +1748,11 @@ pub(super) fn insert_kerberos_raw_event(
         realm: "realm".to_string(),
         sname_type: 1,
         sname: vec!["service_name".to_string()],
+        msg_type: 0,
+        preauth: 0,
+        req_etypes: vec![],
+        enc_part_etype: None,
+        ticket_etype: None,
     };
     let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
 
@@ -2170,6 +2175,9 @@ pub(super) fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, t
         client_id_type: 1,
         client_id: vec![0, 1, 2],
         options: vec![(53, vec![1]), (12, vec![0x74, 0x65, 0x73, 0x74])],
+        xid: 0,
+        chaddr: vec![],
+        src_mac: None,
     };
     let ser_dhcp_body = bincode::serialize(&dhcp_body).unwrap();
 
