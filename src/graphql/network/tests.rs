@@ -2602,6 +2602,11 @@ async fn kerberos_with_data() {
                     realm,
                     snameType,
                     sname,
+                    msgType,
+                    preauth,
+                    reqEtypes,
+                    encPartEtype,
+                    ticketEtype,
                     respAddr,
                     origPort,
                     respPort,
@@ -2622,6 +2627,7 @@ async fn kerberos_with_data() {
         "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", \
         clientTime: \"1\", serverTime: \"1\", errorCode: \"1\", clientRealm: \"client_realm\", cnameType: 1, \
         cname: [\"client_name\"], realm: \"realm\", snameType: 1, sname: [\"service_name\"], \
+        msgType: 10, preauth: 2, reqEtypes: [18, 17, 23, -135], encPartEtype: null, ticketEtype: null, \
         respAddr: \"192.168.4.76\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
@@ -2647,13 +2653,103 @@ async fn kerberos_with_data() {
     .await;
 }
 
+#[tokio::test]
+async fn kerberos_reply_identification_fields() {
+    let schema = TestSchema::new();
+    let store = schema.db.kerberos_store().unwrap();
+    let (time1, _) = fixed_time_nanos();
+    insert_raw_event_bytes(
+        &store,
+        "src 1",
+        time1,
+        &bincode::serialize(&kerberos_reply_body()).unwrap(),
+    );
+
+    let query = r#"
+    {
+        kerberosRawEvents(filter: { sensor: "src 1" }, first: 1) {
+            edges {
+                node { msgType, preauth, reqEtypes, encPartEtype, ticketEtype }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.to_string(),
+        "{kerberosRawEvents: {edges: [{node: {msgType: 11, preauth: 2, reqEtypes: [], \
+        encPartEtype: 18, ticketEtype: -128}}]}}"
+    );
+}
+
+#[tokio::test]
+async fn kerberos_old_shape_record_is_never_presented() {
+    // A record stored before the identification fields were added fails to
+    // deserialize. The connection queries handle it as any undecodable
+    // record: the per-protocol query skips it and the union query stops
+    // reading the store at it, so it is never presented with made-up values.
+    let schema = TestSchema::new();
+    let store = schema.db.kerberos_store().unwrap();
+    let (time1, time2) = fixed_time_nanos();
+    insert_kerberos_raw_event(&store, "src 1", time1);
+    insert_raw_event_bytes(
+        &store,
+        "src 1",
+        time2,
+        &old_shape_kerberos_bytes(&kerberos_body()),
+    );
+    assert!(bincode::deserialize::<Kerberos>(&old_shape_kerberos_bytes(&kerberos_body())).is_err());
+
+    let expected = "{edges: [{node: {time: \"2026-01-01T00:00:00Z\", msgType: 10}}]}";
+    for (name, query) in [
+        (
+            "kerberosRawEvents",
+            r#"{ kerberosRawEvents(filter: { sensor: "src 1" }, first: 2) {
+                edges { node { time, msgType } } } }"#,
+        ),
+        (
+            "kerberosRawEvents",
+            r#"{ kerberosRawEvents(filter: { sensor: "src 1" }, last: 2) {
+                edges { node { time, msgType } } } }"#,
+        ),
+        (
+            "networkRawEvents",
+            r#"{ networkRawEvents(filter: { sensor: "src 1" }, first: 2) {
+                edges { node { ... on KerberosRawEvent { time, msgType } } } } }"#,
+        ),
+    ] {
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "{query}: {:?}", res.errors);
+        assert_eq!(
+            res.data.to_string(),
+            format!("{{{name}: {expected}}}"),
+            "{query}"
+        );
+    }
+}
+
 fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, timestamp: i64) {
+    insert_raw_event_bytes(
+        store,
+        sensor,
+        timestamp,
+        &bincode::serialize(&kerberos_body()).unwrap(),
+    );
+}
+
+/// Appends `value` to `store` as the record of `sensor` at `timestamp`.
+fn insert_raw_event_bytes<T>(store: &RawEventStore<T>, sensor: &str, timestamp: i64, value: &[u8]) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
-    let kerberos_body = Kerberos {
+    store.append(&key, value).unwrap();
+}
+
+/// Returns an AS-REQ record carrying pre-authentication data.
+fn kerberos_body() -> Kerberos {
+    Kerberos {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -2674,15 +2770,40 @@ fn insert_kerberos_raw_event(store: &RawEventStore<Kerberos>, sensor: &str, time
         realm: "realm".to_string(),
         sname_type: 1,
         sname: vec!["service_name".to_string()],
-        msg_type: 0,
-        preauth: 0,
+        msg_type: 10,
+        preauth: 2,
+        req_etypes: vec![18, 17, 23, -135],
+        enc_part_etype: None,
+        ticket_etype: None,
+    }
+}
+
+/// Returns an AS-REP record with both encryption types.
+fn kerberos_reply_body() -> Kerberos {
+    Kerberos {
+        msg_type: 11,
+        req_etypes: vec![],
+        enc_part_etype: Some(18),
+        ticket_etype: Some(-128),
+        ..kerberos_body()
+    }
+}
+
+/// Serializes `body` as a `Kerberos` record stored before the identification
+/// fields were added, which ends at `sname`.
+fn old_shape_kerberos_bytes(body: &Kerberos) -> Vec<u8> {
+    // `msg_type` and `preauth` (1 byte each), an empty `req_etypes` (an 8-byte
+    // length) and two `None`s (1 byte each).
+    const IDENTIFICATION_BYTES: usize = 12;
+    let body = Kerberos {
         req_etypes: vec![],
         enc_part_etype: None,
         ticket_etype: None,
+        ..body.clone()
     };
-    let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
-
-    store.append(&key, &ser_kerberos_body).unwrap();
+    let mut bytes = bincode::serialize(&body).unwrap();
+    bytes.truncate(bytes.len() - IDENTIFICATION_BYTES);
+    bytes
 }
 
 #[tokio::test]
@@ -2703,6 +2824,11 @@ async fn kerberos_with_data_giganto_cluster() {
                     clientTime,
                     serverTime,
                     errorCode,
+                    msgType,
+                    preauth,
+                    reqEtypes,
+                    encPartEtype,
+                    ticketEtype,
                 }
             }
         }
@@ -2746,7 +2872,12 @@ async fn kerberos_with_data_giganto_cluster() {
                             "sname": [
                                 "service_name_1",
                                 "service_name_2"
-                            ]
+                            ],
+                            "msgType": 12,
+                            "preauth": 0,
+                            "reqEtypes": [18, -135],
+                            "encPartEtype": null,
+                            "ticketEtype": 23
                         }
                     }
                 ]
@@ -2776,7 +2907,8 @@ async fn kerberos_with_data_giganto_cluster() {
         res.data.to_string(),
         "{kerberosRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \
         \"2026-01-01T00:00:00Z\", clientTime: \"123456789\", serverTime: \
-        \"987654321\", errorCode: \"0\"}}]}}"
+        \"987654321\", errorCode: \"0\", msgType: 12, preauth: 0, reqEtypes: [18, -135], \
+        encPartEtype: null, ticketEtype: 23}}]}}"
     );
 
     mock.assert_async().await;
@@ -4672,6 +4804,9 @@ async fn dhcp_with_data() {
                     classId,
                     clientIdType,
                     clientId,
+                    xid,
+                    chaddr,
+                    srcMac,
                     respAddr,
                     origPort,
                     respPort,
@@ -4695,6 +4830,7 @@ async fn dhcp_with_data() {
         giaddr: \"192.168.4.4\", subnetMask: \"192.168.4.5\", router: [\"192.168.1.11\", \"192.168.1.22\"], \
         domainNameServer: [\"192.168.1.33\", \"192.168.1.44\"], reqIpAddr: \"192.168.4.6\", \
         paramReqList: [0, 1, 2], message: \"message\", classId: [0, 1, 2], clientIdType: 1, clientId: [0, 1, 2], \
+        xid: \"2147483649\", chaddr: [0, 26, 43, 60, 77, 94], srcMac: [170, 187, 204, 0, 17, 34], \
         respAddr: \"31.3.245.133\", origPort: 46378, respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
         duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
     );
@@ -4720,13 +4856,86 @@ async fn dhcp_with_data() {
     .await;
 }
 
-fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
+#[tokio::test]
+async fn dhcp_without_src_mac() {
+    let schema = TestSchema::new();
+    let store = schema.db.dhcp_store().unwrap();
+    let (time1, _) = fixed_time_nanos();
+    let body = Dhcp {
+        xid: 7,
+        chaddr: vec![],
+        src_mac: None,
+        ..dhcp_body()
+    };
+    insert_raw_event_bytes(&store, "src 1", time1, &bincode::serialize(&body).unwrap());
 
-    let dhcp_body = Dhcp {
+    let query = r#"
+    {
+        dhcpRawEvents(filter: { sensor: "src 1" }, first: 1) {
+            edges { node { xid, chaddr, srcMac } }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.to_string(),
+        "{dhcpRawEvents: {edges: [{node: {xid: \"7\", chaddr: [], srcMac: null}}]}}"
+    );
+}
+
+#[tokio::test]
+async fn dhcp_old_shape_record_is_never_presented() {
+    // A record stored before the identification fields were added fails to
+    // deserialize. The connection queries handle it as any undecodable
+    // record: the per-protocol query skips it and the union query stops
+    // reading the store at it, so it is never presented with made-up values.
+    let schema = TestSchema::new();
+    let store = schema.db.dhcp_store().unwrap();
+    let (time1, time2) = fixed_time_nanos();
+    insert_dhcp_raw_event(&store, "src 1", time1);
+    insert_raw_event_bytes(&store, "src 1", time2, &old_shape_dhcp_bytes(&dhcp_body()));
+    assert!(bincode::deserialize::<Dhcp>(&old_shape_dhcp_bytes(&dhcp_body())).is_err());
+
+    let expected = "{edges: [{node: {time: \"2026-01-01T00:00:00Z\", xid: \"2147483649\"}}]}";
+    for (name, query) in [
+        (
+            "dhcpRawEvents",
+            r#"{ dhcpRawEvents(filter: { sensor: "src 1" }, first: 2) {
+                edges { node { time, xid } } } }"#,
+        ),
+        (
+            "dhcpRawEvents",
+            r#"{ dhcpRawEvents(filter: { sensor: "src 1" }, last: 2) {
+                edges { node { time, xid } } } }"#,
+        ),
+        (
+            "networkRawEvents",
+            r#"{ networkRawEvents(filter: { sensor: "src 1" }, first: 2) {
+                edges { node { ... on DhcpRawEvent { time, xid } } } } }"#,
+        ),
+    ] {
+        let res = schema.execute(query).await;
+        assert!(res.errors.is_empty(), "{query}: {:?}", res.errors);
+        assert_eq!(
+            res.data.to_string(),
+            format!("{{{name}: {expected}}}"),
+            "{query}"
+        );
+    }
+}
+
+fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
+    insert_raw_event_bytes(
+        store,
+        sensor,
+        timestamp,
+        &bincode::serialize(&dhcp_body()).unwrap(),
+    );
+}
+
+/// Returns a record whose `xid` is above 2^31 and that carries a source MAC.
+fn dhcp_body() -> Dhcp {
+    Dhcp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
@@ -4763,13 +4972,27 @@ fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i
         client_id_type: 1,
         client_id: vec![0, 1, 2],
         options: vec![(53, vec![1]), (12, vec![0x74, 0x65, 0x73, 0x74])],
+        xid: 0x8000_0001,
+        chaddr: vec![0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e],
+        src_mac: Some([0xaa, 0xbb, 0xcc, 0x00, 0x11, 0x22]),
+    }
+}
+
+/// Serializes `body` as a `Dhcp` record stored before the identification
+/// fields were added, which ends at `options`.
+fn old_shape_dhcp_bytes(body: &Dhcp) -> Vec<u8> {
+    // `xid` (4 bytes), an empty `chaddr` (an 8-byte length) and a `None`
+    // (1 byte).
+    const IDENTIFICATION_BYTES: usize = 13;
+    let body = Dhcp {
         xid: 0,
         chaddr: vec![],
         src_mac: None,
+        ..body.clone()
     };
-    let ser_dhcp_body = bincode::serialize(&dhcp_body).unwrap();
-
-    store.append(&key, &ser_dhcp_body).unwrap();
+    let mut bytes = bincode::serialize(&body).unwrap();
+    bytes.truncate(bytes.len() - IDENTIFICATION_BYTES);
+    bytes
 }
 
 #[tokio::test]
@@ -4790,6 +5013,9 @@ async fn dhcp_with_data_giganto_cluster() {
                     leaseTime,
                     renewalTime,
                     rebindingTime,
+                    xid,
+                    chaddr,
+                    srcMac,
                 }
             }
         }
@@ -4841,7 +5067,10 @@ async fn dhcp_with_data_giganto_cluster() {
                             "options": [
                                 {"code": 53, "value": [1]},
                                 {"code": 12, "value": [116, 101, 115, 116]}
-                            ]
+                            ],
+                            "xid": "2147483649",
+                            "chaddr": [0, 26, 43, 60, 77, 94],
+                            "srcMac": [170, 187, 204, 0, 17, 34]
                         }
                     }
                 ]
@@ -4869,7 +5098,7 @@ async fn dhcp_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", leaseTime: \"1\", renewalTime: \"1\", rebindingTime: \"1\"}}]}}"
+        "{dhcpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", startTime: \"2026-01-01T00:00:00Z\", leaseTime: \"1\", renewalTime: \"1\", rebindingTime: \"1\", xid: \"2147483649\", chaddr: [0, 26, 43, 60, 77, 94], srcMac: [170, 187, 204, 0, 17, 34]}}]}}"
     );
 
     mock.assert_async().await;
@@ -6548,6 +6777,38 @@ async fn search_kerberos_with_data() {
 }
 
 #[tokio::test]
+async fn search_kerberos_skips_old_shape_record() {
+    let schema = TestSchema::new();
+    let store = schema.db.kerberos_store().unwrap();
+
+    let [_, time2, time3, _] = fixed_search_time_nanos();
+    insert_raw_event_bytes(
+        &store,
+        "src 1",
+        time2,
+        &old_shape_kerberos_bytes(&kerberos_body()),
+    );
+    insert_kerberos_raw_event(&store, "src 1", time3);
+
+    let query = r#"
+    {
+        searchKerberosRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 1"
+                times:["2020-01-01T00:01:01Z","2020-01-01T01:01:01Z"]
+            }
+        )
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.to_string(),
+        "{searchKerberosRawEvents: [\"2020-01-01T01:01:01Z\"]}"
+    );
+}
+
+#[tokio::test]
 async fn search_kerberos_with_data_giganto_cluster() {
     let query = r#"
     {
@@ -7368,6 +7629,33 @@ async fn search_dhcp_with_data() {
 }
 
 #[tokio::test]
+async fn search_dhcp_skips_old_shape_record() {
+    let schema = TestSchema::new();
+    let store = schema.db.dhcp_store().unwrap();
+
+    let [_, time2, time3, _] = fixed_search_time_nanos();
+    insert_dhcp_raw_event(&store, "src 1", time2);
+    insert_raw_event_bytes(&store, "src 1", time3, &old_shape_dhcp_bytes(&dhcp_body()));
+
+    let query = r#"
+    {
+        searchDhcpRawEvents(
+            filter: {
+                time: { start: "2020-01-01T00:01:01Z", end: "2020-01-01T01:01:02Z" }
+                sensor: "src 1"
+                times:["2020-01-01T00:01:01Z","2020-01-01T01:01:01Z"]
+            }
+        )
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.to_string(),
+        "{searchDhcpRawEvents: [\"2020-01-01T00:01:01Z\"]}"
+    );
+}
+
+#[tokio::test]
 async fn search_dhcp_with_data_giganto_cluster() {
     let query = r#"
     {
@@ -7730,4 +8018,208 @@ async fn merged_zero_size_pagination_checks_later_stores() {
         assert_eq!(data["networkRawEvents"]["edges"], serde_json::json!([]));
         assert_eq!(data["networkRawEvents"]["pageInfo"][flag], true);
     }
+}
+
+const NETWORK_IDENTIFICATION_QUERY: &str = r#"
+    {
+        networkRawEvents(filter: { sensor: "src 1" }, first: 10) {
+            edges {
+                node {
+                    __typename
+                    ... on KerberosRawEvent {
+                        msgType
+                        preauth
+                        reqEtypes
+                        encPartEtype
+                        ticketEtype
+                    }
+                    ... on DhcpRawEvent {
+                        msgType
+                        xid
+                        chaddr
+                        srcMac
+                    }
+                }
+            }
+        }
+    }"#;
+
+const NETWORK_IDENTIFICATION_EXPECTED: &str = "{networkRawEvents: {edges: [\
+    {node: {__typename: \"KerberosRawEvent\", msgType: 10, preauth: 2, reqEtypes: [18, 17, 23, -135], \
+    encPartEtype: null, ticketEtype: null}}, \
+    {node: {__typename: \"KerberosRawEvent\", msgType: 11, preauth: 2, reqEtypes: [], \
+    encPartEtype: 18, ticketEtype: -128}}, \
+    {node: {__typename: \"DhcpRawEvent\", msgType: 0, xid: \"2147483649\", \
+    chaddr: [0, 26, 43, 60, 77, 94], srcMac: [170, 187, 204, 0, 17, 34]}}, \
+    {node: {__typename: \"DhcpRawEvent\", msgType: 0, xid: \"7\", chaddr: [], srcMac: null}}]}}";
+
+#[tokio::test]
+async fn network_raw_events_identification_fields() {
+    let schema = TestSchema::new();
+    let kerberos_store = schema.db.kerberos_store().unwrap();
+    let dhcp_store = schema.db.dhcp_store().unwrap();
+    let (time1, _) = fixed_time_nanos();
+    insert_kerberos_raw_event(&kerberos_store, "src 1", time1);
+    insert_raw_event_bytes(
+        &kerberos_store,
+        "src 1",
+        time1 + 1,
+        &bincode::serialize(&kerberos_reply_body()).unwrap(),
+    );
+    insert_dhcp_raw_event(&dhcp_store, "src 1", time1 + 2);
+    let without_mac = Dhcp {
+        xid: 7,
+        chaddr: vec![],
+        src_mac: None,
+        ..dhcp_body()
+    };
+    insert_raw_event_bytes(
+        &dhcp_store,
+        "src 1",
+        time1 + 3,
+        &bincode::serialize(&without_mac).unwrap(),
+    );
+
+    let res = schema.execute(NETWORK_IDENTIFICATION_QUERY).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(res.data.to_string(), NETWORK_IDENTIFICATION_EXPECTED);
+}
+
+/// Returns the peer's JSON `node` of a `networkRawEvents` edge for a
+/// `KerberosRawEvent`, with the given identification fields.
+fn peer_kerberos_node(time: &str, identification: &str) -> String {
+    format!(
+        r#"{{
+            "__typename": "KerberosRawEvent",
+            "time": "{time}",
+            "origAddr": "192.168.4.76",
+            "respAddr": "192.168.4.76",
+            "origPort": 46378,
+            "respPort": 88,
+            "proto": 17,
+            "startTime": "{time}",
+            "duration": "1000000000",
+            "origPkts": "1",
+            "respPkts": "1",
+            "origL2Bytes": "100",
+            "respL2Bytes": "200",
+            "clientTime": "1",
+            "serverTime": "1",
+            "errorCode": "0",
+            "clientRealm": "client_realm",
+            "cnameType": 1,
+            "cname": ["client_name"],
+            "realm": "realm",
+            "snameType": 1,
+            "sname": ["service_name"],
+            {identification}
+        }}"#
+    )
+}
+
+/// Returns the peer's JSON `node` of a `networkRawEvents` edge for a
+/// `DhcpRawEvent`, with the given identification fields.
+fn peer_dhcp_node(time: &str, identification: &str) -> String {
+    format!(
+        r#"{{
+            "__typename": "DhcpRawEvent",
+            "time": "{time}",
+            "origAddr": "192.168.4.76",
+            "respAddr": "31.3.245.133",
+            "origPort": 46378,
+            "respPort": 80,
+            "proto": 17,
+            "startTime": "{time}",
+            "duration": "1000000000",
+            "origPkts": "1",
+            "respPkts": "1",
+            "origL2Bytes": "100",
+            "respL2Bytes": "200",
+            "msgType": 0,
+            "ciaddr": "192.168.4.1",
+            "yiaddr": "192.168.4.2",
+            "siaddr": "192.168.4.3",
+            "giaddr": "192.168.4.4",
+            "subnetMask": "192.168.4.5",
+            "router": ["192.168.1.11"],
+            "domainNameServer": ["192.168.1.33"],
+            "reqIpAddr": "192.168.4.6",
+            "leaseTime": "1",
+            "serverId": "192.168.4.7",
+            "paramReqList": [0, 1, 2],
+            "message": "message",
+            "renewalTime": "1",
+            "rebindingTime": "1",
+            "classId": [0, 1, 2],
+            "clientIdType": 1,
+            "clientId": [0, 1, 2],
+            "options": [{{"code": 53, "value": [1]}}],
+            {identification}
+        }}"#
+    )
+}
+
+#[tokio::test]
+async fn network_raw_events_identification_fields_giganto_cluster() {
+    let nodes = [
+        peer_kerberos_node(
+            "2026-01-01T00:00:00+00:00",
+            r#""msgType": 10, "preauth": 2, "reqEtypes": [18, 17, 23, -135],
+            "encPartEtype": null, "ticketEtype": null"#,
+        ),
+        peer_kerberos_node(
+            "2026-01-01T00:00:00.000000001+00:00",
+            r#""msgType": 11, "preauth": 2, "reqEtypes": [],
+            "encPartEtype": 18, "ticketEtype": -128"#,
+        ),
+        peer_dhcp_node(
+            "2026-01-01T00:00:00.000000002+00:00",
+            r#""xid": "2147483649", "chaddr": [0, 26, 43, 60, 77, 94],
+            "srcMac": [170, 187, 204, 0, 17, 34]"#,
+        ),
+        peer_dhcp_node(
+            "2026-01-01T00:00:00.000000003+00:00",
+            r#""xid": "7", "chaddr": [], "srcMac": null"#,
+        ),
+    ];
+    let edges = nodes
+        .iter()
+        .map(|node| format!(r#"{{"cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=", "node": {node}}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let peer_response_mock_data = format!(
+        r#"{{
+            "data": {{
+                "networkRawEvents": {{
+                    "pageInfo": {{
+                        "hasPreviousPage": false,
+                        "hasNextPage": false,
+                        "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                    }},
+                    "edges": [{edges}]
+                }}
+            }}
+        }}"#
+    );
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let query = NETWORK_IDENTIFICATION_QUERY.replace("src 1", "src 2");
+    let res = schema.execute(&query).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(res.data.to_string(), NETWORK_IDENTIFICATION_EXPECTED);
+
+    mock.assert_async().await;
 }

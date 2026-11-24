@@ -650,6 +650,37 @@ struct KerberosRawEvent {
     sname_type: u8,
     /// Service Name
     sname: Vec<String>,
+    /// Message Type
+    ///
+    /// The Kerberos message type: 10 is AS-REQ, 11 AS-REP, 12 TGS-REQ, 13
+    /// TGS-REP, and 30 KRB-ERROR. 0 means unknown.
+    msg_type: u8,
+    /// Pre-authentication State
+    ///
+    /// 0 is unknown, 1 none, and 2 pre-authentication data sent. On an AS-REP,
+    /// 2 means only that an AS-REP was observed for a request that sent
+    /// pre-authentication data; it does not mean the KDC verified that data.
+    preauth: u8,
+    /// Requested Encryption Types
+    ///
+    /// The encryption types listed in the request, in request order. Values
+    /// follow the IANA "Kerberos Encryption Type Numbers" registry (e.g. 17
+    /// aes128-cts-hmac-sha1-96, 18 aes256-cts-hmac-sha1-96, 23 rc4-hmac);
+    /// negative values are vendor-specific. Filled only for requests (AS-REQ
+    /// and TGS-REQ), and empty when unknown.
+    req_etypes: Vec<i32>,
+    /// Reply Encryption Type
+    ///
+    /// The encryption type of the reply's `enc-part`, numbered as in
+    /// `reqEtypes`. Filled only for replies (AS-REP and TGS-REP), and `null`
+    /// when absent.
+    enc_part_etype: Option<i32>,
+    /// Ticket Encryption Type
+    ///
+    /// The encryption type of the ticket's `enc-part`, numbered as in
+    /// `reqEtypes`. Filled only for replies (AS-REP and TGS-REP), and `null`
+    /// when absent.
+    ticket_etype: Option<i32>,
 }
 
 /// Represents an event extracted from the SSH protocol.
@@ -1390,6 +1421,21 @@ struct DhcpRawEvent {
     /// DHCP Options
     #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
     options: Vec<DhcpOptionRawEvent>,
+    /// Transaction ID
+    ///
+    /// The BOOTP transaction id. 0 means unknown.
+    xid: StringNumberU32,
+    /// Client Hardware Address
+    ///
+    /// The first `hlen` bytes of the BOOTP `chaddr` field, the same value as
+    /// `BootpRawEvent.chaddr`. Empty when unknown.
+    chaddr: Vec<u8>,
+    /// Source MAC Address
+    ///
+    /// The six bytes of the Ethernet source MAC address of the frame that
+    /// carried the message: the server, or the last relay or router, rather
+    /// than necessarily the client. `null` when absent.
+    src_mac: Option<Vec<u8>>,
 }
 
 /// Represents an event extracted from the RADIUS protocol.
@@ -1843,6 +1889,9 @@ impl FromKeyValue<Dhcp> for DhcpRawEvent {
                 .into_iter()
                 .map(|(code, value)| DhcpOptionRawEvent { code, value })
                 .collect(),
+            xid: StringNumberU32(val.xid),
+            chaddr: val.chaddr,
+            src_mac: val.src_mac.map(|mac| mac.to_vec()),
         })
     }
 }
@@ -1952,7 +2001,12 @@ from_key_value!(
     cname,
     realm,
     sname_type,
-    sname;
+    sname,
+    msg_type,
+    preauth,
+    req_etypes,
+    enc_part_etype,
+    ticket_etype;
     client_time,
     server_time,
     error_code

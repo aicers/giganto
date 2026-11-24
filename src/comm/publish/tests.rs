@@ -1473,7 +1473,18 @@ mod fixtures {
         timestamp: i64,
     ) -> Vec<u8> {
         let ser_body = insert_kerberos_raw_event(&db.kerberos_store().unwrap(), sensor, timestamp);
-        build_expected_response::<Kerberos>(&ser_body, timestamp, sensor)
+        let expected = build_expected_response::<Kerberos>(&ser_body, timestamp, sensor);
+        assert_range_text_ends_with(&expected, "\tservice_name\t13\t0\t-\t18\t-128");
+        expected
+    }
+
+    /// Asserts that the range-data text in `payload` ends with `suffix`.
+    fn assert_range_text_ends_with(payload: &[u8], suffix: &str) {
+        let (_, _, text) = bincode::deserialize::<Option<(i64, String, Vec<u8>)>>(payload)
+            .unwrap()
+            .expect("range data must hold a record");
+        let text = String::from_utf8(text).unwrap();
+        assert!(text.ends_with(suffix), "{text:?} must end with {suffix:?}");
     }
 
     pub(super) fn build_ssh_range_expected(db: &Database, sensor: &str, timestamp: i64) -> Vec<u8> {
@@ -1543,7 +1554,12 @@ mod fixtures {
         timestamp: i64,
     ) -> Vec<u8> {
         let ser_body = insert_dhcp_raw_event(&db.dhcp_store().unwrap(), sensor, timestamp);
-        build_expected_response::<Dhcp>(&ser_body, timestamp, sensor)
+        let expected = build_expected_response::<Dhcp>(&ser_body, timestamp, sensor);
+        assert_range_text_ends_with(
+            &expected,
+            "\t2147483649\t0,26,43,60,77,94\taa:bb:cc:00:11:22",
+        );
+        expected
     }
 
     pub(super) fn build_icmp_range_expected(
@@ -3086,11 +3102,11 @@ mod fixtures {
             realm: "realm".to_string(),
             sname_type: 1,
             sname: vec!["service_name".to_string()],
-            msg_type: 0,
+            msg_type: 13,
             preauth: 0,
             req_etypes: vec![],
-            enc_part_etype: None,
-            ticket_etype: None,
+            enc_part_etype: Some(18),
+            ticket_etype: Some(-128),
         };
 
         bincode::serialize(&kerberos_body).unwrap()
@@ -3467,9 +3483,9 @@ mod fixtures {
             client_id_type: 1,
             client_id: vec![0, 1, 2],
             options: vec![(53, vec![1]), (12, vec![0x74, 0x65, 0x73, 0x74])],
-            xid: 0,
-            chaddr: vec![],
-            src_mac: None,
+            xid: 0x8000_0001,
+            chaddr: vec![0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e],
+            src_mac: Some([0xaa, 0xbb, 0xcc, 0x00, 0x11, 0x22]),
         };
 
         bincode::serialize(&dhcp_body).unwrap()

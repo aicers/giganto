@@ -390,6 +390,11 @@ struct KerberosJsonOutput {
     realm: String,
     sname_type: u8,
     sname: Vec<String>,
+    msg_type: u8,
+    preauth: u8,
+    req_etypes: Vec<i32>,
+    enc_part_etype: Option<i32>,
+    ticket_etype: Option<i32>,
 }
 
 #[derive(Serialize, Debug)]
@@ -682,6 +687,9 @@ struct DhcpJsonOutput {
     client_id_type: u8,
     client_id: Vec<u8>,
     options: Vec<(u8, Vec<u8>)>,
+    xid: u32,
+    chaddr: Vec<u8>,
+    src_mac: Option<[u8; 6]>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1151,7 +1159,12 @@ convert_json_output!(
     cname,
     realm,
     sname_type,
-    sname
+    sname,
+    msg_type,
+    preauth,
+    req_etypes,
+    enc_part_etype,
+    ticket_etype
 );
 
 convert_json_output!(
@@ -1539,6 +1552,9 @@ impl JsonOutput<DhcpJsonOutput> for Dhcp {
             client_id_type: self.client_id_type,
             client_id: self.client_id.clone(),
             options: self.options.clone(),
+            xid: self.xid,
+            chaddr: self.chaddr.clone(),
+            src_mac: self.src_mac,
         })
     }
 }
