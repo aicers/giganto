@@ -1840,6 +1840,77 @@ async fn sysmon_records_with_an_endpoint_header_are_stored_unchanged() {
     harness.shutdown(b"done").await;
 }
 
+/// Splits a semi-supervised stream frame into its timestamp, publisher
+/// sensor and event.
+fn decode_semi_supervised_frame(frame: &[u8]) -> (i64, String, Vec<u8>) {
+    let (time, rest) = frame.split_at(8);
+    let (sensor_len, rest) = rest.split_at(4);
+    let sensor_len = usize::try_from(u32::from_le_bytes(sensor_len.try_into().unwrap())).unwrap();
+    let (sensor, rest) = rest.split_at(sensor_len);
+    let (event_len, event) = rest.split_at(4);
+    assert_eq!(
+        usize::try_from(u32::from_le_bytes(event_len.try_into().unwrap())).unwrap(),
+        event.len()
+    );
+    (
+        i64::from_le_bytes(time.try_into().unwrap()),
+        bincode::deserialize(sensor).unwrap(),
+        event.to_vec(),
+    )
+}
+
+#[tokio::test]
+async fn sysmon_records_with_an_endpoint_header_reach_stream_subscribers_unchanged() {
+    use crate::graphql::endpoint_header::fixtures::{file_create, file_delete, full_header};
+
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let cases = [
+        (
+            RawEventKind::FileCreate,
+            RequestStreamRecord::FileCreate,
+            bincode::serialize(&file_create(Some(full_header()))).unwrap(),
+        ),
+        (
+            RawEventKind::FileDelete,
+            RequestStreamRecord::FileDelete,
+            bincode::serialize(&file_delete(Some(full_header()))).unwrap(),
+        ),
+    ];
+    for (kind, record_type, bytes) in cases {
+        let (subscriber, mut subscription) = mpsc::unbounded_channel();
+        harness.server.stream_direct_channels.write().await.insert(
+            StreamChannelKey::SemiSupervised {
+                publisher_sensor: "semi-supervised".to_string(),
+                target_sensor: test_sensor_name(),
+                record_type,
+            },
+            subscriber,
+        );
+
+        let (mut send, mut recv) = harness.open_bi().await;
+        send_record_header(&mut send, kind).await.unwrap();
+        let timestamp = next_timestamp();
+        let ack =
+            send_batch_and_receive_ack(&mut send, &mut recv, &[(timestamp, bytes.clone())]).await;
+        assert_eq!(ack, timestamp);
+
+        let frame = subscription
+            .try_recv()
+            .unwrap_or_else(|e| panic!("no {kind:?} record forwarded: {e}"));
+        assert_eq!(
+            decode_semi_supervised_frame(&frame),
+            (timestamp, test_sensor_name(), bytes),
+            "{kind:?} record changed on its way to the subscriber"
+        );
+        assert!(
+            subscription.try_recv().is_err(),
+            "{kind:?} forwarded more than once"
+        );
+        send.finish().expect("failed to shutdown stream");
+    }
+    harness.shutdown(b"done").await;
+}
+
 #[tokio::test]
 async fn colliding_events_in_one_batch_are_stored_at_the_next_free_nanoseconds() {
     let harness = TestHarness::with_ack_transmission(1).await;
