@@ -31,6 +31,10 @@
   nodes to send this node GraphQL requests, it must be a specific address, not
   `0.0.0.0` or `[::]`
 - `peers`: Connected cluster nodes, no default
+- `endpoint_srv_addr`: Address of the endpoint entry, the TCP port Clumit
+  Endpoint sends host telemetry to, no default. When the key is absent the entry
+  is not opened; an empty value is a configuration error. See
+  [Endpoint Entry](#endpoint-entry)
 
 When disk usage exceeds 95 %, the retention task shortens both retention periods
 by one day at a time until usage falls under 85 % or no more data can be
@@ -108,6 +112,41 @@ Giganto verifies the peer's certificate against it when connecting.
 the name Giganto sends that peer's GraphQL requests to and verifies its
 certificate against. The address comes from the name's recorded `addr`, and the
 port is the peer's GraphQL port.
+
+## Endpoint Entry
+
+```toml
+endpoint_srv_addr = "10.0.0.10:38372"
+```
+
+The endpoint entry is a TLS 1.3 port, separate from the module ports in both
+code path and client verification. It offers only the `senta-telemetry/1` ALPN
+protocol and the X25519MLKEM768 key exchange, and accepts the self-signed
+certificate an endpoint presents. The entry accepts telemetry only once the
+node has been assigned an entry ID; until then it closes every endpoint
+connection without answering.
+
+Endpoints trust only the root CA, while the `--cert` file holds only the node's
+leaf certificate. On this port, and only here, Giganto therefore presents the
+leaf followed by the intermediate that issued it, taken from the `--ca-certs`
+files. The intermediate is the certificate whose subject is the leaf's issuer
+and whose Subject Key Identifier is the leaf's Authority Key Identifier; when
+the bundle holds two CA generations with the same names, the one whose key
+verifies the leaf's signature is chosen. A self-signed match is not an
+intermediate. The module ports present the `--cert` file as is.
+
+- At startup with `endpoint_srv_addr` set, no matching intermediate is a
+  configuration error and Giganto exits.
+- On SIGHUP, the intermediate is chosen again from the reloaded files, and new
+  endpoint connections use the new chain and key; established ones are kept. If
+  no intermediate matches, the endpoint port keeps its previous certificate
+  chain and private key and an error is logged, while the module ports still
+  take up the new files.
+- When a configuration update restarts the services, the intermediate is chosen
+  again. If none matches, the endpoint port keeps the chain and key it last
+  used; if it has never had one, it stays closed until the next restart, and an
+  error is logged. Adding, changing or removing `endpoint_srv_addr` through
+  `updateConfig` opens, moves or closes the port on that restart.
 
 ## Certificate Requirements
 

@@ -5,12 +5,16 @@ use quinn::{
     ClientConfig, Connection, ServerConfig, TransportConfig,
     crypto::rustls::{QuicClientConfig, QuicServerConfig},
 };
+use rustls::pki_types::pem::PemObject;
 use rustls::{
     RootCertStore,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
-use x509_parser::extensions::GeneralName;
+use senta_protocol::auth::tls::{TELEMETRY_ALPN, ingress_server_config};
+use x509_parser::certificate::X509Certificate;
+use x509_parser::extensions::{GeneralName, ParsedExtension};
 use x509_parser::nom::Parser;
+use x509_parser::prelude::FromDer;
 
 pub const SERVER_REBOOT_DELAY: u64 = 3000;
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -93,6 +97,154 @@ pub(crate) fn graphql_server_config(certs: &Certs) -> Result<Arc<rustls::ServerC
     let mut config = tls_server_config(certs)?;
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(Arc::new(config))
+}
+
+/// Builds the TLS configuration of the endpoint entry, the port Clumit
+/// Endpoint sends telemetry to.
+///
+/// The configuration is senta-protocol's `ingress_server_config`: TLS 1.3
+/// only, over [`server_crypto_provider`], offering `TELEMETRY_ALPN` alone, and
+/// verifying clients with its `EndpointClientVerifier`, which accepts the
+/// self-signed Ed25519 certificate an endpoint presents and checks the
+/// handshake signature made with its key. That verification shares nothing
+/// with the module ports' [`tls_server_config`]: endpoints are not issued
+/// certificates by the CA the module ports trust.
+///
+/// Endpoints trust only the root, and the certificate file holds only the
+/// node's leaf, so the chain presented is the leaf followed by the
+/// intermediate that issued it, chosen from `ca_pem` by
+/// [`endpoint_cert_chain`].
+///
+/// # Errors
+///
+/// Returns an error if no issuing intermediate can be chosen, or if rustls
+/// rejects the chain or the key.
+pub(crate) fn endpoint_server_config(
+    certs: &Certs,
+    ca_pem: &[u8],
+) -> Result<Arc<rustls::ServerConfig>> {
+    let chain = endpoint_cert_chain(&certs.certs, ca_pem)
+        .context("cannot choose the endpoint certificate chain")?;
+    let config = ingress_server_config(
+        Arc::new(server_crypto_provider()),
+        chain,
+        certs.key.clone_key(),
+        TELEMETRY_ALPN,
+    )
+    .context("cannot build the endpoint TLS configuration")?;
+    Ok(Arc::new(config))
+}
+
+/// Returns the chain the endpoint entry presents: the first certificate of
+/// `certs` (the node's leaf) followed by the intermediate that issued it,
+/// chosen from the certificates of `ca_pem`. The root is never added.
+///
+/// The intermediate is chosen in three steps:
+///
+/// 1. The candidates are the certificates whose subject is the leaf's issuer
+///    and whose Subject Key Identifier is the key identifier of the leaf's
+///    Authority Key Identifier. If the leaf carries no key identifier there,
+///    the subject alone decides. Certificates with identical DER, as when one
+///    bundle file is listed twice in `--ca-certs`, count as one.
+/// 2. If two or more candidates remain, only those whose key verifies the
+///    leaf's signature are kept. During a CA rotation the bundle holds two
+///    generations, which may share the intermediate's subject name.
+/// 3. If exactly one remains and it is not self-signed (its subject differs
+///    from its issuer), it is chosen. Anything else is no match.
+///
+/// # Errors
+///
+/// Returns an error if `certs` is empty, if the leaf or `ca_pem` cannot be
+/// parsed, or if the steps above find no match.
+fn endpoint_cert_chain(
+    certs: &[CertificateDer<'static>],
+    ca_pem: &[u8],
+) -> Result<Vec<CertificateDer<'static>>> {
+    let leaf = certs
+        .first()
+        .context("the certificate file holds no certificate")?;
+    let cas = CertificateDer::pem_slice_iter(ca_pem)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("invalid PEM-encoded certificate in the CA bundle")?;
+    let intermediate = choose_issuing_intermediate(leaf, &cas)?;
+    Ok(vec![leaf.clone(), intermediate])
+}
+
+/// Chooses the intermediate that issued `leaf` from `cas`, by the steps
+/// [`endpoint_cert_chain`] describes.
+fn choose_issuing_intermediate(
+    leaf: &CertificateDer<'_>,
+    cas: &[CertificateDer<'static>],
+) -> Result<CertificateDer<'static>> {
+    let (_, leaf_x509) = X509Certificate::from_der(leaf.as_ref())
+        .map_err(|e| anyhow::anyhow!("cannot parse the node certificate: {e}"))?;
+    let issuer = leaf_x509.issuer().as_raw();
+    let authority_key_id = authority_key_id(&leaf_x509);
+
+    let mut seen: Vec<&[u8]> = Vec::new();
+    let mut candidates: Vec<(&CertificateDer<'static>, X509Certificate<'_>)> = Vec::new();
+    for der in cas {
+        if seen.contains(&der.as_ref()) {
+            continue;
+        }
+        seen.push(der.as_ref());
+        // A certificate that does not parse names no subject, so it cannot be
+        // the issuer; the bundle itself was already accepted as trust anchors
+        // when the TLS material was loaded.
+        let Ok((_, ca)) = X509Certificate::from_der(der.as_ref()) else {
+            continue;
+        };
+        if ca.subject().as_raw() != issuer {
+            continue;
+        }
+        if let Some(authority_key_id) = authority_key_id
+            && subject_key_id(&ca) != Some(authority_key_id)
+        {
+            continue;
+        }
+        candidates.push((der, ca));
+    }
+
+    if candidates.len() > 1 {
+        candidates.retain(|(_, ca)| leaf_x509.verify_signature(Some(ca.public_key())).is_ok());
+    }
+
+    match candidates.as_slice() {
+        [(der, ca)] if ca.subject().as_raw() != ca.issuer().as_raw() => Ok((*der).clone()),
+        [_] => bail!(
+            "the only CA certificate that matches the node certificate's issuer is self-signed, \
+             not an intermediate"
+        ),
+        [] => bail!("no certificate in the CA bundle is the issuer of the node certificate"),
+        many => bail!(
+            "{} certificates in the CA bundle match the node certificate's issuer and verify \
+             its signature",
+            many.len()
+        ),
+    }
+}
+
+/// Returns the key identifier of `cert`'s Authority Key Identifier, or `None`
+/// if it carries none.
+fn authority_key_id<'a>(cert: &'a X509Certificate<'_>) -> Option<&'a [u8]> {
+    cert.extensions()
+        .iter()
+        .find_map(|ext| match ext.parsed_extension() {
+            ParsedExtension::AuthorityKeyIdentifier(aki) => Some(aki),
+            _ => None,
+        })
+        .and_then(|aki| aki.key_identifier.as_ref())
+        .map(|id| id.0)
+}
+
+/// Returns `cert`'s Subject Key Identifier, or `None` if it carries none.
+fn subject_key_id<'a>(cert: &'a X509Certificate<'_>) -> Option<&'a [u8]> {
+    cert.extensions()
+        .iter()
+        .find_map(|ext| match ext.parsed_extension() {
+            ParsedExtension::SubjectKeyIdentifier(id) => Some(id.0),
+            _ => None,
+        })
 }
 
 pub fn extract_cert_from_conn(connection: &Connection) -> Result<Vec<CertificateDer<'_>>> {
@@ -924,6 +1076,210 @@ mod tests {
             assert!(
                 err.contains("NoKxGroupsInCommon"),
                 "an X25519-only client should be refused for lacking X25519MLKEM768, got: {err}"
+            );
+        }
+    }
+
+    /// The choice of the intermediate the endpoint entry presents after the
+    /// node's leaf.
+    mod endpoint_chain_tests {
+        use super::*;
+        use crate::test_bootroot::{CaGeneration, NodeCert, write_node_files};
+        use crate::tls_reload::{CertPaths, load_tls_material};
+
+        const NODE: &str = "001.giganto.node1.example.test";
+
+        fn chain(leaf: &NodeCert, bundle: &str) -> Result<Vec<CertificateDer<'static>>> {
+            endpoint_cert_chain(std::slice::from_ref(&leaf.der), bundle.as_bytes())
+        }
+
+        fn assert_no_match(leaf: &NodeCert, bundle: &str, cause: &str) {
+            let error = chain(leaf, bundle).expect_err("no intermediate may be chosen");
+            assert!(
+                format!("{error:#}").contains(cause),
+                "the error should say {cause:?}, got: {error:#}"
+            );
+        }
+
+        #[test]
+        fn the_intermediate_matching_the_leaf_aki_is_chosen() {
+            let ca = CaGeneration::new("Single");
+            let leaf = ca.issue_node_cert(NODE);
+            assert_eq!(
+                chain(&leaf, &ca.bundle_pem()).expect("an intermediate is chosen"),
+                vec![leaf.der.clone(), ca.intermediate.der().clone()]
+            );
+            // The bundle's order does not matter.
+            let reversed = format!("{}{}", ca.root.pem(), ca.intermediate.pem());
+            assert_eq!(
+                chain(&leaf, &reversed).expect("an intermediate is chosen"),
+                vec![leaf.der.clone(), ca.intermediate.der().clone()]
+            );
+        }
+
+        #[test]
+        fn of_two_generations_with_different_keys_the_aki_decides() {
+            // The same intermediate name in both generations: only the key
+            // identifiers tell them apart.
+            let old = CaGeneration::with_intermediate_identity(
+                "Old",
+                "Bootroot Intermediate CA",
+                &[1; 20],
+            );
+            let new = CaGeneration::with_intermediate_identity(
+                "New",
+                "Bootroot Intermediate CA",
+                &[2; 20],
+            );
+            let bundle = format!("{}{}", old.bundle_pem(), new.bundle_pem());
+            for (ca, other) in [(&old, &new), (&new, &old)] {
+                let leaf = ca.issue_node_cert(NODE);
+                let chosen = chain(&leaf, &bundle).expect("an intermediate is chosen");
+                assert_eq!(
+                    chosen,
+                    vec![leaf.der.clone(), ca.intermediate.der().clone()]
+                );
+                assert!(!chosen.contains(other.intermediate.der()));
+            }
+        }
+
+        #[test]
+        fn of_two_generations_with_the_same_name_and_key_id_the_signature_decides() {
+            let old = CaGeneration::with_intermediate_identity(
+                "Old",
+                "Bootroot Intermediate CA",
+                &[9; 20],
+            );
+            let new = CaGeneration::with_intermediate_identity(
+                "New",
+                "Bootroot Intermediate CA",
+                &[9; 20],
+            );
+            for bundle in [
+                format!("{}{}", old.bundle_pem(), new.bundle_pem()),
+                format!("{}{}", new.bundle_pem(), old.bundle_pem()),
+            ] {
+                for ca in [&old, &new] {
+                    let leaf = ca.issue_node_cert(NODE);
+                    assert_eq!(
+                        chain(&leaf, &bundle).expect("the signature decides"),
+                        vec![leaf.der.clone(), ca.intermediate.der().clone()]
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn without_an_aki_the_subject_and_then_the_signature_decide() {
+            let ca = CaGeneration::new("Single");
+            let leaf = ca.issue_node_cert_without_aki(NODE);
+            assert_eq!(
+                chain(&leaf, &ca.bundle_pem()).expect("the subject decides"),
+                vec![leaf.der.clone(), ca.intermediate.der().clone()]
+            );
+
+            let old = CaGeneration::new("Rotation");
+            let new = CaGeneration::new("Rotation");
+            let bundle = format!("{}{}", old.bundle_pem(), new.bundle_pem());
+            let leaf = new.issue_node_cert_without_aki(NODE);
+            assert_eq!(
+                chain(&leaf, &bundle).expect("the signature decides"),
+                vec![leaf.der.clone(), new.intermediate.der().clone()]
+            );
+        }
+
+        #[test]
+        fn a_bundle_without_the_issuer_has_no_match() {
+            let ca = CaGeneration::new("Issuing");
+            let other = CaGeneration::new("Other");
+            let leaf = ca.issue_node_cert(NODE);
+            assert_no_match(
+                &leaf,
+                &other.bundle_pem(),
+                "no certificate in the CA bundle",
+            );
+            // The root of the issuing generation alone is not the issuer.
+            assert_no_match(&leaf, &ca.root.pem(), "no certificate in the CA bundle");
+        }
+
+        #[test]
+        fn a_self_signed_issuer_is_not_an_intermediate() {
+            let ca = CaGeneration::new("Flat");
+            let leaf = ca.issue_node_cert_from_root(NODE);
+            assert_no_match(&leaf, &ca.bundle_pem(), "self-signed");
+        }
+
+        #[test]
+        fn two_candidates_that_both_verify_have_no_match() {
+            let ca = CaGeneration::new("Reissued");
+            let leaf = ca.issue_node_cert(NODE);
+            let reissued_pem = ca.reissued_intermediate_pem();
+            let bundle = format!("{}{reissued_pem}", ca.bundle_pem());
+            assert_no_match(&leaf, &bundle, "2 certificates in the CA bundle");
+        }
+
+        #[test]
+        fn the_same_bundle_listed_twice_still_has_a_match() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let ca = CaGeneration::new("Twice");
+            let leaf = ca.issue_node_cert(NODE);
+            let mut paths: CertPaths = write_node_files(dir.path(), &leaf, &ca.bundle_pem());
+            paths.ca_certs_paths.push(paths.ca_certs_paths[0].clone());
+            init_crypto();
+            let material = load_tls_material(&paths).expect("load the TLS material");
+            assert_eq!(
+                endpoint_cert_chain(&material.certs.certs, &material.ca_pem)
+                    .expect("an intermediate is chosen"),
+                vec![leaf.der.clone(), ca.intermediate.der().clone()]
+            );
+            endpoint_server_config(&material.certs, &material.ca_pem)
+                .expect("the endpoint TLS configuration is built");
+        }
+
+        #[test]
+        fn certificates_that_do_not_parse_are_not_chosen() {
+            const NOT_A_CERTIFICATE: &str =
+                "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+            let ca = CaGeneration::new("Garbled");
+            let leaf = ca.issue_node_cert(NODE);
+
+            // A bundle entry that is not a certificate is skipped.
+            let bundle = format!("{NOT_A_CERTIFICATE}{}", ca.bundle_pem());
+            assert_eq!(
+                chain(&leaf, &bundle).expect("an intermediate is chosen"),
+                vec![leaf.der.clone(), ca.intermediate.der().clone()]
+            );
+
+            // A node certificate that is not one cannot be chained.
+            let garbled = CertificateDer::from(vec![0_u8; 3]);
+            let error = endpoint_cert_chain(&[garbled], ca.bundle_pem().as_bytes())
+                .expect_err("a garbled node certificate has no chain");
+            assert!(
+                format!("{error:#}").contains("cannot parse the node certificate"),
+                "got: {error:#}"
+            );
+            let error = endpoint_cert_chain(&[], ca.bundle_pem().as_bytes())
+                .expect_err("no node certificate has no chain");
+            assert!(
+                format!("{error:#}").contains("holds no certificate"),
+                "got: {error:#}"
+            );
+        }
+
+        #[test]
+        fn the_configuration_error_names_the_endpoint_chain() {
+            let ca = CaGeneration::new("Flat");
+            let leaf = ca.issue_node_cert_from_root(NODE);
+            let certs = Certs {
+                certs: vec![leaf.der.clone()],
+                key: to_private_key(leaf.key_pem.as_bytes()).expect("parse key"),
+                root: RootCertStore::empty(),
+            };
+            let error = endpoint_server_config(&certs, ca.bundle_pem().as_bytes())
+                .expect_err("no intermediate may be chosen");
+            assert!(
+                format!("{error:#}").contains("endpoint certificate chain"),
+                "got: {error:#}"
             );
         }
     }

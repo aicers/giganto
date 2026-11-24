@@ -559,7 +559,16 @@ Where the crate handles key material or secrets:
   and `main` installs as the process default.
   `parse_client_identity` reads a peer's identity from the DNS SAN, with
   `x509_parser`, of a certificate that verifier has already accepted.
-  Do not verify anywhere else, and do not add a new path without recording
+- The endpoint entry (`src/comm/endpoint.rs`) shares none of that client
+  verification. `endpoint_server_config` in `src/server.rs` builds its
+  configuration with `senta-protocol`'s `ingress_server_config`, whose
+  `EndpointClientVerifier` accepts an endpoint's self-signed Ed25519
+  certificate and verifies only the handshake signature, under the same
+  `server_crypto_provider`. `endpoint_cert_chain` there chooses the
+  intermediate presented after the node's leaf from the CA bundle, checking
+  with `x509_parser` which candidate's key verifies the leaf's signature; it
+  decides what Giganto presents, not whom it accepts.
+- Do not verify anywhere else, and do not add a new path without recording
   the decision in the pull request.
 
 ## GraphQL schema

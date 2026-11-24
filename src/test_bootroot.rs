@@ -691,6 +691,211 @@ pub(crate) fn build_bootroot_duplicate_peer_fixture(
     }
 }
 
+/// One generation of a bootroot CA: a root, and the intermediate it issued,
+/// which issues the node certificates.
+///
+/// A CA rotation puts two of these in the bundle at once; the endpoint entry
+/// has to present the intermediate of the one that issued the current node
+/// certificate.
+pub(crate) struct CaGeneration {
+    pub(crate) root: CertifiedIssuer<'static, KeyPair>,
+    pub(crate) intermediate: CertifiedIssuer<'static, KeyPair>,
+    intermediate_params: CertificateParams,
+    intermediate_key_pem: String,
+}
+
+/// A node certificate with its private key.
+pub(crate) struct NodeCert {
+    pub(crate) cert_pem: String,
+    pub(crate) key_pem: String,
+    pub(crate) der: rustls::pki_types::CertificateDer<'static>,
+}
+
+impl CaGeneration {
+    /// A generation whose root and intermediate are named after `label`.
+    pub(crate) fn new(label: &str) -> Self {
+        Self::build(label, &format!("{label} Intermediate CA"), None)
+    }
+
+    /// A generation whose intermediate has the subject `intermediate_cn` and
+    /// the Subject Key Identifier `key_id`, so that two generations built
+    /// with the same two differ only in their keys.
+    pub(crate) fn with_intermediate_identity(
+        label: &str,
+        intermediate_cn: &str,
+        key_id: &[u8],
+    ) -> Self {
+        Self::build(label, intermediate_cn, Some(key_id.to_vec()))
+    }
+
+    fn build(label: &str, intermediate_cn: &str, key_id: Option<Vec<u8>>) -> Self {
+        let root = CertifiedIssuer::self_signed(
+            new_ca_params(
+                &format!("{label} Root CA"),
+                IsCa::Ca(BasicConstraints::Unconstrained),
+            ),
+            KeyPair::generate().expect("generate root key"),
+        )
+        .expect("build root CA");
+
+        let mut intermediate_params =
+            new_ca_params(intermediate_cn, IsCa::Ca(BasicConstraints::Constrained(0)));
+        if let Some(key_id) = key_id {
+            intermediate_params.key_identifier_method = rcgen::KeyIdMethod::PreSpecified(key_id);
+        }
+        let intermediate_key = KeyPair::generate().expect("generate intermediate key");
+        let intermediate_key_pem = intermediate_key.serialize_pem();
+        let intermediate =
+            CertifiedIssuer::signed_by(intermediate_params.clone(), intermediate_key, &root)
+                .expect("build intermediate CA");
+
+        Self {
+            root,
+            intermediate,
+            intermediate_params,
+            intermediate_key_pem,
+        }
+    }
+
+    /// Returns the PEM of the intermediate followed by the root, the bundle
+    /// bootroot writes.
+    pub(crate) fn bundle_pem(&self) -> String {
+        format!("{}{}", self.intermediate.pem(), self.root.pem())
+    }
+
+    /// Issues the intermediate's certificate again, with the same subject,
+    /// key and Subject Key Identifier but another serial number, so that both
+    /// certificates verify what the intermediate signs.
+    pub(crate) fn reissued_intermediate_pem(&self) -> String {
+        let mut params = self.intermediate_params.clone();
+        params.serial_number = Some(rcgen::SerialNumber::from(u64::MAX));
+        let key = KeyPair::from_pem(&self.intermediate_key_pem).expect("reload intermediate key");
+        params
+            .signed_by(&key, &self.root)
+            .expect("reissue intermediate CA")
+            .pem()
+    }
+
+    /// Issues a node certificate for `dns_name` from the intermediate,
+    /// carrying an Authority Key Identifier.
+    pub(crate) fn issue_node_cert(&self, dns_name: &str) -> NodeCert {
+        issue_node_cert(dns_name, true, &self.intermediate)
+    }
+
+    /// The same, without an Authority Key Identifier.
+    pub(crate) fn issue_node_cert_without_aki(&self, dns_name: &str) -> NodeCert {
+        issue_node_cert(dns_name, false, &self.intermediate)
+    }
+
+    /// Issues a node certificate for `dns_name` directly from the root.
+    pub(crate) fn issue_node_cert_from_root(&self, dns_name: &str) -> NodeCert {
+        issue_node_cert(dns_name, true, &self.root)
+    }
+}
+
+fn issue_node_cert(
+    dns_name: &str,
+    authority_key_id: bool,
+    issuer: &rcgen::Issuer<'_, KeyPair>,
+) -> NodeCert {
+    let mut params = new_leaf_params(
+        dns_name,
+        dns_name,
+        vec![
+            ExtendedKeyUsagePurpose::ServerAuth,
+            ExtendedKeyUsagePurpose::ClientAuth,
+        ],
+    );
+    params.use_authority_key_identifier_extension = authority_key_id;
+    let key = KeyPair::generate().expect("generate node key");
+    let cert = params.signed_by(&key, issuer).expect("issue node cert");
+    NodeCert {
+        cert_pem: cert.pem(),
+        key_pem: key.serialize_pem(),
+        der: cert.der().clone(),
+    }
+}
+
+/// Writes `cert` (the leaf alone, as bootroot writes it) and its key to
+/// `cert.pem` and `key.pem` under `dir`, and `ca_bundle` to `ca.pem`, and
+/// returns their paths. Writing again to the same `dir` replaces the files,
+/// as a rotation does.
+pub(crate) fn write_node_files(
+    dir: &std::path::Path,
+    cert: &NodeCert,
+    ca_bundle: &str,
+) -> crate::tls_reload::CertPaths {
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let (cert_path, key_path, ca_path) = (path("cert.pem"), path("key.pem"), path("ca.pem"));
+    fs::write(&cert_path, &cert.cert_pem).expect("write node cert");
+    fs::write(&key_path, &cert.key_pem).expect("write node key");
+    fs::write(&ca_path, ca_bundle).expect("write ca bundle");
+    crate::tls_reload::CertPaths {
+        cert_path,
+        key_path,
+        ca_certs_paths: vec![ca_path],
+    }
+}
+
+/// The seed of the fake endpoint's Ed25519 key.
+const ENDPOINT_SEED: [u8; 32] = [7; 32];
+
+/// Returns the TLS configuration of a fake endpoint, built the way senta
+/// builds it: trusting only `trust_roots`, presenting its self-signed Ed25519
+/// certificate, over `provider` and offering `alpn`.
+pub(crate) fn endpoint_client_config_over(
+    provider: Arc<rustls::crypto::CryptoProvider>,
+    trust_roots: &[String],
+    alpn: &[u8],
+) -> rustls::ClientConfig {
+    use senta_protocol::auth::tls::{
+        endpoint_certificate, endpoint_client_config, endpoint_private_key,
+    };
+
+    let cert =
+        endpoint_certificate(&ENDPOINT_SEED, jiff::Timestamp::now()).expect("endpoint certificate");
+    let key = endpoint_private_key(&ENDPOINT_SEED).expect("endpoint private key");
+    endpoint_client_config(provider, trust_roots, cert, key.into(), alpn)
+        .expect("endpoint client config")
+}
+
+/// The same, over Giganto's own provider and offering the telemetry ALPN.
+pub(crate) fn endpoint_client_config_trusting(trust_roots: &[String]) -> rustls::ClientConfig {
+    endpoint_client_config_over(
+        Arc::new(crate::server::server_crypto_provider()),
+        trust_roots,
+        senta_protocol::auth::tls::TELEMETRY_ALPN,
+    )
+}
+
+/// Connects a fake endpoint built on `config` to `addr`, verifying the server
+/// as `server_name`.
+pub(crate) async fn endpoint_connect(
+    addr: SocketAddr,
+    config: rustls::ClientConfig,
+    server_name: &str,
+) -> std::io::Result<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+    let tcp = tokio::net::TcpStream::connect(addr).await?;
+    let server_name =
+        rustls::pki_types::ServerName::try_from(server_name.to_owned()).expect("server name");
+    connector.connect(server_name, tcp).await
+}
+
+/// Returns the chain the server presented on `stream`.
+pub(crate) fn presented_chain(
+    stream: &tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+) -> Vec<rustls::pki_types::CertificateDer<'static>> {
+    stream
+        .get_ref()
+        .1
+        .peer_certificates()
+        .expect("the server presented certificates")
+        .iter()
+        .map(|cert| cert.clone().into_owned())
+        .collect()
+}
+
 #[tokio::test]
 async fn wait_for_log_waits_for_a_line_logged_later() {
     let (logs, _guard) = capture_logs();

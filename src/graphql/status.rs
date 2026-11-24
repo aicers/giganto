@@ -63,6 +63,12 @@ impl ConfigVisible {
         self.graphql_srv_addr.to_string()
     }
 
+    /// The address of the endpoint entry, or `null` when it is not
+    /// configured and the entry is not opened.
+    async fn endpoint_srv_addr(&self) -> Option<String> {
+        self.endpoint_srv_addr.map(|addr| addr.to_string())
+    }
+
     async fn retention(&self) -> String {
         format_retention_days(self.retention)
     }
@@ -991,6 +997,64 @@ mod tests {
                 .await;
             assert!(response.errors.is_empty(), "{:?}", response.errors);
             assert_eq!(schema.config_update_rx.try_recv().unwrap(), config);
+        }
+    }
+
+    #[tokio::test]
+    async fn config_reports_endpoint_srv_addr_as_null_when_unset() {
+        let schema = TestSchema::new();
+        let res = schema.execute("{ config { endpointSrvAddr } }").await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        assert_eq!(res.data.to_string(), "{config: {endpointSrvAddr: null}}");
+    }
+
+    #[tokio::test]
+    async fn update_config_adds_endpoint_srv_addr() {
+        let mut schema = TestSchema::new();
+        let new_config = format!("{}endpoint_srv_addr = \"127.0.0.1:38372\"\n", old_config());
+        let query = format!(
+            r"
+            mutation {{
+                updateConfig(old: {old:?} new: {new_config:?}) {{
+                    endpointSrvAddr
+                }}
+            }}
+            ",
+            old = old_config(),
+        );
+
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty(), "GraphQL errors: {:?}", res.errors);
+        assert_eq!(
+            res.data.to_string(),
+            "{updateConfig: {endpointSrvAddr: \"127.0.0.1:38372\"}}"
+        );
+        let sent = schema
+            .config_update_rx
+            .recv()
+            .await
+            .expect("the accepted update should be sent");
+        assert_eq!(
+            sent.endpoint_srv_addr,
+            Some(SocketAddr::from_str("127.0.0.1:38372").unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn update_config_refuses_an_empty_endpoint_srv_addr() {
+        let mut schema = TestSchema::new();
+        for value in ["", "   "] {
+            let new_config = format!("{}endpoint_srv_addr = \"{value}\"\n", old_config());
+            let res = schema
+                .execute(&update_config_query(&old_config(), &new_config))
+                .await;
+            assert_eq!(res.errors.len(), 1, "{:?}", res.errors);
+            let message = &res.errors.first().unwrap().message;
+            assert!(
+                message.contains("endpoint_srv_addr"),
+                "the error must name the key, got: {message}"
+            );
+            assert!(schema.config_update_rx.try_recv().is_err());
         }
     }
 

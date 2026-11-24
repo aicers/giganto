@@ -53,6 +53,12 @@ rustls = { version = "0.23.46", default-features = false, features = [
     "std",
 ] }
 semver = "1"
+# The endpoint entry's wire protocol, TLS configuration and connection state
+# machine, shared with Clumit Endpoint and REview.
+senta-protocol = { git = "https://github.com/aicers/senta-protocol.git", tag = "0.1.0", features = [
+    "auth",
+    "telemetry",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 syn = "3"
@@ -70,7 +76,11 @@ toml_edit = "0.25"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-x509-parser = "0.18"
+# The endpoint entry's `entry_id`, the type senta-protocol carries it as.
+uuid = "1"
+# `verify-aws` checks which CA certificate signed the node certificate when
+# the endpoint chain is chosen, over the aws-lc-rs rustls already uses.
+x509-parser = { version = "0.18", features = ["verify-aws"] }
 poem = { version = "3", features = ["rustls"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-graphql-poem = "7"
@@ -81,6 +91,12 @@ mockito = "1"
 pretty_assertions = "1"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 regex = "1"
+# `test-util` gives tests senta-protocol's deterministic test keys.
+senta-protocol = { git = "https://github.com/aicers/senta-protocol.git", tag = "0.1.0", features = [
+    "auth",
+    "telemetry",
+    "test-util",
+] }
 serial_test = "4"
 # `test-util` gives tests the paused clock (`#[tokio::test(start_paused =
 # true)]`), so a timing-dependent test advances virtual time instead of
