@@ -1,6 +1,7 @@
 //! Raw event storage based on RocksDB.
 
 pub mod deletion_coordination;
+pub(crate) mod endpoint;
 mod migration;
 
 use std::{
@@ -302,6 +303,8 @@ impl Database {
         cfs_name.extend(RAW_DATA_COLUMN_FAMILY_NAMES);
         cfs_name.extend(META_DATA_COLUMN_FAMILY_NAMES);
         cfs_name.push(CUSTOMER_DELETION_JOBS_CF);
+        cfs_name.push(endpoint::ENDPOINT_ENTRY_CF);
+        cfs_name.push(endpoint::ENDPOINT_EVENTS_CF);
 
         let cfs = cfs_name
             .into_iter()
@@ -2591,9 +2594,11 @@ mod tests {
             assert_eq!(checked_db, 3);
             assert_eq!(
                 checked_cf,
+                // The customer deletion jobs and the two endpoint families
+                // are in neither list.
                 3 * (RAW_DATA_COLUMN_FAMILY_NAMES.len()
                     + super::META_DATA_COLUMN_FAMILY_NAMES.len()
-                    + 1)
+                    + 3)
             );
             drop(db);
         }

@@ -1,9 +1,13 @@
 use std::{
+    collections::HashMap,
     future::Future,
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     task::{Context as TaskContext, Poll, ready},
     time::Duration,
 };
@@ -11,11 +15,15 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use async_graphql::{
     Executor,
-    http::{GraphQLPlaygroundConfig, playground_source},
+    http::{
+        GraphQLPlaygroundConfig, create_multipart_mixed_stream, is_accept_multipart_mixed,
+        playground_source,
+    },
 };
-use async_graphql_poem::GraphQL;
+use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse, GraphQLRequest};
+use futures_util::StreamExt;
 use poem::{
-    Response, Route, Server,
+    Body, Endpoint, FromRequest, IntoResponse, Request, Response, Route, Server,
     endpoint::make_sync,
     http::uri::Scheme,
     listener::{Acceptor, Listener, TcpAcceptor, TcpListener},
@@ -31,7 +39,11 @@ use tokio::{
 use tokio_rustls::{Accept, TlsAcceptor, server::TlsStream};
 use tracing::{info, warn};
 
-use crate::server::{Certs, graphql_server_config};
+use crate::server::{Certs, graphql_server_config, service_name_from_cert};
+
+/// How long a `multipart/mixed` response waits between parts before sending
+/// a heartbeat, as `async-graphql-poem`'s endpoint does.
+const MULTIPART_HEARTBEAT: Duration = Duration::from_secs(30);
 
 /// How often [`WebController::shutdown`] reports that web shutdown is still
 /// pending while it waits for the web task to finish.
@@ -136,7 +148,11 @@ pub async fn serve<S: Executor>(
     certs: Arc<Certs>,
     shutdown_timeout: Duration,
 ) -> Result<WebController> {
-    let graphql = GraphQL::new(schema);
+    let callers = Arc::new(GraphqlCallers::default());
+    let graphql = GraphqlEndpoint {
+        executor: schema,
+        callers: Arc::clone(&callers),
+    };
 
     let playground = make_sync(move |_| {
         Response::builder()
@@ -163,6 +179,7 @@ pub async fn serve<S: Executor>(
     let acceptor = GraphqlTlsAcceptor {
         inner: tcp,
         tls: TlsAcceptor::from(tls_config),
+        callers,
     };
 
     info!("GraphQL web server is starting on https://{addr:?} with mTLS enabled");
@@ -188,15 +205,119 @@ pub async fn serve<S: Executor>(
     })
 }
 
+/// The service names of the GraphQL server's callers, by the remote address
+/// of their connection.
+///
+/// A connection's entry is recorded when its TLS handshake completes, from the
+/// client certificate the verifier has accepted, and removed when the
+/// connection is dropped. A caller whose certificate carries no service name
+/// this node can read is recorded as having none.
+#[derive(Debug, Default)]
+pub(crate) struct GraphqlCallers {
+    by_addr: Mutex<HashMap<SocketAddr, CallerRecord>>,
+    next_connection: AtomicU64,
+}
+
+#[derive(Debug)]
+struct CallerRecord {
+    /// The connection the record is of, so that a connection dropped late
+    /// does not remove the record of a later one from the same address.
+    connection: u64,
+    service_name: Option<String>,
+}
+
+impl GraphqlCallers {
+    /// Returns the service name of the caller connected from `addr`, or
+    /// `None` when no connection from it is recorded or its certificate
+    /// carries no service name.
+    pub(crate) fn service_name(&self, addr: SocketAddr) -> Option<String> {
+        self.by_addr
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&addr)
+            .and_then(|record| record.service_name.clone())
+    }
+
+    /// Records a connection from `addr` whose certificate carries
+    /// `service_name`, as a completed handshake does.
+    #[cfg(test)]
+    pub(crate) fn record_for_test(&self, addr: SocketAddr, service_name: Option<&str>) {
+        let connection = self.next_connection();
+        self.record(addr, connection, service_name.map(str::to_owned));
+    }
+
+    fn next_connection(&self) -> u64 {
+        self.next_connection.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn record(&self, addr: SocketAddr, connection: u64, service_name: Option<String>) {
+        self.by_addr
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                addr,
+                CallerRecord {
+                    connection,
+                    service_name,
+                },
+            );
+    }
+
+    fn forget(&self, addr: SocketAddr, connection: u64) {
+        let mut by_addr = self.by_addr.lock().unwrap_or_else(PoisonError::into_inner);
+        if by_addr
+            .get(&addr)
+            .is_some_and(|record| record.connection == connection)
+        {
+            by_addr.remove(&addr);
+        }
+    }
+}
+
+/// The GraphQL endpoint: `async-graphql-poem`'s, with the caller's remote
+/// address and the server's [`GraphqlCallers`] added to every request's data,
+/// so that a resolver can tell which service is calling.
+struct GraphqlEndpoint<E> {
+    executor: E,
+    callers: Arc<GraphqlCallers>,
+}
+
+impl<E: Executor> Endpoint for GraphqlEndpoint<E> {
+    type Output = Response;
+
+    async fn call(&self, req: Request) -> poem::Result<Self::Output> {
+        let remote = req.remote_addr().clone();
+        let is_accept_multipart_mixed = req.header("accept").is_some_and(is_accept_multipart_mixed);
+        let (req, mut body) = req.split();
+        if is_accept_multipart_mixed {
+            let request = GraphQLRequest::from_request(&req, &mut body).await?.0;
+            let request = request.data(remote).data(Arc::clone(&self.callers));
+            let stream = self.executor.execute_stream(request, None);
+            Ok(Response::builder()
+                .header("content-type", "multipart/mixed; boundary=graphql")
+                .body(Body::from_bytes_stream(
+                    create_multipart_mixed_stream(stream, MULTIPART_HEARTBEAT)
+                        .map(Ok::<_, std::io::Error>),
+                )))
+        } else {
+            let batch = GraphQLBatchRequest::from_request(&req, &mut body).await?.0;
+            let batch = batch.data(remote).data(Arc::clone(&self.callers));
+            Ok(GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response())
+        }
+    }
+}
+
 /// The TLS acceptor of the GraphQL HTTPS server.
 ///
 /// It stands in for poem's `RustlsAcceptor`, which builds its configuration
 /// from the process default and reports a failed handshake only to the
 /// connection, whose result poem discards. This one serves
-/// [`graphql_server_config`] and logs every failed handshake.
+/// [`graphql_server_config`], logs every failed handshake, and records each
+/// caller's service name in [`GraphqlCallers`].
 struct GraphqlTlsAcceptor {
     inner: TcpAcceptor,
     tls: TlsAcceptor,
+    callers: Arc<GraphqlCallers>,
 }
 
 impl Acceptor for GraphqlTlsAcceptor {
@@ -217,6 +338,8 @@ impl Acceptor for GraphqlTlsAcceptor {
         let io = GraphqlTlsStream {
             state: HandshakeState::Handshaking(self.tls.accept(stream)),
             peer,
+            callers: Arc::clone(&self.callers),
+            connection: self.callers.next_connection(),
         };
         Ok((io, local_addr, remote_addr, Scheme::HTTPS))
     }
@@ -233,6 +356,15 @@ enum HandshakeState {
 struct GraphqlTlsStream {
     state: HandshakeState,
     peer: SocketAddr,
+    callers: Arc<GraphqlCallers>,
+    /// This connection's id in `callers`.
+    connection: u64,
+}
+
+impl Drop for GraphqlTlsStream {
+    fn drop(&mut self) {
+        self.callers.forget(self.peer, self.connection);
+    }
 }
 
 impl GraphqlTlsStream {
@@ -245,7 +377,18 @@ impl GraphqlTlsStream {
     ) -> Poll<io::Result<Pin<&mut TlsStream<TcpStream>>>> {
         if let HandshakeState::Handshaking(accept) = &mut self.state {
             match ready!(Pin::new(accept).poll(cx)) {
-                Ok(stream) => self.state = HandshakeState::Ready(stream),
+                Ok(stream) => {
+                    // The verifier has accepted the certificate; this only
+                    // reads the service name it carries.
+                    let service_name = stream
+                        .get_ref()
+                        .1
+                        .peer_certificates()
+                        .and_then(|certs| service_name_from_cert(certs).ok());
+                    self.callers
+                        .record(self.peer, self.connection, service_name);
+                    self.state = HandshakeState::Ready(stream);
+                }
                 Err(error) => {
                     warn!("TLS handshake from {} failed: {error}", self.peer);
                     self.state = HandshakeState::Failed;
@@ -338,6 +481,12 @@ mod tests {
     impl Query {
         async fn hello(&self) -> &'static str {
             "world"
+        }
+
+        /// Whether the request data carries the caller's remote address and
+        /// the server's caller table, as the GraphQL endpoint adds them.
+        async fn has_caller_data(&self, ctx: &Context<'_>) -> bool {
+            ctx.data::<RemoteAddr>().is_ok() && ctx.data::<Arc<GraphqlCallers>>().is_ok()
         }
 
         /// Sleeps `millis` before answering, standing in for an in-flight
@@ -492,6 +641,55 @@ mod tests {
 
         // Give the spawned task a moment to enter its accept loop.
         sleep(Duration::from_millis(50)).await;
+
+        controller.shutdown().await.expect("graceful shutdown");
+    }
+
+    #[tokio::test]
+    async fn both_response_kinds_carry_the_caller_data() {
+        install_crypto_provider();
+        let dir = tempdir().expect("tempdir");
+        let (cert, key, ca) = write_pki(dir.path());
+        let addr = free_addr();
+        let controller = serve(
+            test_schema(),
+            addr,
+            certs_from_pem(&cert, &key, &ca),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("serve should start");
+
+        let client = build_mtls_client(&cert, &key, &ca);
+        for (accept, expected_type) in [
+            (
+                r#"multipart/mixed; boundary="graphql"; subscriptionSpec="1.0""#,
+                "multipart/mixed; boundary=graphql",
+            ),
+            ("application/json", "application/json; charset=utf-8"),
+        ] {
+            let response = client
+                .post(format!("https://{addr}/graphql"))
+                .header("Content-Type", "application/json")
+                .header("Accept", accept)
+                .body(r#"{"query":"{ hello hasCallerData }"}"#)
+                .send()
+                .await
+                .expect("send the request")
+                .error_for_status()
+                .expect("a successful response");
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let body = response.text().await.expect("read the body");
+            assert_eq!(content_type.as_deref(), Some(expected_type), "{accept}");
+            assert!(
+                body.contains(r#""hello":"world""#) && body.contains(r#""hasCallerData":true"#),
+                "{accept}: {body}"
+            );
+        }
 
         controller.shutdown().await.expect("graceful shutdown");
     }
@@ -1032,6 +1230,8 @@ mod tests {
         let mut stream = GraphqlTlsStream {
             state: HandshakeState::Failed,
             peer: SocketAddr::from((Ipv4Addr::LOCALHOST, 1)),
+            callers: Arc::default(),
+            connection: 0,
         };
 
         let errors = [
@@ -1149,5 +1349,26 @@ mod tests {
             .shutdown()
             .await
             .expect("graceful shutdown under the default timeout");
+    }
+
+    #[test]
+    fn a_late_drop_does_not_forget_a_newer_connection_from_the_same_address() {
+        let callers = GraphqlCallers::default();
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 40_000));
+        let first = callers.next_connection();
+        callers.record(addr, first, Some("review".to_owned()));
+        assert_eq!(callers.service_name(addr).as_deref(), Some("review"));
+
+        // The address is reused before the first connection is dropped.
+        let second = callers.next_connection();
+        callers.record(addr, second, Some("piglet".to_owned()));
+        callers.forget(addr, first);
+        assert_eq!(callers.service_name(addr).as_deref(), Some("piglet"));
+
+        callers.forget(addr, second);
+        assert_eq!(callers.service_name(addr), None);
+        // A caller whose certificate carries no service name has none.
+        callers.record(addr, callers.next_connection(), None);
+        assert_eq!(callers.service_name(addr), None);
     }
 }

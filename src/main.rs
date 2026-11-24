@@ -21,6 +21,7 @@ use comm::{
     publish,
 };
 use rustls::pki_types::CertificateDer;
+use senta_protocol::auth::active_list::DEFAULT_LEASE_LENGTH;
 use settings::{ConfigVisible, RocksDbLimits, Settings};
 use storage::{db_path_and_option, repair_db};
 use tokio::{
@@ -426,6 +427,10 @@ struct ProcessContext {
     /// falls back to when the chain cannot be chosen from the current
     /// material.
     endpoint_tls: Arc<endpoint::EndpointTls>,
+    /// The node's endpoint active list, with its lease and the connections
+    /// it admitted. A generation restart keeps it; only a process restart
+    /// loses it.
+    endpoint_list: Arc<endpoint::EndpointList>,
 }
 
 impl ProcessContext {
@@ -462,6 +467,7 @@ impl ProcessContext {
             notify_terminate,
             notify_tls_reload,
             endpoint_tls: Arc::default(),
+            endpoint_list: Arc::new(endpoint::EndpointList::new(DEFAULT_LEASE_LENGTH)),
         })
     }
 
@@ -786,6 +792,9 @@ async fn run_generation(
     let database = storage::Database::open(&db_path, &db_options)
         .context("opening database")
         .map_err(GenerationError::StoreOpen)?;
+    // The active list outlives the generation; the `entry_id` is this
+    // database's.
+    process.endpoint_list.load_entry_id(&database);
 
     let (config_update_tx, config_update_rx) = mpsc::channel::<ConfigVisible>(1);
 
@@ -888,6 +897,7 @@ async fn run_generation(
         top_level_tracker.clone(),
         web_reaper_tracker.clone(),
         Arc::clone(&deletion_coordination),
+        Arc::clone(&process.endpoint_list),
     );
 
     let web_addr = settings.config.visible.graphql_srv_addr;
@@ -1007,14 +1017,12 @@ async fn run_generation(
             let material = Arc::clone(&tls_watch.borrow_and_update());
             match process.endpoint_tls.for_generation(&material) {
                 Some(tls_config) => {
-                    // Nothing gives the node an `entry_id` yet, so the entry
-                    // is unready and closes every connection.
-                    let (_readiness_tx, readiness) = tokio::sync::watch::channel(None);
                     let endpoint_server = endpoint::Server::new(
                         endpoint_srv_addr,
                         tls_config,
                         Arc::clone(&process.endpoint_tls),
-                        readiness,
+                        Arc::clone(&process.endpoint_list),
+                        database.clone(),
                     );
                     let handle = top_level_tracker
                         .spawn_observed("endpoint", move |token| async move {
@@ -9089,6 +9097,354 @@ mod tests {
                     report.contains("name=\"endpoint\"") && report.contains("phase=\"serving\""),
                     "the boundary should name the task it observed, got: {report}"
                 );
+            }
+
+            const REVIEW_SAN: &str = "001.review.manager.example.test";
+            const PIGLET_SAN: &str = "001.piglet.sensor.example.test";
+            const LIST_ENTRY_ID: &str = "3f9c2d6e-8a41-4b7f-9c1d-2e5a6b7c8d9e";
+            const OTHER_LIST_ENTRY_ID: &str = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+            /// A GraphQL client presenting a certificate `ca` issued for
+            /// `san`.
+            fn graphql_client_as(ca: &CaGeneration, san: &str) -> reqwest::Client {
+                let cert = ca.issue_node_cert(san);
+                super::super::reload_https_server_tests::build_mtls_client(
+                    cert.cert_pem.as_bytes(),
+                    cert.key_pem.as_bytes(),
+                    ca.bundle_pem().as_bytes(),
+                )
+            }
+
+            async fn graphql(
+                client: &reqwest::Client,
+                addr: SocketAddr,
+                query: &str,
+            ) -> serde_json::Value {
+                client
+                    .post(format!("https://{addr}/graphql"))
+                    .json(&serde_json::json!({ "query": query }))
+                    .send()
+                    .await
+                    .expect("the request reaches the generation")
+                    .json()
+                    .await
+                    .expect("the response decodes")
+            }
+
+            /// The standard base64 of a full list, version `version`, that
+            /// lists the fake endpoint's key as active.
+            fn full_list(version: u64) -> String {
+                use base64::Engine;
+                use senta_protocol::auth::active_list::{EntryState, ListEntry, ListUpdate};
+
+                let update = ListUpdate::Full {
+                    version,
+                    entries: vec![ListEntry {
+                        endpoint_id: uuid::Uuid::from_u128(1),
+                        spki_sha256: crate::test_bootroot::endpoint_spki(
+                            &crate::test_bootroot::ENDPOINT_SEED,
+                        ),
+                        customer_endpoint_id: uuid::Uuid::from_u128(2),
+                        state: EntryState::Active,
+                    }],
+                };
+                base64::engine::general_purpose::STANDARD
+                    .encode(update.encode().expect("encode the list"))
+            }
+
+            fn apply_query(version: u64, entry_id: &str) -> String {
+                format!(
+                    r#"mutation {{ endpointApplyActiveList(update: "{}", entryId: "{entry_id}") {{ ready version }} }}"#,
+                    full_list(version)
+                )
+            }
+
+            fn confirm_query(version: u64) -> String {
+                format!(
+                    r#"mutation {{ endpointConfirmActiveList(version: "{version}") {{ ready version }} }}"#
+                )
+            }
+
+            const STATE_QUERY: &str = "{ endpointActiveListState { entryId ready version } }";
+
+            /// Says `hello` on the endpoint port at `addr` and returns the
+            /// `entry_id` of the `hello_ack`, or `None` when the entry closed
+            /// the connection instead.
+            async fn hello_ack_entry_id(addr: SocketAddr, root_pem: String) -> Option<uuid::Uuid> {
+                use senta_protocol::connection::{
+                    ENDPOINT_RECEIVE_LIMIT, EndpointChannel, EndpointConfig, EndpointConnection,
+                    Envelope, FrameDecoder, HelloAck, Message,
+                };
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+                let mut stream = tokio::time::timeout(
+                    READY_TIMEOUT,
+                    endpoint_connect(
+                        addr,
+                        endpoint_client_config_trusting(&[root_pem]),
+                        &node_san(DEFAULT_NODE_HOSTNAME),
+                    ),
+                )
+                .await
+                .expect("the endpoint handshake finishes in time")
+                .expect("the endpoint completes the TLS handshake");
+                let (_endpoint, hello) = EndpointConnection::new(
+                    EndpointConfig::new(
+                        EndpointChannel::Telemetry {
+                            expected_entry_id: uuid::Uuid::nil(),
+                        },
+                        "0.1.0",
+                    ),
+                    jiff::Timestamp::now(),
+                    Duration::ZERO,
+                )
+                .expect("encode the hello");
+                stream
+                    .write_all(hello.as_bytes())
+                    .await
+                    .expect("send the hello");
+                stream.flush().await.expect("flush");
+                let mut decoder = FrameDecoder::new(ENDPOINT_RECEIVE_LIMIT);
+                let mut buf = vec![0_u8; 16 * 1024];
+                loop {
+                    if let Some(payload) = decoder.next_frame().expect("a frame within the limit") {
+                        let envelope = Envelope::parse(&payload).expect("an envelope");
+                        assert_eq!(envelope.t(), HelloAck::T);
+                        let ack: HelloAck = envelope.body().decode().expect("a hello_ack");
+                        return ack.entry_id;
+                    }
+                    let n = tokio::time::timeout(READY_TIMEOUT, stream.read(&mut buf))
+                        .await
+                        .expect("the entry answers in time")
+                        .unwrap_or(0);
+                    if n == 0 {
+                        return None;
+                    }
+                    decoder.push(&buf[..n]);
+                }
+            }
+
+            /// Only REview drives the active list over GraphQL; an endpoint
+            /// is admitted once it has, with the `entry_id` REview gave.
+            #[tokio::test]
+            async fn review_drives_the_active_list_and_no_other_caller_does() {
+                let dir = tempdir().expect("tempdir");
+                let notify_terminate = Arc::new(Notify::new());
+                let ca = CaGeneration::new("Node");
+                let (process, _cert) =
+                    bootroot_process(dir.path(), &ca, Arc::clone(&notify_terminate));
+                let mut settings = test_settings(dir.path());
+                let graphql_addr = free_addr();
+                settings.config.visible.graphql_srv_addr = graphql_addr;
+                settings.config.visible.endpoint_srv_addr = Some(any_endpoint_addr());
+                let review = graphql_client_as(&ca, REVIEW_SAN);
+                let piglet = graphql_client_as(&ca, PIGLET_SAN);
+                // A peer Giganto presents a certificate of service `giganto`.
+                let peer = graphql_client_as(&ca, &node_san("node2"));
+
+                let (logs, _guard) = capture_logs();
+                let (end, ()) = tokio::join!(
+                    tokio::time::timeout(
+                        GENERATION_TIMEOUT,
+                        run_generation(&mut settings, &process, &HostEffects)
+                    ),
+                    async {
+                        wait_for_logs(&logs, &[ENDPOINT_LISTENING, GRAPHQL_READY]).await;
+                        let endpoint_addr = *endpoint_listening_addrs(&logs)
+                            .first()
+                            .expect("the endpoint address");
+                        assert_eq!(
+                            hello_ack_entry_id(endpoint_addr, ca.root.pem()).await,
+                            None,
+                            "an unready node closes the hello"
+                        );
+
+                        for client in [&piglet, &peer] {
+                            for query in [apply_query(1, LIST_ENTRY_ID), confirm_query(1)] {
+                                let response = graphql(client, graphql_addr, &query).await;
+                                assert!(response.get("errors").is_some(), "{response}");
+                                assert_eq!(response["data"], serde_json::Value::Null);
+                            }
+                            let response = graphql(client, graphql_addr, STATE_QUERY).await;
+                            assert!(response.get("errors").is_some(), "{response}");
+                            // Another field still answers every caller.
+                            let response =
+                                graphql(client, graphql_addr, "{ config { endpointSrvAddr } }")
+                                    .await;
+                            assert!(response.get("errors").is_none(), "{response}");
+                        }
+                        assert_eq!(
+                            graphql(&review, graphql_addr, STATE_QUERY).await,
+                            serde_json::json!({ "data": { "endpointActiveListState": {
+                                "entryId": null, "ready": false, "version": null
+                            } } }),
+                            "the refused calls had no effect"
+                        );
+
+                        assert_eq!(
+                            graphql(&review, graphql_addr, &apply_query(1, LIST_ENTRY_ID)).await,
+                            serde_json::json!({ "data": { "endpointApplyActiveList": {
+                                "ready": true, "version": "1"
+                            } } })
+                        );
+                        assert_eq!(
+                            hello_ack_entry_id(endpoint_addr, ca.root.pem()).await,
+                            Some(LIST_ENTRY_ID.parse().expect("a UUID"))
+                        );
+                        notify_terminate.notify_one();
+                    }
+                );
+                assert_eq!(
+                    end.expect("the generation ends")
+                        .expect("the generation succeeds"),
+                    clean(GenerationEnd::Terminate)
+                );
+            }
+
+            /// A generation restart keeps the list, its version and its
+            /// lease; a database without a stored `entry_id` leaves the node
+            /// unready until REview sends a full list with one.
+            #[tokio::test]
+            async fn a_generation_restart_keeps_the_active_list() {
+                let dir = tempdir().expect("tempdir");
+                let notify_terminate = Arc::new(Notify::new());
+                let ca = CaGeneration::new("Node");
+                let (process, _cert) =
+                    bootroot_process(dir.path(), &ca, Arc::clone(&notify_terminate));
+                let mut settings = test_settings(dir.path());
+                let graphql_addr = free_addr();
+                settings.config.visible.graphql_srv_addr = graphql_addr;
+                write_config_file(&settings);
+                let review = graphql_client_as(&ca, REVIEW_SAN);
+                let other_data_dir = dir.path().join("other-data");
+                fs::create_dir_all(&other_data_dir).expect("create the other data dir");
+
+                let (logs, _guard) = capture_logs();
+                let (outcome, ()) = tokio::join!(
+                    tokio::time::timeout(
+                        GENERATION_TIMEOUT.saturating_mul(2),
+                        run_lifecycle(&mut settings, &process, &HostEffects)
+                    ),
+                    async {
+                        wait_for_occurrences(&logs, GRAPHQL_READY, 1).await;
+                        let mut current = test_settings(dir.path()).config.visible;
+                        current.graphql_srv_addr = graphql_addr;
+                        // No endpoint entry runs: the fields work all the same.
+                        assert_eq!(
+                            graphql(&review, graphql_addr, &apply_query(4, LIST_ENTRY_ID)).await,
+                            serde_json::json!({ "data": { "endpointApplyActiveList": {
+                                "ready": true, "version": "4"
+                            } } })
+                        );
+                        assert_eq!(
+                            graphql(&review, graphql_addr, &confirm_query(4)).await,
+                            serde_json::json!({ "data": { "endpointConfirmActiveList": {
+                                "ready": true, "version": "4"
+                            } } })
+                        );
+                        let deadline = process.endpoint_list.lease_deadline();
+                        assert!(deadline.is_some());
+
+                        // A restart of the services keeps the list.
+                        let mut updated = current.clone();
+                        updated.ack_transmission = current.ack_transmission + 1;
+                        send_config_change(&process, graphql_addr, &current, &updated).await;
+                        wait_for_occurrences(&logs, GRAPHQL_READY, 2).await;
+                        assert_eq!(
+                            graphql(&review, graphql_addr, STATE_QUERY).await,
+                            serde_json::json!({ "data": { "endpointActiveListState": {
+                                "entryId": LIST_ENTRY_ID, "ready": true, "version": "4"
+                            } } })
+                        );
+                        assert_eq!(process.endpoint_list.lease_deadline(), deadline);
+
+                        // A database with no `entry_id` stored.
+                        let current = updated;
+                        let mut updated = current.clone();
+                        updated.data_dir.clone_from(&other_data_dir);
+                        send_config_change(&process, graphql_addr, &current, &updated).await;
+                        wait_for_occurrences(&logs, GRAPHQL_READY, 3).await;
+                        assert_eq!(
+                            graphql(&review, graphql_addr, STATE_QUERY).await,
+                            serde_json::json!({ "data": { "endpointActiveListState": {
+                                "entryId": null, "ready": false, "version": null
+                            } } })
+                        );
+                        assert_eq!(
+                            graphql(&review, graphql_addr, &confirm_query(4)).await,
+                            serde_json::json!({ "data": { "endpointConfirmActiveList": {
+                                "ready": false, "version": null
+                            } } })
+                        );
+                        assert_eq!(
+                            graphql(&review, graphql_addr, &apply_query(5, OTHER_LIST_ENTRY_ID))
+                                .await,
+                            serde_json::json!({ "data": { "endpointApplyActiveList": {
+                                "ready": true, "version": "5"
+                            } } })
+                        );
+                        notify_terminate.notify_one();
+                    }
+                );
+                outcome
+                    .expect("the lifecycle should end on the terminate intent")
+                    .expect("the lifecycle should not fail");
+            }
+
+            /// A process restart loses the list but not the stored
+            /// `entry_id`.
+            #[tokio::test]
+            async fn a_process_restart_is_unready_with_the_stored_entry_id() {
+                let dir = tempdir().expect("tempdir");
+                let ca = CaGeneration::new("Node");
+                let mut settings = test_settings(dir.path());
+                let graphql_addr = free_addr();
+                settings.config.visible.graphql_srv_addr = graphql_addr;
+                let review = graphql_client_as(&ca, REVIEW_SAN);
+                let (logs, _guard) = capture_logs();
+
+                for (round, expected) in [
+                    (
+                        1,
+                        serde_json::json!({ "entryId": null, "ready": false, "version": null }),
+                    ),
+                    (
+                        2,
+                        serde_json::json!({
+                            "entryId": LIST_ENTRY_ID, "ready": false, "version": null
+                        }),
+                    ),
+                ] {
+                    let notify_terminate = Arc::new(Notify::new());
+                    let (process, _cert) =
+                        bootroot_process(dir.path(), &ca, Arc::clone(&notify_terminate));
+                    let (end, ()) = tokio::join!(
+                        tokio::time::timeout(
+                            GENERATION_TIMEOUT,
+                            run_generation(&mut settings, &process, &HostEffects)
+                        ),
+                        async {
+                            wait_for_occurrences(&logs, GRAPHQL_READY, round).await;
+                            assert_eq!(
+                                graphql(&review, graphql_addr, STATE_QUERY).await,
+                                serde_json::json!({ "data": { "endpointActiveListState": expected } }),
+                                "round {round}"
+                            );
+                            if round == 1 {
+                                let applied =
+                                    graphql(&review, graphql_addr, &apply_query(1, LIST_ENTRY_ID))
+                                        .await;
+                                assert!(applied.get("errors").is_none(), "{applied}");
+                            }
+                            notify_terminate.notify_one();
+                        }
+                    );
+                    assert_eq!(
+                        end.expect("the generation ends")
+                            .expect("the generation succeeds"),
+                        clean(GenerationEnd::Terminate)
+                    );
+                }
             }
 
             /// The key added by a configuration update to a node with no

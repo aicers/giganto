@@ -1,2 +1,2 @@
-doc-valid-idents = [ "GraphQL", "RocksDB" ]
+doc-valid-idents = [ "GraphQL", "REview", "RocksDB" ]
 allow-unwrap-in-tests = true

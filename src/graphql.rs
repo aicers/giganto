@@ -1,7 +1,9 @@
+pub(crate) mod caller;
 #[cfg(feature = "cluster")]
 mod client;
 pub(crate) mod customer_deletion;
 pub(crate) mod endpoint_header;
+mod endpoint_list;
 mod endpoint_log;
 mod export;
 #[cfg(test)]
@@ -51,7 +53,10 @@ pub(crate) use crate::graphql::standalone::{
 };
 use crate::{
     cancellation::TaskTracker,
-    comm::{IngestSensors, PcapSensors, ingest::implement::EventFilter, peer::Peers},
+    comm::{
+        IngestSensors, PcapSensors, endpoint::EndpointList, ingest::implement::EventFilter,
+        peer::Peers,
+    },
     settings::{ConfigVisible, Settings},
     storage::{
         Database, Direction, FilteredIter, KeyExtractor, KeyValue, RawEventStore, StorageKey,
@@ -86,12 +91,14 @@ pub struct Query(
     netflow::NetflowQuery,
     customer_deletion::CustomerDeletionQuery,
     endpoint_log::EndpointLogQuery,
+    endpoint_list::EndpointListQuery,
 );
 
 #[derive(Default, MergedObject)]
 pub struct Mutation(
     status::ConfigMutation,
     customer_deletion::CustomerDeletionMutation,
+    endpoint_list::EndpointListMutation,
 );
 
 /// Time range filter.
@@ -262,6 +269,9 @@ pub(crate) fn schema(
     // `deleteCustomerData` resolver can claim the store before it persists a
     // job and hold the claim until the deletion is over.
     deletion_coordination: Arc<CustomerDeletionCoordinator>,
+    // The node's endpoint active list, which outlives the generation; REview
+    // drives it through the endpoint list fields.
+    endpoint_list: Arc<EndpointList>,
 ) -> Schema {
     let schema = Schema::build(Query::default(), Mutation::default(), EmptySubscription)
         .data(node_name)
@@ -277,6 +287,7 @@ pub(crate) fn schema(
         .data(top_level_tracker)
         .data(PcapReaperTracker(pcap_reaper_tracker))
         .data(deletion_coordination)
+        .data(endpoint_list)
         .data(runtime_ingest_sensors)
         .data(stream_direct_channels);
     let schema = peer.add_data(schema);
@@ -1269,6 +1280,8 @@ pub(crate) mod tests {
         /// The store claim the schema was built with, so a test can hold it
         /// the way a retention cycle or another customer's deletion does.
         pub(crate) deletion_coordination: Arc<CustomerDeletionCoordinator>,
+        /// The endpoint active list the schema was built with.
+        pub(crate) endpoint_list: Arc<crate::comm::endpoint::EndpointList>,
         pub(crate) ingest_sensors: IngestSensors,
         pub(super) runtime_ingest_sensors: RunTimeIngestSensors,
         pub(super) pcap_sensors: PcapSensors,
@@ -1334,6 +1347,10 @@ pub(crate) mod tests {
             // schema resolves out of its context.
             let top_level_tracker = crate::cancellation::TaskTracker::new();
             let deletion_coordination = Arc::new(CustomerDeletionCoordinator::new());
+            let endpoint_list = Arc::new(crate::comm::endpoint::EndpointList::new(
+                senta_protocol::auth::active_list::DEFAULT_LEASE_LENGTH,
+            ));
+            endpoint_list.load_entry_id(&db);
             let schema = schema(
                 NodeName(node_name.to_string()),
                 db.clone(),
@@ -1352,6 +1369,7 @@ pub(crate) mod tests {
                 top_level_tracker.clone(),
                 crate::cancellation::TaskTracker::new(),
                 Arc::clone(&deletion_coordination),
+                Arc::clone(&endpoint_list),
             );
 
             Self {
@@ -1363,6 +1381,7 @@ pub(crate) mod tests {
                 config_update_rx,
                 top_level_tracker,
                 deletion_coordination,
+                endpoint_list,
                 ingest_sensors,
                 runtime_ingest_sensors,
                 pcap_sensors,

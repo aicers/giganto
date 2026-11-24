@@ -568,6 +568,14 @@ Where the crate handles key material or secrets:
   intermediate presented after the node's leaf from the CA bundle, checking
   with `x509_parser` which candidate's key verifies the leaf's signature; it
   decides what Giganto presents, not whom it accepts.
+- The GraphQL caller check reads identity and verifies nothing new. When a
+  GraphQL HTTPS connection (`GraphqlTlsStream` in `src/web.rs`) completes
+  its TLS handshake, it reads the caller's service name with
+  `parse_client_identity` (through `service_name_from_cert`) from the
+  certificate the verifier has already accepted, into the `GraphqlCallers`
+  table keyed by the connection's remote address. The caller check in
+  `src/graphql/caller.rs` (`caller_service` and the `ReviewOnly` guard)
+  reads it from that table.
 - Do not verify anywhere else, and do not add a new path without recording
   the decision in the pull request.
 
