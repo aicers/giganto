@@ -165,6 +165,16 @@ pub struct ConfigVisible {
     pub ingest_srv_addr: SocketAddr, // IP address & port to ingest data
     #[serde(deserialize_with = "deserialize_socket_addr")]
     pub publish_srv_addr: SocketAddr, // IP address & port to publish data
+    /// The address of the endpoint entry, the port Clumit Endpoint sends
+    /// host telemetry to. `None` when the key is absent, and then the entry
+    /// is not opened; it is omitted when serialized, so a configuration
+    /// written without it reads back without it.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_endpoint_addr",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub endpoint_srv_addr: Option<SocketAddr>,
     #[serde(with = "humantime_serde")]
     pub retention: Duration, // Data retention period
     #[serde(with = "humantime_serde", default = "default_oplog_retention")]
@@ -473,6 +483,28 @@ where
     })
 }
 
+/// Deserializes the endpoint entry's socket address.
+///
+/// Used with `#[serde(default, ...)]`, so an absent key is `None`. Unlike
+/// [`deserialize_peer_addr`], the error names the key itself: the field is
+/// flattened into [`Config`], and a flattened field's error reaches the
+/// configuration loader without the key it came from.
+///
+/// # Errors
+///
+/// Returns an error if a provided value is not an `IP:PORT` address, an empty
+/// or whitespace-only string included.
+fn deserialize_endpoint_addr<'de, D>(deserializer: D) -> Result<Option<SocketAddr>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    (Option::<String>::deserialize(deserializer)?).map_or(Ok(None), |addr| {
+        addr.parse::<SocketAddr>().map(Some).map_err(|e| {
+            D::Error::custom(format!("invalid endpoint_srv_addr address \"{addr}\": {e}"))
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -671,6 +703,7 @@ compression = {}
                 graphql_srv_addr: "[::]:8443".parse().unwrap(),
                 ingest_srv_addr: "[::]:38370".parse().unwrap(),
                 publish_srv_addr: "[::]:38371".parse().unwrap(),
+                endpoint_srv_addr: None,
                 retention: Duration::from_hours(2400),
                 oplog_retention: Duration::from_hours(365 * 24),
                 data_dir: data_dir.path().to_path_buf(),
@@ -1040,6 +1073,7 @@ drain_report_interval = "500ms"
             graphql_srv_addr: "[::]:9999".parse().unwrap(),
             ingest_srv_addr: original_config.ingest_srv_addr,
             publish_srv_addr: original_config.publish_srv_addr,
+            endpoint_srv_addr: original_config.endpoint_srv_addr,
             retention: original_config.retention,
             oplog_retention: original_config.oplog_retention,
             data_dir: original_config.data_dir.clone(),
@@ -1095,6 +1129,7 @@ drain_report_interval = "500ms"
             graphql_srv_addr: "[::]:9999".parse().unwrap(),
             ingest_srv_addr: "[::]:12345".parse().unwrap(),
             publish_srv_addr: original_config.publish_srv_addr,
+            endpoint_srv_addr: original_config.endpoint_srv_addr,
             retention: Duration::from_hours(4800), // 200 days
             oplog_retention: Duration::from_hours(30 * 24),
             data_dir: original_config.data_dir.clone(),
@@ -1164,6 +1199,7 @@ drain_report_interval = "500ms"
             graphql_srv_addr: original_config.graphql_srv_addr,
             ingest_srv_addr: "[::]:12345".parse().unwrap(),
             publish_srv_addr: original_config.publish_srv_addr,
+            endpoint_srv_addr: original_config.endpoint_srv_addr,
             retention: original_config.retention,
             oplog_retention: original_config.oplog_retention,
             data_dir: original_config.data_dir.clone(),
@@ -1271,6 +1307,7 @@ drain_report_interval = "500ms"
             graphql_srv_addr: "[::]:9999".parse().unwrap(),
             ingest_srv_addr: "[::]:12345".parse().unwrap(),
             publish_srv_addr: original_config.publish_srv_addr,
+            endpoint_srv_addr: original_config.endpoint_srv_addr,
             retention: original_config.retention,
             oplog_retention: original_config.oplog_retention,
             data_dir: original_config.data_dir.clone(),
@@ -1738,5 +1775,116 @@ drain_report_interval = "500ms"
             "Unexpected error message: {err_msg}"
         );
         assert!(err_msg.contains("peer_srv_addr"));
+    }
+
+    fn test_config_content_with_endpoint_srv_addr(endpoint_srv_addr: &str) -> String {
+        format!(
+            r#"{TEST_CONFIG_CONTENT}
+        endpoint_srv_addr = "{endpoint_srv_addr}"
+        "#
+        )
+    }
+
+    #[test]
+    fn endpoint_srv_addr_missing_key_deserializes_to_none() {
+        let (_dir, config_path) = create_config_file(TEST_CONFIG_CONTENT);
+        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        assert_eq!(settings.config.visible.endpoint_srv_addr, None);
+        assert_visible_matches_test_config(&settings.config.visible);
+    }
+
+    #[test]
+    fn endpoint_srv_addr_valid_address_deserializes_to_some() {
+        let (_dir, config_path) = create_config_file(&test_config_content_with_endpoint_srv_addr(
+            "192.0.2.1:38372",
+        ));
+        let settings = Settings::load(config_path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            settings.config.visible.endpoint_srv_addr,
+            Some("192.0.2.1:38372".parse().unwrap())
+        );
+        assert_visible_matches_test_config(&settings.config.visible);
+    }
+
+    #[test]
+    fn endpoint_srv_addr_empty_or_whitespace_fails_naming_the_key() {
+        for value in ["", "   ", "\t"] {
+            let (_dir, config_path) =
+                create_config_file(&test_config_content_with_endpoint_srv_addr(value));
+            let err = Settings::load(config_path.to_str().unwrap())
+                .expect_err("an empty endpoint_srv_addr must be refused");
+            let message = err.to_string();
+            assert!(
+                message.contains("endpoint_srv_addr"),
+                "the error must name the key, got: {message}"
+            );
+
+            // The startup path refuses it the same way.
+            let err = Settings::load_startup(
+                config_path.to_str().unwrap(),
+                RocksDbLimits::new(Some(8000)),
+            )
+            .expect_err("an empty endpoint_srv_addr must fail startup");
+            assert!(
+                format!("{err:#}").contains("endpoint_srv_addr"),
+                "the startup error must name the key, got: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_srv_addr_in_config_visible_toml_names_the_key() {
+        let (_temp_file, _data_dir, _export_dir, visible) = create_test_config(false);
+        let toml = toml::to_string(&visible).unwrap();
+        for value in ["", "   "] {
+            let with_key = format!("{toml}endpoint_srv_addr = \"{value}\"\n");
+            let err = toml::from_str::<ConfigVisible>(&with_key)
+                .expect_err("an empty endpoint_srv_addr must be refused");
+            assert!(
+                err.to_string().contains("endpoint_srv_addr"),
+                "the error must name the key, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_visible_round_trips_with_and_without_endpoint_srv_addr() {
+        let (_temp_file, _data_dir, _export_dir, visible) = create_test_config(false);
+        assert_eq!(visible.endpoint_srv_addr, None);
+        let toml = toml::to_string(&visible).unwrap();
+        assert!(
+            !toml.contains("endpoint_srv_addr"),
+            "an unset key must be omitted, got: {toml}"
+        );
+        assert_eq!(toml::from_str::<ConfigVisible>(&toml).unwrap(), visible);
+
+        let mut with_endpoint = visible.clone();
+        with_endpoint.endpoint_srv_addr = Some("[::1]:38372".parse().unwrap());
+        let toml = toml::to_string(&with_endpoint).unwrap();
+        assert!(
+            toml.contains("endpoint_srv_addr = \"[::1]:38372\""),
+            "{toml}"
+        );
+        assert_eq!(
+            toml::from_str::<ConfigVisible>(&toml).unwrap(),
+            with_endpoint
+        );
+
+        // The whole configuration file, which flattens `ConfigVisible`, keeps
+        // the key the same way.
+        let config = Config {
+            peer_srv_addr: None,
+            peers: None,
+            visible: with_endpoint.clone(),
+            compression: false,
+            web_shutdown_timeout: DEFAULT_WEB_SHUTDOWN_TIMEOUT,
+            drain_report_interval: DEFAULT_DRAIN_REPORT_INTERVAL,
+        };
+        let toml = toml::to_string(&config).unwrap();
+        assert_eq!(toml::from_str::<Config>(&toml).unwrap(), config);
+        let config = Config { visible, ..config };
+        let toml = toml::to_string(&config).unwrap();
+        assert!(!toml.contains("endpoint_srv_addr"), "{toml}");
+        assert_eq!(toml::from_str::<Config>(&toml).unwrap(), config);
     }
 }

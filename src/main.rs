@@ -16,7 +16,7 @@ use std::{io, ops::ControlFlow, process::ExitCode, sync::Arc, time::Duration};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use comm::{
-    ingest,
+    endpoint, ingest,
     peer::{self},
     publish,
 };
@@ -217,6 +217,7 @@ async fn run(args: Args, limits: RocksDbLimits) -> Result<()> {
         Arc::clone(&notify_tls_reload),
         limits,
     )?;
+    process.prepare_endpoint_tls(settings.config.visible.endpoint_srv_addr.is_some())?;
 
     #[cfg(unix)]
     {
@@ -421,6 +422,10 @@ struct ProcessContext {
     notify_terminate: Arc<Notify>,
     /// Raised by the SIGHUP handler.
     notify_tls_reload: Arc<Notify>,
+    /// The endpoint entry's TLS configuration built last, which a generation
+    /// falls back to when the chain cannot be chosen from the current
+    /// material.
+    endpoint_tls: Arc<endpoint::EndpointTls>,
 }
 
 impl ProcessContext {
@@ -456,7 +461,29 @@ impl ProcessContext {
             tls_watch,
             notify_terminate,
             notify_tls_reload,
+            endpoint_tls: Arc::default(),
         })
+    }
+
+    /// Chooses the endpoint entry's certificate chain from the TLS material
+    /// loaded at startup, when the entry is configured.
+    ///
+    /// With the entry not configured nothing is chosen, and the CA bundle is
+    /// not looked at for an intermediate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry is configured and its chain cannot be
+    /// chosen or its TLS configuration cannot be built.
+    fn prepare_endpoint_tls(&self, endpoint_configured: bool) -> Result<()> {
+        if !endpoint_configured {
+            return Ok(());
+        }
+        let material = tls_reload::get_current_tls_material(&self.tls_watch);
+        self.endpoint_tls.build(&material).context(
+            "endpoint_srv_addr is set, but the endpoint TLS configuration cannot be built",
+        )?;
+        Ok(())
     }
 }
 
@@ -472,6 +499,7 @@ enum Subsystem {
     Ingest,
     Publish,
     Peer,
+    Endpoint,
     Retention,
 }
 
@@ -481,6 +509,7 @@ impl std::fmt::Display for Subsystem {
             Self::Ingest => "ingest",
             Self::Publish => "publish",
             Self::Peer => "peer",
+            Self::Endpoint => "endpoint",
             Self::Retention => "retention",
         };
         f.write_str(name)
@@ -967,6 +996,45 @@ async fn run_generation(
             None
         };
 
+    // The endpoint entry is optional the way peer is: it runs only when an
+    // address is configured for it and a TLS configuration exists for it. The
+    // chain is chosen from the material as it is now, and the watch handed to
+    // the entry is marked as having seen that material, so the entry does not
+    // choose again until a reload publishes something new.
+    let endpoint_task_handle: Option<ObservedHandle<Result<()>>> =
+        if let Some(endpoint_srv_addr) = settings.config.visible.endpoint_srv_addr {
+            let mut tls_watch = process.tls_watch.clone();
+            let material = Arc::clone(&tls_watch.borrow_and_update());
+            match process.endpoint_tls.for_generation(&material) {
+                Some(tls_config) => {
+                    // Nothing gives the node an `entry_id` yet, so the entry
+                    // is unready and closes every connection.
+                    let (_readiness_tx, readiness) = tokio::sync::watch::channel(None);
+                    let endpoint_server = endpoint::Server::new(
+                        endpoint_srv_addr,
+                        tls_config,
+                        Arc::clone(&process.endpoint_tls),
+                        readiness,
+                    );
+                    let handle = top_level_tracker
+                        .spawn_observed("endpoint", move |token| async move {
+                            let result = endpoint_server
+                                .run(tls_watch, token, drain_report_interval)
+                                .await;
+                            if let Err(e) = &result {
+                                error!("Endpoint entry terminated unexpectedly: {e:#}");
+                            }
+                            result
+                        })
+                        .context("failed to register the endpoint entry task")?;
+                    Some(handle)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
     // Publish is tracked the way peer is, and its handle is kept for the same
     // reason: the wait below ends the generation when this task ends, and the
     // teardown reads the handle back when something else ended it first.
@@ -1054,6 +1122,7 @@ async fn run_generation(
         ingest: Some(ingest_task_handle),
         publish: Some(publish_task_handle),
         peer: peer_task_handle,
+        endpoint: endpoint_task_handle,
         retention: Some(retain_task_handle),
     };
     let generation_end = wait_for_generation_end(
@@ -1127,11 +1196,12 @@ fn close_config_update_admission(config_update_rx: &mut mpsc::Receiver<ConfigVis
     config_update_rx.close();
 }
 
-/// The four entry tasks a generation observes, each until something reads
+/// The five entry tasks a generation observes, each until something reads
 /// its handle back.
 ///
-/// A slot goes to `None` two ways: peer starts there when the subsystem is not
-/// configured, and any of the four is taken out by the arm that read it. What
+/// A slot goes to `None` two ways: peer and the endpoint entry start there
+/// when they are not running, and any of the five is taken out by the arm
+/// that read it. What
 /// is left when the wait returns is exactly what the teardown is handed, so
 /// nothing that ended is dropped unobserved and nothing already read is polled
 /// twice.
@@ -1139,6 +1209,7 @@ struct EntryTasks {
     ingest: Option<ObservedHandle<Result<()>>>,
     publish: Option<ObservedHandle<Result<()>>>,
     peer: Option<ObservedHandle<Result<()>>>,
+    endpoint: Option<ObservedHandle<Result<()>>>,
     retention: Option<ObservedHandle<Result<()>>>,
 }
 
@@ -1149,6 +1220,7 @@ impl EntryTasks {
             Subsystem::Ingest => &mut self.ingest,
             Subsystem::Publish => &mut self.publish,
             Subsystem::Peer => &mut self.peer,
+            Subsystem::Endpoint => &mut self.endpoint,
             Subsystem::Retention => &mut self.retention,
         }
     }
@@ -1160,14 +1232,20 @@ impl EntryTasks {
     /// a handle that was finished already cannot have finished because of it,
     /// and the `Ok(())` it carries is an early exit rather than a clean stop.
     fn into_retained(self) -> Vec<RetainedEntryTask> {
-        [self.ingest, self.publish, self.peer, self.retention]
-            .into_iter()
-            .flatten()
-            .map(|handle| RetainedEntryTask {
-                already_finished: handle.is_finished(),
-                handle,
-            })
-            .collect()
+        [
+            self.ingest,
+            self.publish,
+            self.peer,
+            self.endpoint,
+            self.retention,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|handle| RetainedEntryTask {
+            already_finished: handle.is_finished(),
+            handle,
+        })
+        .collect()
     }
 }
 
@@ -1488,6 +1566,9 @@ where
             outcome = watch_entry_task(entry_tasks.peer.as_mut()) => {
                 return end_on_entry_task(entry_tasks, Subsystem::Peer, &outcome);
             }
+            outcome = watch_entry_task(entry_tasks.endpoint.as_mut()) => {
+                return end_on_entry_task(entry_tasks, Subsystem::Endpoint, &outcome);
+            }
             outcome = watch_entry_task(entry_tasks.retention.as_mut()) => {
                 return end_on_entry_task(entry_tasks, Subsystem::Retention, &outcome);
             }
@@ -1639,7 +1720,7 @@ async fn observe_entry_task(retained: RetainedEntryTask) -> bool {
 /// about which pass failed or why. The cause is only here, so it is reported
 /// here as well, the way ingest, publish and peer report their own. The
 /// duplication is intended: the boundary record is what an operator greps for
-/// across the four subsystems, and this line is what says what retention was
+/// across the subsystems, and this line is what says what retention was
 /// doing.
 ///
 /// # Errors
@@ -3602,6 +3683,7 @@ mod tests {
                         graphql_srv_addr: ephemeral_addr(),
                         ingest_srv_addr: ephemeral_addr(),
                         publish_srv_addr: ephemeral_addr(),
+                        endpoint_srv_addr: None,
                         retention: ONE_DAY * 100,
                         oplog_retention: ONE_DAY * 365,
                         export_dir,
@@ -4183,11 +4265,11 @@ mod tests {
             /// only come from a tracker, and the name, id and spawn instant
             /// the boundary reports are what the tracker stamps.
             tracker: TaskTracker,
-            /// Stands in for the four entry tasks the wait watches.
+            /// Stands in for the five entry tasks the wait watches.
             ///
             /// The wait needs handles to borrow, and the tests that drive the
             /// other arms need those handles to stay pending, so the default
-            /// is four tasks that never return. A test that wants one of the
+            /// is five tasks that never return. A test that wants one of the
             /// entry-task arms replaces that slot.
             entry_tasks: EntryTasks,
             config_update_tx: mpsc::Sender<ConfigVisible>,
@@ -4253,6 +4335,7 @@ mod tests {
                         ingest: None,
                         publish: None,
                         peer: None,
+                        endpoint: None,
                         retention: None,
                     },
                 )
@@ -4307,6 +4390,7 @@ mod tests {
                 ingest: Some(parking_stand_in(&tracker, Subsystem::Ingest)),
                 publish: Some(parking_stand_in(&tracker, Subsystem::Publish)),
                 peer: Some(parking_stand_in(&tracker, Subsystem::Peer)),
+                endpoint: Some(parking_stand_in(&tracker, Subsystem::Endpoint)),
                 retention: Some(parking_stand_in(&tracker, Subsystem::Retention)),
             };
 
@@ -4446,19 +4530,20 @@ mod tests {
         }
 
         /// An entry task ending is not an intent, but it ends the wait all the
-        /// same — for each of the four, and for each class of outcome.
+        /// same — for each of the five, and for each class of outcome.
         ///
         /// Nothing is notified here: the only thing that happens is that one
         /// of the tasks the wait borrows returns. A wait that ignored it would
         /// leave the generation serving with nothing behind that subsystem's
-        /// port. The outcome class is varied across the four so the serving
-        /// phase covers all four of them.
+        /// port. The outcome class is varied across the five so the serving
+        /// phase covers all four classes.
         #[tokio::test]
         async fn an_entry_task_that_ends_ends_the_wait() {
             for (subsystem, outcome) in [
                 (Subsystem::Ingest, "early_exit"),
                 (Subsystem::Publish, "error"),
                 (Subsystem::Peer, "panic"),
+                (Subsystem::Endpoint, "error"),
                 (Subsystem::Retention, "cancelled"),
             ] {
                 let dir = tempdir().expect("tempdir");
@@ -4703,11 +4788,11 @@ mod tests {
                 "after_drain",
                 "early_exit",
             );
-            // The three that were still parked stopped because the drain
+            // The four that were still parked stopped because the drain
             // cancelled them, so they are the clean shape.
             assert_eq!(
                 records(&logs, CLEAN_RECORD).len(),
-                3,
+                4,
                 "got: {}",
                 captured(&logs)
             );
@@ -4717,12 +4802,12 @@ mod tests {
                 "a degraded terminate should fail the lifecycle"
             );
             assert_eq!(effects.calls(), vec![EffectCall::ShutdownDatabase]);
-            // Four retained handles, and the six markers still in the one
+            // Five retained handles, and the six markers still in the one
             // order every ending shares.
             assert_marker_sequence(
                 &logs,
                 &full_marker_sequence(GenerationEnd::Terminate),
-                "Terminate with four retained handles",
+                "Terminate with five retained handles",
             );
         }
 
@@ -8507,6 +8592,558 @@ mod tests {
             fn shutdown_database(&self, _database: &storage::Database) -> Result<()> {
                 *self.observed.lock().expect("lock") = Some(self.finished.load(Ordering::SeqCst));
                 Ok(())
+            }
+        }
+
+        /// The endpoint entry within a generation and across generations.
+        mod endpoint_entry {
+            use rustls::pki_types::{CertificateDer, ServerName};
+
+            use super::*;
+            use crate::{
+                server::{Certs, config_client, server_crypto_provider},
+                test_bootroot::{
+                    CaGeneration, endpoint_client_config_trusting, endpoint_connect,
+                    presented_chain, write_node_files,
+                },
+            };
+
+            const ENDPOINT_LISTENING: &str = "Endpoint entry listening on";
+            const GRAPHQL_READY: &str = "GraphQL web server is starting on";
+
+            /// An endpoint address on port 0, which the entry binds to a port
+            /// of the system's choosing; [`endpoint_listening_addrs`] reads it
+            /// back.
+            ///
+            /// A port reserved ahead and bound again by a later generation is
+            /// free in between, and another test binding port 0 can take it.
+            fn any_endpoint_addr() -> SocketAddr {
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 0))
+            }
+
+            /// Returns the addresses the endpoint entry has logged it listens
+            /// on, in order.
+            fn endpoint_listening_addrs(logs: &Arc<Mutex<Vec<u8>>>) -> Vec<SocketAddr> {
+                captured(logs)
+                    .lines()
+                    .filter_map(|line| line.split_once(ENDPOINT_LISTENING))
+                    .map(|(_, addr)| addr.trim().parse().expect("a logged listening address"))
+                    .collect()
+            }
+
+            /// A node whose certificate file holds only the leaf an
+            /// intermediate of `ca` issued, with `ca`'s bundle as its CA file.
+            fn bootroot_process(
+                dir: &Path,
+                ca: &CaGeneration,
+                notify_terminate: Arc<Notify>,
+            ) -> (ProcessContext, crate::test_bootroot::NodeCert) {
+                let cert = ca.issue_node_cert(&node_san(DEFAULT_NODE_HOSTNAME));
+                let paths = write_node_files(dir, &cert, &ca.bundle_pem());
+                (process_context_from(paths, notify_terminate), cert)
+            }
+
+            /// Connects a fake endpoint trusting only `root_pem` and returns
+            /// the chain the entry presented.
+            async fn endpoint_chain(
+                addr: SocketAddr,
+                root_pem: String,
+            ) -> Vec<CertificateDer<'static>> {
+                let stream = tokio::time::timeout(
+                    READY_TIMEOUT,
+                    endpoint_connect(
+                        addr,
+                        endpoint_client_config_trusting(&[root_pem]),
+                        &node_san(DEFAULT_NODE_HOSTNAME),
+                    ),
+                )
+                .await
+                .expect("the endpoint handshake finishes in time")
+                .expect("the endpoint completes the TLS handshake");
+                presented_chain(&stream)
+            }
+
+            /// Returns the chain a QUIC listener at `addr` presents to a client
+            /// that authenticates with `certs`.
+            async fn quic_chain(addr: SocketAddr, certs: &Certs) -> Vec<CertificateDer<'static>> {
+                let mut endpoint =
+                    quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
+                        .expect("create the QUIC client");
+                endpoint.set_default_client_config(config_client(certs).expect("client config"));
+                let conn = tokio::time::timeout(
+                    READY_TIMEOUT,
+                    endpoint
+                        .connect(addr, &node_san(DEFAULT_NODE_HOSTNAME))
+                        .expect("the QUIC client config should build"),
+                )
+                .await
+                .expect("the QUIC handshake finishes in time")
+                .expect("the QUIC listener accepts the node certificate");
+                let chain = conn
+                    .peer_identity()
+                    .and_then(|identity| identity.downcast::<Vec<CertificateDer<'static>>>().ok())
+                    .expect("the QUIC listener presented certificates");
+                conn.close(0_u32.into(), b"done");
+                endpoint.close(0_u32.into(), b"done");
+                *chain
+            }
+
+            /// Returns the chain the GraphQL listener at `addr` presents to a
+            /// client trusting `roots` and authenticating with `client`.
+            async fn graphql_chain(
+                addr: SocketAddr,
+                roots: rustls::RootCertStore,
+                client: &Certs,
+            ) -> Vec<CertificateDer<'static>> {
+                let config =
+                    rustls::ClientConfig::builder_with_provider(Arc::new(server_crypto_provider()))
+                        .with_protocol_versions(&[&rustls::version::TLS13])
+                        .expect("TLS 1.3")
+                        .with_root_certificates(roots)
+                        .with_client_auth_cert(client.certs.clone(), client.key.clone_key())
+                        .expect("client auth");
+                let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+                let tcp = tokio::net::TcpStream::connect(addr)
+                    .await
+                    .expect("connect to GraphQL");
+                let name =
+                    ServerName::try_from(node_san(DEFAULT_NODE_HOSTNAME)).expect("server name");
+                let stream = tokio::time::timeout(READY_TIMEOUT, connector.connect(name, tcp))
+                    .await
+                    .expect("the GraphQL handshake finishes in time")
+                    .expect("the GraphQL listener accepts the client");
+                stream
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .expect("GraphQL presented certificates")
+                    .iter()
+                    .map(|cert| cert.clone().into_owned())
+                    .collect()
+            }
+
+            /// Returns `endpointSrvAddr` from the `config` query.
+            async fn endpoint_srv_addr_query(
+                process: &ProcessContext,
+                addr: SocketAddr,
+            ) -> serde_json::Value {
+                let tls = tls_reload::get_current_tls_material(&process.tls_watch);
+                let client = super::super::reload_https_server_tests::build_mtls_client(
+                    &tls.cert_pem,
+                    &tls.key_pem,
+                    &tls.ca_pem,
+                );
+                let response: serde_json::Value = client
+                    .post(format!("https://{addr}/graphql"))
+                    .json(&serde_json::json!({"query": "{ config { endpointSrvAddr } }"}))
+                    .send()
+                    .await
+                    .expect("the config query reaches the generation")
+                    .json()
+                    .await
+                    .expect("the config query response decodes");
+                assert!(response.get("errors").is_none(), "{response}");
+                response["data"]["config"]["endpointSrvAddr"].clone()
+            }
+
+            async fn assert_port_closed(addr: SocketAddr) {
+                assert!(
+                    tokio::net::TcpStream::connect(addr).await.is_err(),
+                    "nothing should listen on {addr}"
+                );
+            }
+
+            #[test]
+            fn startup_chooses_the_chain_only_when_the_entry_is_configured() {
+                // A self-signed node certificate: its only issuer in the
+                // bundle is itself, which is not an intermediate.
+                let dir = tempdir().expect("tempdir");
+                let process = test_process_context(dir.path(), Arc::new(Notify::new()));
+                process
+                    .prepare_endpoint_tls(false)
+                    .expect("without the entry nothing is chosen");
+                assert!(process.endpoint_tls.last_built().is_none());
+                let error = process
+                    .prepare_endpoint_tls(true)
+                    .expect_err("with the entry configured, no match fails startup");
+                let message = format!("{error:#}");
+                assert!(message.contains("endpoint_srv_addr"), "{message}");
+                assert!(message.contains("endpoint certificate chain"), "{message}");
+                assert!(message.contains("self-signed"), "{message}");
+
+                // No issuer at all in the bundle.
+                let dir = tempdir().expect("tempdir");
+                let ca = CaGeneration::new("Issuing");
+                let other = CaGeneration::new("Other");
+                let cert = ca.issue_node_cert(&node_san(DEFAULT_NODE_HOSTNAME));
+                let paths = write_node_files(dir.path(), &cert, &other.bundle_pem());
+                let process = process_context_from(paths, Arc::new(Notify::new()));
+                let error = process
+                    .prepare_endpoint_tls(true)
+                    .expect_err("with no issuer in the bundle, startup fails");
+                assert!(format!("{error:#}").contains("endpoint certificate chain"));
+
+                let dir = tempdir().expect("tempdir");
+                let (process, _cert) = bootroot_process(dir.path(), &ca, Arc::new(Notify::new()));
+                process
+                    .prepare_endpoint_tls(true)
+                    .expect("the issuing intermediate is in the bundle");
+                assert!(process.endpoint_tls.last_built().is_some());
+            }
+
+            #[tokio::test]
+            async fn the_endpoint_port_adds_the_intermediate_and_the_module_ports_do_not() {
+                let dir = tempdir().expect("tempdir");
+                let notify_terminate = Arc::new(Notify::new());
+                let ca = CaGeneration::new("Node");
+                let (process, cert) =
+                    bootroot_process(dir.path(), &ca, Arc::clone(&notify_terminate));
+                let mut settings = test_settings(dir.path());
+                let [ingest_addr, publish_addr, peer_addr] = free_udp_addrs::<3>();
+                let graphql_addr = free_addr();
+                let endpoint_addr = free_addr();
+                settings.config.visible.ingest_srv_addr = ingest_addr;
+                settings.config.visible.publish_srv_addr = publish_addr;
+                settings.config.visible.graphql_srv_addr = graphql_addr;
+                settings.config.visible.endpoint_srv_addr = Some(endpoint_addr);
+                settings.config.peer_srv_addr = Some(peer_addr);
+                settings.config.peers = Some(HashSet::new());
+                write_config_file(&settings);
+                let certs =
+                    Arc::clone(&tls_reload::get_current_tls_material(&process.tls_watch).certs);
+
+                let (logs, _guard) = capture_logs();
+                let (end, ()) = tokio::join!(
+                    tokio::time::timeout(
+                        GENERATION_TIMEOUT,
+                        run_generation(&mut settings, &process, &HostEffects)
+                    ),
+                    async {
+                        wait_for_logs(
+                            &logs,
+                            &[READINESS_LINES.as_slice(), &[ENDPOINT_LISTENING]].concat(),
+                        )
+                        .await;
+
+                        assert_eq!(
+                            endpoint_chain(endpoint_addr, ca.root.pem()).await,
+                            vec![cert.der.clone(), ca.intermediate.der().clone()],
+                            "the endpoint port presents the leaf and its intermediate"
+                        );
+                        for addr in [ingest_addr, publish_addr, peer_addr] {
+                            assert_eq!(
+                                quic_chain(addr, &certs).await,
+                                vec![cert.der.clone()],
+                                "the QUIC port at {addr} presents the certificate file as is"
+                            );
+                        }
+                        assert_eq!(
+                            graphql_chain(graphql_addr, certs.root.clone(), &certs).await,
+                            vec![cert.der.clone()],
+                            "the GraphQL port presents the certificate file as is"
+                        );
+                        notify_terminate.notify_one();
+                    }
+                );
+                let end = end
+                    .expect("a terminate intent should end the generation")
+                    .expect("the generation should not fail");
+                assert_eq!(end, clean(GenerationEnd::Terminate));
+                assert!(captured(&logs).contains("Shutting down the endpoint entry"));
+            }
+
+            /// A rotation whose bundle lacks the new intermediate leaves the
+            /// endpoint port on the previous chain and key, through the SIGHUP
+            /// and through the generation that follows it, while the module
+            /// ports take up the new material.
+            #[tokio::test]
+            async fn a_reload_without_the_new_intermediate_keeps_the_endpoint_chain_and_key() {
+                let dir = tempdir().expect("tempdir");
+                let notify_terminate = Arc::new(Notify::new());
+                let old = CaGeneration::new("Old");
+                let (process, old_cert) =
+                    bootroot_process(dir.path(), &old, Arc::clone(&notify_terminate));
+                let old_certs =
+                    Arc::clone(&tls_reload::get_current_tls_material(&process.tls_watch).certs);
+                let mut settings = test_settings(dir.path());
+                let graphql_addr = free_addr();
+                settings.config.visible.graphql_srv_addr = graphql_addr;
+                settings.config.visible.endpoint_srv_addr = Some(any_endpoint_addr());
+                let old_chain = vec![old_cert.der.clone(), old.intermediate.der().clone()];
+
+                let new = CaGeneration::new("New");
+                let new_cert = new.issue_node_cert(&node_san(DEFAULT_NODE_HOSTNAME));
+                // The client of the GraphQL port verifies the new leaf, which
+                // nothing in the node's bundle chains up to.
+                let mut new_roots = rustls::RootCertStore::empty();
+                new_roots
+                    .add(new.intermediate.der().clone())
+                    .expect("trust the new intermediate");
+
+                let (logs, _guard) = capture_logs();
+                let (end, ()) = tokio::join!(
+                    tokio::time::timeout(
+                        GENERATION_TIMEOUT,
+                        run_generation(&mut settings, &process, &HostEffects)
+                    ),
+                    async {
+                        wait_for_logs(
+                            &logs,
+                            &[ENDPOINT_LISTENING, "GraphQL web server is starting on"],
+                        )
+                        .await;
+                        let endpoint_addr = *endpoint_listening_addrs(&logs)
+                            .first()
+                            .expect("the first generation's endpoint address");
+                        // The new leaf and key, and a bundle with the new root
+                        // but not the new intermediate.
+                        write_node_files(
+                            dir.path(),
+                            &new_cert,
+                            &format!("{}{}", old.bundle_pem(), new.root.pem()),
+                        );
+                        process.notify_tls_reload.notify_one();
+                        wait_for_logs(
+                            &logs,
+                            &[
+                                "TLS material reloaded successfully",
+                                "keeping the previous TLS configuration",
+                                "Ingest listener: server config reloaded",
+                                "HTTPS reload: new GraphQL server started",
+                            ],
+                        )
+                        .await;
+
+                        assert_eq!(
+                            endpoint_chain(endpoint_addr, old.root.pem()).await,
+                            old_chain
+                        );
+                        assert_eq!(
+                            graphql_chain(graphql_addr, new_roots.clone(), &old_certs).await,
+                            vec![new_cert.der.clone()],
+                            "the GraphQL port took up the new certificate"
+                        );
+                        notify_terminate.notify_one();
+                    }
+                );
+                assert_eq!(
+                    end.expect("the first generation ends")
+                        .expect("the first generation succeeds"),
+                    clean(GenerationEnd::Terminate)
+                );
+
+                // The next generation chooses again, fails again, and serves
+                // the configuration built last, key included.
+                let (end, ()) = tokio::join!(
+                    tokio::time::timeout(
+                        GENERATION_TIMEOUT,
+                        run_generation(&mut settings, &process, &HostEffects)
+                    ),
+                    async {
+                        wait_for_occurrences(&logs, ENDPOINT_LISTENING, 2).await;
+                        assert!(
+                            captured(&logs).contains("serving the TLS configuration built last"),
+                            "{}",
+                            captured(&logs)
+                        );
+                        let endpoint_addr = *endpoint_listening_addrs(&logs)
+                            .get(1)
+                            .expect("the second generation's endpoint address");
+                        assert_eq!(
+                            endpoint_chain(endpoint_addr, old.root.pem()).await,
+                            old_chain
+                        );
+                        notify_terminate.notify_one();
+                    }
+                );
+                assert_eq!(
+                    end.expect("the second generation ends")
+                        .expect("the second generation succeeds"),
+                    clean(GenerationEnd::Terminate)
+                );
+            }
+
+            #[tokio::test]
+            async fn an_update_config_opens_moves_and_closes_the_endpoint_port() {
+                let dir = tempdir().expect("tempdir");
+                let notify_terminate = Arc::new(Notify::new());
+                let ca = CaGeneration::new("Node");
+                let (process, cert) =
+                    bootroot_process(dir.path(), &ca, Arc::clone(&notify_terminate));
+                let mut settings = test_settings(dir.path());
+                let graphql_addr = free_addr();
+                settings.config.visible.graphql_srv_addr = graphql_addr;
+                write_config_file(&settings);
+                let expected_chain = vec![cert.der.clone(), ca.intermediate.der().clone()];
+
+                let (logs, _guard) = capture_logs();
+                let (outcome, ()) = tokio::join!(
+                    tokio::time::timeout(
+                        GENERATION_TIMEOUT.saturating_mul(2),
+                        run_lifecycle(&mut settings, &process, &HostEffects)
+                    ),
+                    async {
+                        wait_for_occurrences(&logs, GRAPHQL_READY, 1).await;
+                        let mut current = test_settings(dir.path()).config.visible;
+                        current.graphql_srv_addr = graphql_addr;
+                        assert_eq!(
+                            endpoint_srv_addr_query(&process, graphql_addr).await,
+                            serde_json::Value::Null
+                        );
+
+                        // Added: the port opens. It is bound to a port of the
+                        // system's choosing, and the second address is reserved
+                        // only just before the update that binds it, so neither
+                        // is left free across a generation restart.
+                        let mut updated = current.clone();
+                        updated.endpoint_srv_addr = Some(any_endpoint_addr());
+                        send_config_change(&process, graphql_addr, &current, &updated).await;
+                        wait_for_occurrences(&logs, GRAPHQL_READY, 2).await;
+                        wait_for_occurrences(&logs, ENDPOINT_LISTENING, 1).await;
+                        let first_addr = *endpoint_listening_addrs(&logs)
+                            .first()
+                            .expect("the endpoint address after the key was added");
+                        assert_eq!(
+                            endpoint_srv_addr_query(&process, graphql_addr).await,
+                            serde_json::Value::String(any_endpoint_addr().to_string())
+                        );
+                        assert_eq!(
+                            endpoint_chain(first_addr, ca.root.pem()).await,
+                            expected_chain
+                        );
+
+                        // Changed: the port moves.
+                        let current = updated;
+                        let mut updated = current.clone();
+                        let second_addr = free_addr();
+                        updated.endpoint_srv_addr = Some(second_addr);
+                        send_config_change(&process, graphql_addr, &current, &updated).await;
+                        wait_for_occurrences(&logs, GRAPHQL_READY, 3).await;
+                        wait_for_logs(&logs, &[&format!("{ENDPOINT_LISTENING} {second_addr}")])
+                            .await;
+                        assert_eq!(
+                            endpoint_chain(second_addr, ca.root.pem()).await,
+                            expected_chain
+                        );
+                        assert_port_closed(first_addr).await;
+
+                        // Removed: the port closes.
+                        let current = updated;
+                        let mut updated = current.clone();
+                        updated.endpoint_srv_addr = None;
+                        send_config_change(&process, graphql_addr, &current, &updated).await;
+                        wait_for_occurrences(&logs, GRAPHQL_READY, 4).await;
+                        wait_for_occurrences(&logs, "Ingest listening on", 4).await;
+                        assert_eq!(
+                            endpoint_srv_addr_query(&process, graphql_addr).await,
+                            serde_json::Value::Null
+                        );
+                        assert_port_closed(second_addr).await;
+                        notify_terminate.notify_one();
+                    }
+                );
+                outcome
+                    .expect("the lifecycle should end on the terminate intent")
+                    .expect("the lifecycle should not fail");
+                assert_eq!(
+                    occurrences(&logs, ENDPOINT_LISTENING),
+                    2,
+                    "only the two generations with the key open the port, got: {}",
+                    captured(&logs)
+                );
+                assert_eq!(settings.config.visible.endpoint_srv_addr, None);
+            }
+
+            /// An endpoint address that cannot be bound ends the generation,
+            /// as peer's does.
+            #[tokio::test]
+            async fn an_endpoint_listener_that_cannot_bind_ends_the_generation() {
+                let dir = tempdir().expect("tempdir");
+                let ca = CaGeneration::new("Node");
+                let (process, _cert) = bootroot_process(dir.path(), &ca, Arc::new(Notify::new()));
+                let mut settings = test_settings(dir.path());
+                let occupied = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                    .expect("occupy the endpoint port");
+                settings.config.visible.endpoint_srv_addr =
+                    Some(occupied.local_addr().expect("occupied addr"));
+
+                let (logs, _guard) = capture_logs();
+                let end = tokio::time::timeout(
+                    GENERATION_TIMEOUT,
+                    run_generation(&mut settings, &process, &HostEffects),
+                )
+                .await
+                .expect("a failed endpoint listener should end the generation on its own")
+                .expect("an entry task that ended is not a failure of the generation itself");
+                assert_eq!(
+                    end,
+                    clean(GenerationEnd::EntryTaskExited(Subsystem::Endpoint))
+                );
+                let output = captured(&logs);
+                assert!(
+                    output.contains("failed to bind the endpoint listener"),
+                    "the bind failure itself should be reported, got: {output}"
+                );
+                let report = abnormal_report(&logs);
+                assert!(
+                    report.contains("name=\"endpoint\"") && report.contains("phase=\"serving\""),
+                    "the boundary should name the task it observed, got: {report}"
+                );
+            }
+
+            /// The key added by a configuration update to a node with no
+            /// issuing intermediate: the endpoint port stays closed for the
+            /// generation, and a later SIGHUP does not open it, while
+            /// everything else serves.
+            #[tokio::test]
+            async fn a_restart_with_no_endpoint_configuration_leaves_the_port_closed() {
+                let dir = tempdir().expect("tempdir");
+                let mut fixture = config_update_fixture(dir.path());
+                let notify_terminate = Arc::clone(&fixture.notify_terminate);
+                let graphql_addr = fixture.graphql_addr;
+                let current = fixture.settings.config.visible.clone();
+                let process = fixture.process;
+                let endpoint_addr = free_addr();
+
+                let (logs, _guard) = capture_logs();
+                let (outcome, ()) = tokio::join!(
+                    tokio::time::timeout(
+                        GENERATION_TIMEOUT,
+                        run_lifecycle(&mut fixture.settings, &process, &HostEffects)
+                    ),
+                    async {
+                        wait_for_logs(&logs, &READINESS_LINES).await;
+                        let mut updated = current.clone();
+                        updated.endpoint_srv_addr = Some(endpoint_addr);
+                        send_config_change(&process, graphql_addr, &current, &updated).await;
+                        for line in READINESS_LINES {
+                            wait_for_occurrences(&logs, line, 2).await;
+                        }
+                        wait_for_logs(
+                            &logs,
+                            &["the endpoint port stays closed for this generation"],
+                        )
+                        .await;
+                        assert_port_closed(endpoint_addr).await;
+
+                        // A SIGHUP that loads material the chain could now be
+                        // chosen from does not open it either.
+                        let ca = CaGeneration::new("Later");
+                        write_node_files(
+                            dir.path(),
+                            &ca.issue_node_cert(&node_san(DEFAULT_NODE_HOSTNAME)),
+                            &ca.bundle_pem(),
+                        );
+                        process.notify_tls_reload.notify_one();
+                        wait_for_logs(&logs, &["HTTPS reload: new GraphQL server started"]).await;
+                        assert_port_closed(endpoint_addr).await;
+                        notify_terminate.notify_one();
+                    }
+                );
+                outcome
+                    .expect("the lifecycle should end on the terminate intent")
+                    .expect("the lifecycle should not fail");
+                assert!(!captured(&logs).contains(ENDPOINT_LISTENING));
             }
         }
     }

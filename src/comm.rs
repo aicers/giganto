@@ -1,3 +1,4 @@
+pub(crate) mod endpoint;
 pub(crate) mod ingest;
 pub(crate) mod peer;
 pub(crate) mod publish;

@@ -140,6 +140,11 @@ type Config {
 	ingestSrvAddr: String!
 	publishSrvAddr: String!
 	graphqlSrvAddr: String!
+	"""
+	The address of the endpoint entry, or `null` when it is not
+	configured and the entry is not opened.
+	"""
+	endpointSrvAddr: String
 	retention: String!
 	oplogRetention: String!
 	dataDir: String!
