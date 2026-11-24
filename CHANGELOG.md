@@ -4,6 +4,22 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.0](https://github.com/aicers/giganto/compare/0.36.0...0.37.0) - 2026-11-24
+
+### Added
+
+- [**breaking**] expose Dhcp and Kerberos identification fields ([#2041](https://github.com/aicers/giganto/pull/2041))
+- *(publish)* [**breaking**] send a replay-end frame on the time-series generator stream ([#2040](https://github.com/aicers/giganto/pull/2040))
+- read and delete per-IP time series by policy ID, with snapshot reads ([#2030](https://github.com/aicers/giganto/pull/2030))
+
+### Fixed
+
+- accept 0.37 in the protocol and data version ranges ([#2045](https://github.com/aicers/giganto/pull/2045))
+
+### Other
+
+- *(deps)* update Cargo.lock before the 0.37.0 release ([#2043](https://github.com/aicers/giganto/pull/2043))
+
 ## [0.36.0](https://github.com/aicers/giganto/compare/0.35.2...0.36.0) - 2026-11-22
 
 ### Changed
