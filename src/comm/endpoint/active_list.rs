@@ -521,7 +521,8 @@ pub(super) struct Admission {
     /// it was revealed at.
     pub(super) duplicate_key: Option<(Timestamp, DuplicateKey)>,
     /// The endpoint id of the list entry an admitted connection's key
-    /// matched: the source of everything it sends.
+    /// matched: the source of everything it sends. It is present exactly
+    /// when `verdict` admits the connection.
     pub(super) endpoint_id: Option<Uuid>,
 }
 
@@ -587,22 +588,20 @@ impl PendingConnection {
             inner.close(replaced, CloseCommand::Silent, &mut closed);
         }
         let ConnectionStanding { standing, identity } = inner.list.standing(&self.spki_sha256, now);
-        let mut verdict =
-            allowed(&standing, ConnectionKind::Telemetry, Hello::T).to_standing_verdict();
-        let mut endpoint_id = None;
-        if standing == Standing::Active {
-            if let Some(identity) = identity {
-                endpoint_id = Some(identity.endpoint_id);
-                inner.connections.insert(self.id, Arc::clone(&self.closing));
-            } else {
-                // An active standing always comes from a matched entry.
-                error!(
-                    "Endpoint connection from {}: active without a matched entry; closing",
-                    self.address
-                );
-                verdict = StandingVerdict::Close;
-                inner.list.remove(self.id);
-            }
+        // Only an active standing matched to a list entry is admitted: the
+        // entry's endpoint id is the source of everything the connection
+        // sends, and an active standing always comes from one.
+        let endpoint_id = identity
+            .filter(|_| standing == Standing::Active)
+            .map(|identity| identity.endpoint_id);
+        let verdict =
+            match allowed(&standing, ConnectionKind::Telemetry, Hello::T).to_standing_verdict() {
+                StandingVerdict::Accept if endpoint_id.is_none() => StandingVerdict::Close,
+                verdict => verdict,
+            };
+        let endpoint_id = endpoint_id.filter(|_| verdict == StandingVerdict::Accept);
+        if endpoint_id.is_some() {
+            inner.connections.insert(self.id, Arc::clone(&self.closing));
         } else {
             debug!(
                 "Endpoint connection from {}: standing {standing:?}",
@@ -1522,6 +1521,46 @@ pub(super) mod tests {
         );
         assert_eq!(fixture.db.endpoint_entry_id().unwrap(), Some(ENTRY_ID));
         assert_eq!(fixture.flows.entry_id(), Some(ENTRY_ID));
+    }
+
+    #[tokio::test]
+    async fn an_update_whose_call_panics_is_refused_and_changes_nothing() {
+        let fixture = Fixture::new();
+        fixture
+            .apply(
+                &full(1, vec![entry(1, spki(1), EntryState::Active)]),
+                ENTRY_ID,
+            )
+            .await
+            .expect("a full list applies");
+        fixture.flows.controls().panic_next_lock();
+        let refusal = fixture
+            .apply(&full(2, Vec::new()), OTHER_ENTRY_ID)
+            .await
+            .expect_err("the call panicked");
+        assert!(
+            matches!(&refusal.failure, ApplyFailure::Store(e) if e.to_string().contains("interrupted")),
+            "{:?}",
+            refusal.failure
+        );
+        assert_eq!(refusal.version, Some(1));
+        assert_eq!(
+            fixture.list.state(),
+            ListState {
+                entry_id: Some(ENTRY_ID),
+                ready: true,
+                version: Some(1),
+            }
+        );
+        assert_eq!(fixture.db.endpoint_entry_id().unwrap(), Some(ENTRY_ID));
+        assert_eq!(fixture.flows.entry_id(), Some(ENTRY_ID));
+
+        // The next update takes the lock again.
+        fixture
+            .apply(&full(2, Vec::new()), OTHER_ENTRY_ID)
+            .await
+            .expect("the update applies");
+        assert_eq!(fixture.flows.entry_id(), Some(OTHER_ENTRY_ID));
     }
 
     #[tokio::test]

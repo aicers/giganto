@@ -44,7 +44,7 @@ use senta_protocol::{
     },
     connection::{
         ConnectionKind, Envelope, Frame, IDLE_TIMEOUT, ServerAction, ServerChannel, ServerConfig,
-        ServerConnection, StandingVerdict,
+        ServerConnection,
     },
     telemetry::{
         ReceiverConnection, ReceiverOutput, TELEMETRY_MESSAGE_KINDS, TelemetryDecodeError,
@@ -518,13 +518,8 @@ fn server_config(
             if let Some((at, duplicate_key)) = admission.duplicate_key {
                 store_duplicate_key(&database, at, duplicate_key);
             }
-            if admission.verdict == StandingVerdict::Accept {
-                match admission.endpoint_id {
-                    Some(endpoint_id) => {
-                        let _ = admitted.set(endpoint_id);
-                    }
-                    None => return StandingVerdict::Close,
-                }
+            if let Some(endpoint_id) = admission.endpoint_id {
+                let _ = admitted.set(endpoint_id);
             }
             admission.verdict
         })
@@ -583,9 +578,7 @@ impl Session {
         let (receiver, handled) = match handled {
             Ok(handled) => handled,
             Err(e) => {
-                error!(
-                    "Endpoint connection from {remote}: handling a telemetry message failed: {e}"
-                );
+                error!("Endpoint connection from {remote}: handling a message failed: {e}");
                 return Next::Close;
             }
         };

@@ -434,6 +434,42 @@ async fn an_oversize_batch_is_too_large_and_a_malformed_body_closes() {
 }
 
 #[tokio::test]
+async fn a_call_that_panics_closes_its_connection_without_a_word() {
+    let node = Node::new();
+    let material = node.material(&node.cert, &node.ca.bundle_pem());
+    let running = Running::start(material, Some(ENTRY_ID)).await;
+    let sensor = ENDPOINT_ID.to_string();
+    let record = process_create(ENDPOINT_ID, STREAM, 1, BASE, "a.exe");
+    let mut endpoint = Telemetry::connect(&running, &node, ENTRY_ID).await;
+    endpoint.open_stream(STREAM).await;
+
+    // The connection task runs on this test's thread, so its log is caught.
+    let (logs, guard) = crate::test_bootroot::capture_logs();
+    running.flows.controls().panic_next_lock();
+    endpoint.send_batch(STREAM, vec![record.clone()]).await;
+    assert!(
+        endpoint.until_closed().await.is_empty(),
+        "closed without a word"
+    );
+    drop(guard);
+    assert!(
+        logs.contents().contains("handling a message failed"),
+        "{}",
+        logs.contents()
+    );
+    assert_eq!(stored_seqs(&running.db, &sensor, STREAM), [0_u64; 0]);
+
+    // The streams are read again, and the resend is stored.
+    let mut endpoint = Telemetry::connect(&running, &node, ENTRY_ID).await;
+    assert_eq!(endpoint.open_stream(STREAM).await.a, 0);
+    endpoint.send_batch(STREAM, vec![record]).await;
+    assert_eq!(endpoint.next().await, ack(STREAM, 1));
+    assert_eq!(stored_seqs(&running.db, &sensor, STREAM), [1]);
+    drop(endpoint);
+    running.stop().await;
+}
+
+#[tokio::test]
 async fn the_stream_rules_hold_over_a_connection() {
     let node = Node::new();
     let material = node.material(&node.cert, &node.ca.bundle_pem());

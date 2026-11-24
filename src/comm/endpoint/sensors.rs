@@ -93,3 +93,77 @@ impl EndpointSensors {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        comm::{new_ingest_sensors, new_runtime_ingest_sensors},
+        storage::{DbOptions, SENSORS_CF},
+    };
+
+    const SENSOR: &str = "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0";
+
+    fn sensors(db: &Database) -> EndpointSensors {
+        EndpointSensors::new(
+            db.clone(),
+            new_ingest_sensors(db),
+            new_runtime_ingest_sensors(),
+            None,
+        )
+    }
+
+    fn sensors_row(db: &Database) -> Option<Vec<u8>> {
+        db.get_cf_for_test(SENSORS_CF, SENSOR.as_bytes())
+            .expect("read the sensors row")
+    }
+
+    #[tokio::test]
+    async fn a_sensor_leaves_the_runtime_set_with_its_last_connection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open the database");
+        let sensors = sensors(&db);
+
+        // A connection that never added the sensor removes nothing.
+        sensors.remove(SENSOR).await;
+        assert_eq!(sensors_row(&db), None);
+
+        sensors.add(SENSOR, DateTime::now()).await;
+        sensors.add(SENSOR, DateTime::now()).await;
+        sensors.remove(SENSOR).await;
+        assert!(
+            sensors
+                .runtime_ingest_sensors
+                .read()
+                .await
+                .contains_key(SENSOR),
+            "another connection is live"
+        );
+        assert_eq!(sensors_row(&db), None);
+
+        sensors.remove(SENSOR).await;
+        assert!(
+            !sensors
+                .runtime_ingest_sensors
+                .read()
+                .await
+                .contains_key(SENSOR)
+        );
+        assert!(sensors_row(&db).is_some(), "written at the last close");
+        assert!(sensors.ingest_sensors.read().await.contains(SENSOR));
+    }
+
+    #[tokio::test]
+    async fn a_sensor_gone_from_the_runtime_set_is_not_written_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open the database");
+        let sensors = sensors(&db);
+        sensors.add(SENSOR, DateTime::now()).await;
+        // As customer data deletion takes it out.
+        sensors.runtime_ingest_sensors.write().await.remove(SENSOR);
+
+        sensors.remove(SENSOR).await;
+        assert_eq!(sensors_row(&db), None);
+        assert!(sensors.live.lock().await.is_empty());
+    }
+}

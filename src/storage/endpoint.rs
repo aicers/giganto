@@ -697,6 +697,24 @@ mod tests {
     }
 
     #[test]
+    fn a_stream_key_of_another_length_is_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let entry_id = Uuid::from_u128(0x1234);
+        let mut key = entry_id.as_bytes().to_vec();
+        key.extend_from_slice(&[0; 16]);
+        db.put_cf_for_test(ENDPOINT_STREAMS_CF, &key, b"state")
+            .expect("raw write");
+        let error = db
+            .endpoint_streams(entry_id)
+            .expect_err("a 32-byte stream key");
+        assert!(
+            error.to_string().contains("32 bytes long"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn duplicate_keys_in_one_nanosecond_take_successive_sequence_numbers() {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Database::open(dir.path(), &DbOptions::default()).expect("open");

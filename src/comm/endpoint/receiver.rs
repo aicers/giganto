@@ -14,7 +14,7 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use jiff::Timestamp;
 use senta_protocol::telemetry::{
     LastStored, ReceiverChange, ReceiverConnection, ReceiverEntryState, ReceiverFlowKey,
@@ -28,10 +28,7 @@ use uuid::Uuid;
 use super::convert;
 use crate::storage::{
     Database,
-    endpoint::{
-        EndpointBatch, EndpointChange, EndpointRecordRow, EndpointWriteError, LossReason,
-        StoredStream,
-    },
+    endpoint::{EndpointBatch, EndpointChange, EndpointRecordRow, LossReason, StoredStream},
 };
 
 /// The telemetry streams of the generation's entry: the `ReceiverStream`
@@ -117,6 +114,8 @@ impl EndpointFlows {
             self.stream.clear_poison();
             stream
         });
+        #[cfg(test)]
+        self.controls.check_panic();
         let mut guard = FlowsGuard {
             flows: self,
             stream,
@@ -130,23 +129,23 @@ impl EndpointFlows {
     /// Builds the stream of the `entry_id` stored, or returns `None`, with
     /// the reason logged, when none is stored or it cannot be read.
     fn restore(&self) -> Option<ReceiverStream<EndpointStore>> {
-        let entry_id = match self.database.endpoint_entry_id() {
-            Ok(entry_id) => entry_id?,
+        match self.read_stream() {
+            Ok(stream) => stream,
             Err(e) => {
-                error!("Endpoint entry: {e:#}; no telemetry stream is served");
-                return None;
-            }
-        };
-        match ReceiverStream::restore(entry_id, self.store()) {
-            Ok(stream) => Some(stream),
-            Err(e) => {
-                error!(
-                    "Endpoint entry: cannot read the stream state of entry_id {entry_id}: {e:#}; \
-                     no telemetry stream is served until it can be"
-                );
+                error!("Endpoint entry: {e:#}; no telemetry stream is served until it can be read");
                 None
             }
         }
+    }
+
+    /// Builds the stream of the `entry_id` stored, if one is.
+    fn read_stream(&self) -> Result<Option<ReceiverStream<EndpointStore>>> {
+        let Some(entry_id) = self.database.endpoint_entry_id()? else {
+            return Ok(None);
+        };
+        ReceiverStream::restore(entry_id, self.store())
+            .map(Some)
+            .with_context(|| format!("cannot read the stream state of entry_id {entry_id}"))
     }
 
     /// Returns a store over the generation's database.
@@ -174,10 +173,8 @@ impl EndpointFlows {
             return Handled::Stopped;
         }
         let Some(stream) = guard.stream.as_mut() else {
-            warn!(
-                "Endpoint {}: no telemetry stream is served; closing the connection",
-                connection.endpoint_id()
-            );
+            let endpoint_id = connection.endpoint_id();
+            warn!("Endpoint {endpoint_id}: no telemetry stream is served; closing the connection");
             return Handled::Done {
                 output: ReceiverOutput::Disconnect,
                 stored_at: None,
@@ -206,12 +203,11 @@ impl EndpointFlows {
         let Some(stream) = guard.stream.as_mut() else {
             return;
         };
-        match stream.prune(now) {
-            Ok(forgotten) if forgotten.is_empty() => {}
-            Ok(forgotten) => info!(
-                "Endpoint entry: forgot {} telemetry stream(s) closed 30 days ago or more",
-                forgotten.len()
-            ),
+        match stream.prune(now).map(|forgotten| forgotten.len()) {
+            Ok(0) => {}
+            Ok(count) => {
+                info!("Endpoint entry: forgot {count} stream(s) closed 30 days ago or more");
+            }
             Err(e) => error!("Endpoint entry: closed telemetry streams were not forgotten: {e:#}"),
         }
     }
@@ -356,32 +352,13 @@ impl EndpointStore {
                     }
                     match record_row(&record) {
                         Ok(row) => EndpointChange::Record(row),
-                        Err(reason) => {
-                            warn!(
-                                "Endpoint {}, stream {}: record {} is not stored: {reason}",
-                                record.endpoint_id, record.stream, record.seq
-                            );
-                            EndpointChange::Loss {
-                                endpoint_id: record.endpoint_id,
-                                stream: record.stream,
-                                from: record.seq,
-                                to: record.seq,
-                                reason: LossReason::ConversionFailure,
-                                detail: reason,
-                            }
-                        }
+                        Err(reason) => conversion_loss(&record, reason),
                     }
                 }
             };
             batch.changes.push(change);
         }
-        let stored = self
-            .database
-            .write_endpoint_batch(batch)
-            .map_err(|e| match e {
-                EndpointWriteError::Storage(e) => e,
-                e => anyhow!(e),
-            })?;
+        let stored = self.database.write_endpoint_batch(batch)?;
         if stored > 0 {
             self.stored_at.set(Some(received));
         }
@@ -397,6 +374,21 @@ fn change_subject(change: &ReceiverChange) -> (Uuid, Uuid) {
         }
         ReceiverChange::AppendRecord(record) => (record.endpoint_id, record.stream),
         ReceiverChange::AppendLoss(loss) => (loss.endpoint_id, loss.stream),
+    }
+}
+
+/// Returns the loss that records `record`, which cannot be stored for
+/// `reason`, in its place; the failure is logged.
+fn conversion_loss(record: &ReceiverRecord, reason: String) -> EndpointChange {
+    let (endpoint_id, stream, seq) = (record.endpoint_id, record.stream, record.seq);
+    warn!("Endpoint {endpoint_id}, stream {stream}: record {seq} is not stored: {reason}");
+    EndpointChange::Loss {
+        endpoint_id,
+        stream,
+        from: seq,
+        to: seq,
+        reason: LossReason::ConversionFailure,
+        detail: reason,
     }
 }
 
@@ -439,11 +431,9 @@ fn stored_stream(state: ReceiverFlowState) -> Result<StoredStream> {
 fn flow_state(stored: StoredStream) -> Result<ReceiverFlowState> {
     let closed_at = stored
         .closed_at_ns
-        .map(|ns| {
-            Timestamp::from_nanosecond(i128::from(ns))
-                .with_context(|| format!("a stream closed at {ns} ns is out of range"))
-        })
-        .transpose()?;
+        .map(|ns| Timestamp::from_nanosecond(i128::from(ns)))
+        .transpose()
+        .context("a stream's closed time is out of range")?;
     Ok(ReceiverFlowState {
         a: stored.a,
         last_stored: stored

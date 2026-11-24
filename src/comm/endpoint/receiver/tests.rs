@@ -1,5 +1,6 @@
-//! What tests control in the receiver: failed writes, a batch write held
-//! until released, and how many calls wait for the lock.
+//! What tests control in the receiver: failed writes, a panic under the
+//! lock, a batch write held until released, and how many calls wait for
+//! the lock.
 
 mod scenes;
 
@@ -16,6 +17,7 @@ use tokio::sync::watch;
 #[derive(Default)]
 pub(crate) struct Controls {
     fail: AtomicBool,
+    panic: AtomicBool,
     gate: Mutex<Option<Arc<Gate>>>,
     waiting: AtomicUsize,
     writes: AtomicU64,
@@ -52,6 +54,19 @@ impl Controls {
             bail!("injected write failure");
         }
         Ok(())
+    }
+
+    /// Makes the next call that takes the lock panic while holding it, as a
+    /// call failing midway would.
+    pub(crate) fn panic_next_lock(&self) {
+        self.panic.store(true, Ordering::SeqCst);
+    }
+
+    pub(super) fn check_panic(&self) {
+        assert!(
+            !self.panic.swap(false, Ordering::SeqCst),
+            "injected panic under the lock"
+        );
     }
 
     /// Holds the next batch write that carries a record, before anything of
@@ -151,13 +166,16 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::{Delivered, EndpointFlows, Handled, convert};
-use crate::storage::{
-    Database, DbOptions, SENSORS_CF, StorageKey,
-    endpoint::{
-        ENDPOINT_LAST_RECEIVED_CF, ENDPOINT_LOSSES_CF, ENDPOINT_STREAMS_CF, LossReason,
-        StoredStream, endpoint_loss_key, endpoint_stream_key,
+use super::{Delivered, EndpointFlows, Handled, convert, flow_state, nanos, record_row};
+use crate::{
+    storage::{
+        Database, DbOptions, SENSORS_CF, StorageKey,
+        endpoint::{
+            ENDPOINT_ENTRY_CF, ENDPOINT_LAST_RECEIVED_CF, ENDPOINT_LOSSES_CF, ENDPOINT_STREAMS_CF,
+            LossReason, StoredStream, endpoint_loss_key, endpoint_stream_key,
+        },
     },
+    test_bootroot::capture_logs,
 };
 
 /// A stream's state as the tuple its value is the bincode 1 of: `A`,
@@ -618,9 +636,19 @@ fn a_failed_write_leaves_neither_records_nor_state() {
     node.open_stream(&mut conn, STREAM);
     let first = process_create(ENDPOINT, STREAM, 1, BASE, "a.exe");
     node.flows.controls().fail_writes(true);
+    let (logs, guard) = capture_logs();
     assert_eq!(
         node.send(&mut conn, batch(STREAM, vec![first.clone()])),
         ReceiverOutput::Disconnect
+    );
+    drop(guard);
+    assert!(
+        logs.contents().contains(&format!(
+            "ERROR giganto::comm::endpoint::receiver: Endpoint {ENDPOINT}, stream {STREAM}: \
+             the batch was not written"
+        )),
+        "{}",
+        logs.contents()
     );
     assert!(node.records().is_empty(), "nothing is stored");
     assert_eq!(node.state(STREAM).map(|state| state.a), Some(0));
@@ -801,9 +829,19 @@ fn an_unconvertible_record_is_a_loss_and_the_rest_is_stored() {
         process_create(ENDPOINT, STREAM, 3, BASE + 2, "c.exe"),
     ];
     let third_hash = record_hash(&records[2]);
+    let (logs, guard) = capture_logs();
     assert_eq!(
         node.send(&mut conn, batch(STREAM, records)),
         reply(vec![ack(STREAM, 3)])
+    );
+    drop(guard);
+    assert!(
+        logs.contents().contains(&format!(
+            "WARN giganto::comm::endpoint::receiver: Endpoint {ENDPOINT}, stream {STREAM}: \
+             record 2 is not stored: "
+        )),
+        "{}",
+        logs.contents()
     );
     assert_eq!(stored_seqs(&node.db, &ENDPOINT.to_string(), STREAM), [1, 3]);
     let losses = node.losses();
@@ -1055,7 +1093,31 @@ fn prune_forgets_streams_closed_thirty_days_ago_and_keeps_their_records() {
         .expect("closed");
     assert!(first < second);
 
+    // The closed times are read back by the next generation.
+    let node = node.reopen();
+    let (logs, guard) = capture_logs();
+    node.flows.controls().fail_writes(true);
     node.flows.prune(ts(first) + RECEIVER_CLOSED_RETENTION);
+    assert!(
+        node.state(STREAM).is_some(),
+        "a failed prune forgets nothing"
+    );
+    assert!(
+        logs.contents()
+            .contains("closed telemetry streams were not forgotten"),
+        "{}",
+        logs.contents()
+    );
+    node.flows.controls().fail_writes(false);
+
+    node.flows.prune(ts(first) + RECEIVER_CLOSED_RETENTION);
+    drop(guard);
+    assert!(
+        logs.contents()
+            .contains("forgot 1 stream(s) closed 30 days ago or more"),
+        "{}",
+        logs.contents()
+    );
     assert_eq!(node.state(STREAM), None, "closed 30 days ago: forgotten");
     assert!(
         node.state(OTHER_STREAM).is_some(),
@@ -1137,11 +1199,13 @@ fn without_an_entry_id_no_stream_is_held_until_one_is_stored() {
     let flows = EndpointFlows::new(db.clone());
     assert_eq!(flows.entry_id(), None);
     let mut conn = ReceiverConnection::new(ENDPOINT, convert::accepted_kinds());
+    let (logs, guard) = capture_logs();
     let handled = flows.handle(
         &CancellationToken::new(),
         &mut conn,
         Delivered::Message(TelemetryMessage::OpenStream(OpenStream { stream: STREAM })),
     );
+    drop(guard);
     assert!(matches!(
         handled,
         Handled::Done {
@@ -1149,6 +1213,13 @@ fn without_an_entry_id_no_stream_is_held_until_one_is_stored() {
             ..
         }
     ));
+    assert!(
+        logs.contents().contains(&format!(
+            "Endpoint {ENDPOINT}: no telemetry stream is served; closing the connection"
+        )),
+        "{}",
+        logs.contents()
+    );
     flows
         .lock()
         .change_entry_id(ENTRY, None)
@@ -1173,7 +1244,15 @@ fn a_stream_state_that_cannot_be_read_is_read_again_at_the_next_call() {
         .unwrap();
 
     let flows = EndpointFlows::new(node.db.clone());
+    let (logs, guard) = capture_logs();
     assert_eq!(flows.entry_id(), None, "the state does not decode");
+    drop(guard);
+    assert!(
+        logs.contents()
+            .contains(&format!("cannot read the stream state of entry_id {ENTRY}")),
+        "{}",
+        logs.contents()
+    );
     let mut conn = node.connection();
     let handled = flows.handle(
         &CancellationToken::new(),
@@ -1192,6 +1271,103 @@ fn a_stream_state_that_cannot_be_read_is_read_again_at_the_next_call() {
         .put_cf_for_test(ENDPOINT_STREAMS_CF, &key, &good)
         .unwrap();
     assert_eq!(flows.entry_id(), Some(ENTRY), "read again once it can be");
+}
+
+#[test]
+fn an_entry_id_that_cannot_be_read_serves_no_stream() {
+    let node = Node::new();
+    node.db
+        .put_cf_for_test(ENDPOINT_ENTRY_CF, b"entry_id", b"short")
+        .unwrap();
+    let flows = EndpointFlows::new(node.db.clone());
+    let (logs, guard) = capture_logs();
+    assert_eq!(flows.entry_id(), None);
+    drop(guard);
+    assert!(
+        logs.contents().contains("no telemetry stream is served"),
+        "{}",
+        logs.contents()
+    );
+}
+
+#[test]
+fn a_call_that_panicked_under_the_lock_reads_the_streams_again() {
+    let node = Node::new();
+    let mut conn = node.connection();
+    node.open_stream(&mut conn, STREAM);
+    node.flows.controls().panic_next_lock();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        node.flows.load();
+    }));
+    assert!(panicked.is_err(), "the injected panic");
+
+    let (logs, guard) = capture_logs();
+    assert_eq!(node.flows.entry_id(), Some(ENTRY));
+    drop(guard);
+    assert!(
+        logs.contents().contains("reading them again"),
+        "{}",
+        logs.contents()
+    );
+    // The panic closed the connection; the endpoint opens the stream again.
+    let mut conn = node.connection();
+    assert_eq!(node.open_stream(&mut conn, STREAM).a, 0);
+    assert_eq!(
+        node.send(
+            &mut conn,
+            batch(
+                STREAM,
+                vec![process_create(ENDPOINT, STREAM, 1, BASE, "a.exe")]
+            ),
+        ),
+        reply(vec![ack(STREAM, 1)])
+    );
+}
+
+#[test]
+fn an_empty_change_set_that_fails_is_logged_without_a_stream() {
+    use senta_protocol::telemetry::ReceiverStore;
+
+    let node = Node::new();
+    let mut store = node.flows.store();
+    node.flows.controls().fail_writes(true);
+    let (logs, guard) = capture_logs();
+    assert!(store.write(ENTRY, Vec::new()).is_err());
+    drop(guard);
+    assert!(
+        logs.contents()
+            .contains("Endpoint entry: an empty batch was not written"),
+        "{}",
+        logs.contents()
+    );
+}
+
+#[test]
+fn a_record_that_does_not_decode_is_not_a_row() {
+    let record = senta_protocol::telemetry::ReceiverRecord {
+        endpoint_id: ENDPOINT,
+        stream: STREAM,
+        seq: 1,
+        bytes: vec![0xff; 4],
+    };
+    let reason = record_row(&record).expect_err("the bytes are not a record");
+    assert!(
+        reason.starts_with("the record does not decode: "),
+        "{reason}"
+    );
+}
+
+#[test]
+fn times_outside_i64_nanoseconds_are_errors() {
+    assert!(nanos(Timestamp::MAX).is_err());
+    assert_eq!(nanos(ts(BASE)).unwrap(), BASE);
+    let state = flow_state(StoredStream {
+        a: 3,
+        last_stored: None,
+        closed_at_ns: Some(BASE),
+    })
+    .unwrap();
+    assert_eq!(state.closed_at, Some(ts(BASE)));
 }
 
 #[test]

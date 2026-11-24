@@ -2002,3 +2002,45 @@ fn every_kind_is_stored_in_the_column_family_its_store_reads() {
         );
     }
 }
+
+/// Decodes `bytes` as the bincode 1 of the struct `like` holds.
+fn decode_like(like: &EndpointEvent, bytes: &[u8]) -> EndpointEvent {
+    fn de<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Box<T> {
+        Box::new(bincode::deserialize(bytes).expect("the bincode 1 of the kind's struct"))
+    }
+    match like {
+        EndpointEvent::ProcessCreate(_) => EndpointEvent::ProcessCreate(de(bytes)),
+        EndpointEvent::FileCreateTime(_) => EndpointEvent::FileCreateTime(de(bytes)),
+        EndpointEvent::NetworkConnect(_) => EndpointEvent::NetworkConnect(de(bytes)),
+        EndpointEvent::ProcessTerminate(_) => EndpointEvent::ProcessTerminate(de(bytes)),
+        EndpointEvent::DriverLoad(_) => EndpointEvent::DriverLoad(de(bytes)),
+        EndpointEvent::ImageLoad(_) => EndpointEvent::ImageLoad(de(bytes)),
+        EndpointEvent::CreateRemoteThread(_) => EndpointEvent::CreateRemoteThread(de(bytes)),
+        EndpointEvent::RawAccessRead(_) => EndpointEvent::RawAccessRead(de(bytes)),
+        EndpointEvent::ProcessAccess(_) => EndpointEvent::ProcessAccess(de(bytes)),
+        EndpointEvent::FileCreate(_) => EndpointEvent::FileCreate(de(bytes)),
+        EndpointEvent::RegistryObjectAddDel(_) => EndpointEvent::RegistryObjectAddDel(de(bytes)),
+        EndpointEvent::RegistryValueSet(_) => EndpointEvent::RegistryValueSet(de(bytes)),
+        EndpointEvent::RegistryKeyRename(_) => EndpointEvent::RegistryKeyRename(de(bytes)),
+        EndpointEvent::FileCreateStreamHash(_) => EndpointEvent::FileCreateStreamHash(de(bytes)),
+        EndpointEvent::PipeEvent(_) => EndpointEvent::PipeEvent(de(bytes)),
+        EndpointEvent::DnsQuery(_) => EndpointEvent::DnsQuery(de(bytes)),
+        EndpointEvent::FileDelete(_) => EndpointEvent::FileDelete(de(bytes)),
+        EndpointEvent::ProcessTamper(_) => EndpointEvent::ProcessTamper(de(bytes)),
+        EndpointEvent::FileDeleteDetected(_) => EndpointEvent::FileDeleteDetected(de(bytes)),
+        EndpointEvent::WindowsEventLog(_) => EndpointEvent::WindowsEventLog(de(bytes)),
+        EndpointEvent::Journald(_) => EndpointEvent::Journald(de(bytes)),
+        EndpointEvent::Auditd(_) => EndpointEvent::Auditd(de(bytes)),
+    }
+}
+
+#[test]
+fn every_kind_is_stored_as_the_bincode_of_its_struct() {
+    for kind in ACCEPTED_KINDS {
+        let event = empty_event(kind);
+        let bytes = event
+            .to_bincode()
+            .unwrap_or_else(|e| panic!("kind {kind}: {e}"));
+        assert_eq!(decode_like(&event, &bytes), event, "kind {kind}");
+    }
+}
