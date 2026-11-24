@@ -7,14 +7,17 @@
 //! liveness; this module feeds it bytes and times and carries out what it
 //! asks for.
 //!
-//! The node accepts telemetry only once it has an `entry_id`. Until then it is
-//! [`Standing::Unready`], and every connection is closed without anything sent
-//! back. Nothing in this release gives the node an `entry_id`, so in
-//! production every connection is closed that way.
+//! Which endpoints the entry takes telemetry from is the node's active list,
+//! [`EndpointList`], which REview pushes over GraphQL and keeps alive with a
+//! lease. Until the node has a full list and an `entry_id` it is
+//! [`Standing::Unready`], and every connection is closed at its `hello`
+//! without anything sent back. A connection is judged once, at its first
+//! `hello`; later changes reach it only by the list closing it.
 //!
 //! Once ready, the entry announces in its `hello_ack` the record kinds it
 //! accepts: exactly those [`convert`] turns into Giganto structs.
 
+mod active_list;
 mod convert;
 
 use std::{
@@ -29,27 +32,29 @@ use jiff::Timestamp;
 use senta_protocol::{
     auth::{
         active_list::{Standing, allowed},
-        tls::{TELEMETRY_ALPN, alpn_matches},
+        tls::{TELEMETRY_ALPN, alpn_matches, peer_spki_hash},
     },
     connection::{
-        ConnectionKind, IDLE_TIMEOUT, ServerAction, ServerChannel, ServerConfig, ServerConnection,
+        ConnectionKind, Frame, IDLE_TIMEOUT, ServerAction, ServerChannel, ServerConfig,
+        ServerConnection, StandingVerdict,
     },
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     select,
-    sync::watch,
     time::Instant,
 };
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
+pub(crate) use self::active_list::{ApplyFailure, ApplyRefusal, EndpointList, ListAck, ListState};
+use self::active_list::{CloseCommand, PendingConnection, store_duplicate_key};
 use crate::{
     cancellation::{TaskTracker, drain_with_report},
     server::endpoint_server_config,
+    storage::Database,
     tls_reload::{TlsMaterial, TlsWatch},
 };
 
@@ -64,12 +69,6 @@ const READ_BUFFER_SIZE: usize = 16 * 1024;
 /// before the connection is dropped without them, as it is to a peer that has
 /// stopped reading.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The `entry_id` the node holds, or `None` until it has one.
-///
-/// The entry reads it as each connection starts. Nothing in this release
-/// sends a value into it.
-pub(crate) type EntryReadiness = watch::Receiver<Option<Uuid>>;
 
 /// The endpoint entry's TLS configuration last built successfully in this
 /// process.
@@ -139,12 +138,20 @@ impl EndpointTls {
     }
 }
 
+/// What every connection of the entry shares: the node's active list and the
+/// generation's database, where duplicate keys are recorded.
+#[derive(Clone)]
+struct Entry {
+    list: Arc<EndpointList>,
+    database: Database,
+}
+
 /// The endpoint entry before its listener is bound.
 pub(crate) struct Server {
     address: SocketAddr,
     tls_config: Arc<rustls::ServerConfig>,
     endpoint_tls: Arc<EndpointTls>,
-    readiness: EntryReadiness,
+    entry: Entry,
 }
 
 /// The endpoint entry with its listener bound.
@@ -153,23 +160,25 @@ pub(crate) struct BoundServer {
     local_addr: SocketAddr,
     tls_config: Arc<rustls::ServerConfig>,
     endpoint_tls: Arc<EndpointTls>,
-    readiness: EntryReadiness,
+    entry: Entry,
 }
 
 impl Server {
     /// Creates the entry at `address`, serving `tls_config` until a TLS
-    /// reload replaces it through `endpoint_tls`.
+    /// reload replaces it through `endpoint_tls`, and admitting connections
+    /// by `list`.
     pub(crate) fn new(
         address: SocketAddr,
         tls_config: Arc<rustls::ServerConfig>,
         endpoint_tls: Arc<EndpointTls>,
-        readiness: EntryReadiness,
+        list: Arc<EndpointList>,
+        database: Database,
     ) -> Self {
         Self {
             address,
             tls_config,
             endpoint_tls,
-            readiness,
+            entry: Entry { list, database },
         }
     }
 
@@ -186,7 +195,7 @@ impl Server {
             local_addr,
             tls_config: self.tls_config,
             endpoint_tls: self.endpoint_tls,
-            readiness: self.readiness,
+            entry: self.entry,
         })
     }
 
@@ -217,7 +226,7 @@ impl BoundServer {
     }
 
     /// Serves the bound listener until `token` is cancelled, then drains every
-    /// connection task it started.
+    /// connection task it started, and the lease timer.
     ///
     /// Each connection runs in its own task, the TLS handshake included, so a
     /// slow or stalled handshake holds up no other connection. When
@@ -240,11 +249,21 @@ impl BoundServer {
             local_addr,
             tls_config,
             endpoint_tls,
-            readiness,
+            entry,
         } = self;
         info!("Endpoint entry listening on {local_addr}");
 
         let tracker = TaskTracker::with_token(token.clone());
+        // The lease timer runs while the entry does: without the entry there
+        // is no connection for an expiry to close.
+        let list = Arc::clone(&entry.list);
+        let timer = tracker.spawn("endpoint-lease-timer", move |token| {
+            list.run_lease_timer(token)
+        });
+        // The tracker's drain waits for the timer, so its handle is not kept.
+        if let Err(e) = timer {
+            warn!("Endpoint entry: the lease timer was not started: {e}");
+        }
         let mut acceptor = TlsAcceptor::from(tls_config);
         // A `TlsWatch` whose sender is gone reports the closure on every poll,
         // which would spin this loop, so the reload arm is switched off for
@@ -290,10 +309,10 @@ impl BoundServer {
                         }
                     };
                     let acceptor = acceptor.clone();
-                    let entry_id = *readiness.borrow();
+                    let entry = entry.clone();
                     let spawned = tracker.spawn(
                         format!("endpoint-conn-{remote}"),
-                        move |token| handle_connection(stream, remote, acceptor, entry_id, token),
+                        move |token| handle_connection(stream, remote, acceptor, entry, token),
                     );
                     // A connection task reports its own outcome, so the handle
                     // is not kept. Admission closes only once shutdown has
@@ -317,12 +336,12 @@ impl BoundServer {
 
 /// Runs one endpoint connection: the TLS handshake, bounded by
 /// [`IDLE_TIMEOUT`], the ALPN check, then the protocol until either side
-/// closes or `token` is cancelled.
+/// closes, the active list closes it, or `token` is cancelled.
 async fn handle_connection(
     stream: TcpStream,
     remote: SocketAddr,
     acceptor: TlsAcceptor,
-    entry_id: Option<Uuid>,
+    entry: Entry,
     token: CancellationToken,
 ) {
     // A handshake not finished within the bound is dropped: the same bound
@@ -349,44 +368,101 @@ async fn handle_connection(
         close(&mut tls, &token).await;
         return;
     }
+    let spki_sha256 = match peer_spki_hash(tls.get_ref().1) {
+        Ok(hash) => hash,
+        Err(e) => {
+            warn!("Endpoint connection from {remote}: no endpoint key: {e}; closing");
+            close(&mut tls, &token).await;
+            return;
+        }
+    };
 
-    serve(&mut tls, remote, entry_id, &token).await;
+    run_admitted_by_list(&mut tls, remote, spki_sha256, entry, &token).await;
     close(&mut tls, &token).await;
 }
 
-/// Builds the connection's protocol configuration from the node's readiness.
+/// Runs the protocol on a connection whose TLS handshake has completed, from
+/// the key whose SPKI hash is `spki_sha256`, under the active list, until
+/// either side closes it, the list closes it, or `token` is cancelled.
 ///
-/// While the node has no `entry_id` its standing is [`Standing::Unready`],
-/// which closes the connection on its first message, before any `hello_ack`
-/// could carry the nil `entry_id` put here. Once it has one, every endpoint
-/// is [`Standing::Active`]: no list narrows that down yet. The entry accepts
-/// the kinds of [`convert::ACCEPTED_KINDS`], each at schema version 1.
-fn server_config(entry_id: Option<Uuid>) -> ServerConfig {
-    let standing = if entry_id.is_some() {
-        Standing::Active
-    } else {
-        Standing::Unready
-    };
+/// A connection the list closes is told why, when its new standing calls for
+/// it, after the rest of any frame being written when the list closed it.
+async fn run_admitted_by_list<S: AsyncRead + AsyncWrite + Unpin>(
+    tls: &mut S,
+    remote: SocketAddr,
+    spki_sha256: [u8; 32],
+    entry: Entry,
+    token: &CancellationToken,
+) {
+    // The active list stops the connection through its own token; shutdown
+    // reaches it through the parent.
+    let stop = token.child_token();
+    let pending = entry
+        .list
+        .open_connection(spki_sha256, remote.ip(), stop.clone());
+    let registration = pending.registration();
+    let ended = serve(tls, remote, server_config(pending, entry.database), &stop).await;
+    let command = registration.command();
+    // The connection has stopped processing messages: it leaves the list,
+    // and an update waiting for it may answer.
+    drop(registration);
+    if let Ended::Stopped { unsent } = ended {
+        let error = match &command {
+            Some(CloseCommand::Error(frame)) => Some(frame),
+            Some(CloseCommand::Silent) | None => None,
+        };
+        send_closing_frames(tls, &unsent, error, remote, token).await;
+    }
+}
+
+/// Builds a connection's protocol configuration.
+///
+/// Its `hello_ack` carries the `entry_id` stored when the connection was
+/// built. The first `hello` is judged by the active list, which admits the
+/// connection or refuses it as its standing calls for; every later message of
+/// an admitted connection is taken as from [`Standing::Active`]. The entry
+/// accepts the kinds of [`convert::ACCEPTED_KINDS`], each at schema version 1.
+fn server_config(pending: PendingConnection, database: Database) -> ServerConfig {
     let channel = ServerChannel::Telemetry {
-        entry_id: entry_id.unwrap_or_else(Uuid::nil),
+        entry_id: pending.hello_ack_entry_id(),
         accepted_kinds: convert::accepted_kinds(),
     };
-    let receive_limit = standing.receive_limit();
-    ServerConfig::new(channel, receive_limit).with_standing(move |t| {
-        allowed(&standing, ConnectionKind::Telemetry, t).to_standing_verdict()
+    let mut admitted = false;
+    ServerConfig::new(channel, Standing::Unready.receive_limit()).with_standing(move |t| {
+        if admitted {
+            return allowed(&Standing::Active, ConnectionKind::Telemetry, t).to_standing_verdict();
+        }
+        let admission = pending.admit();
+        if let Some((at, duplicate_key)) = admission.duplicate_key {
+            store_duplicate_key(&database, at, duplicate_key);
+        }
+        admitted = admission.verdict == StandingVerdict::Accept;
+        admission.verdict
     })
 }
 
-/// Runs the protocol on an established TLS stream until the connection
-/// closes or `token` is cancelled.
+/// How [`serve`] ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Ended {
+    /// `token` was cancelled. `unsent` is the rest of a frame whose writing
+    /// the cancellation interrupted, empty when it came between frames;
+    /// written first, it leaves the stream on a frame boundary, where a
+    /// closing frame can follow.
+    Stopped { unsent: Vec<u8> },
+    /// The connection ended any other way.
+    Closed,
+}
+
+/// Runs the protocol on an established TLS stream, configured by `config`,
+/// until the connection closes or `token` is cancelled.
 async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     tls: &mut S,
     remote: SocketAddr,
-    entry_id: Option<Uuid>,
+    config: ServerConfig,
     token: &CancellationToken,
-) {
+) -> Ended {
     let origin = Instant::now();
-    let mut connection = ServerConnection::new(server_config(entry_id), Duration::ZERO);
+    let mut connection = ServerConnection::new(config, Duration::ZERO);
     let mut buf = vec![0_u8; READ_BUFFER_SIZE];
 
     while let Some(deadline) = connection.next_deadline() {
@@ -394,40 +470,47 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
         // consumed nothing, the TLS layer keeping what it decrypted.
         let mut actions: VecDeque<ServerAction> = select! {
             biased;
-            () = token.cancelled() => return,
+            () = token.cancelled() => return Ended::Stopped { unsent: Vec::new() },
             () = tokio::time::sleep_until(origin + deadline) => {
                 connection.poll(Timestamp::now(), origin.elapsed()).into_iter().collect()
             }
             read = tls.read(&mut buf) => match read {
                 Ok(0) => {
                     debug!("Endpoint connection from {remote} closed by the peer");
-                    return;
+                    return Ended::Closed;
                 }
                 // A read never reports more bytes than the buffer holds.
-                Ok(n) => connection
-                    .receive(buf.get(..n).unwrap_or_default(), Timestamp::now(), origin.elapsed())
-                    .into(),
+                Ok(n) => receive(
+                    &mut connection,
+                    buf.get(..n).unwrap_or_default(),
+                    origin.elapsed(),
+                ),
                 Err(e) => {
                     debug!("Endpoint connection from {remote} failed to read: {e}");
-                    return;
+                    return Ended::Closed;
                 }
             },
         };
         while let Some(action) = actions.pop_front() {
             match action {
-                ServerAction::Handshake(handshake) => info!(
-                    "Endpoint connection from {remote} established, protocol version {}, \
-                     endpoint crate version {}",
-                    handshake.version, handshake.hello.crate_version
-                ),
+                // `receive` has already raised the receive limit.
+                ServerAction::Handshake(handshake) => {
+                    info!(
+                        "Endpoint connection from {remote} established, protocol version {}, \
+                         endpoint crate version {}",
+                        handshake.version, handshake.hello.crate_version
+                    );
+                }
                 ServerAction::Send(frame) => {
                     let mut liveness = Liveness {
                         connection: &mut connection,
                         origin,
                         due: &mut actions,
                     };
-                    if !send(tls, frame.as_bytes(), &mut liveness, remote, token).await {
-                        return;
+                    match send(tls, frame.as_bytes(), &mut liveness, remote, token).await {
+                        Sent::Written => {}
+                        Sent::Stopped { unsent } => return Ended::Stopped { unsent },
+                        Sent::Failed => return Ended::Closed,
                     }
                 }
                 ServerAction::SendThenClose { frame, reason } => {
@@ -438,12 +521,18 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                         origin,
                         due: &mut due,
                     };
-                    send(tls, frame.as_bytes(), &mut liveness, remote, token).await;
-                    return;
+                    // A connection the list admitted, refused afterwards (a
+                    // `hello` with no common version), is registered while
+                    // this frame goes out, so a list change can stop it
+                    // midway; the rest then goes out before the error.
+                    return match send(tls, frame.as_bytes(), &mut liveness, remote, token).await {
+                        Sent::Stopped { unsent } => Ended::Stopped { unsent },
+                        Sent::Written | Sent::Failed => Ended::Closed,
+                    };
                 }
                 ServerAction::Close(reason) => {
                     debug!("Endpoint connection from {remote} closed: {reason}");
-                    return;
+                    return Ended::Closed;
                 }
                 ServerAction::Unsupported(unsupported) => debug!(
                     "Endpoint connection from {remote} refused {:?}",
@@ -458,10 +547,81 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                         "Endpoint connection from {remote} delivered unhandled {:?}: {reason:?}",
                         envelope.t()
                     );
-                    return;
+                    return Ended::Closed;
                 }
             }
         }
+    }
+    Ended::Closed
+}
+
+/// Hands `bytes`, just read, to `connection` and returns what to do about
+/// them.
+///
+/// The connection takes frames of the size an active endpoint may send from
+/// the moment its `hello` is admitted. [`ServerConnection::receive`] decodes
+/// every frame the bytes complete before it returns, so until the handshake
+/// the bytes go in one at a time: it then stops at the last byte of the
+/// admitting `hello`, and the limit is raised before the length prefix of
+/// the frame after it is read, however the endpoint's writes were split
+/// into reads. The first frame is the `hello` or the connection closes, and
+/// before admission it is no larger than
+/// [`SERVER_OTHER_RECEIVE_LIMIT`](senta_protocol::connection::SERVER_OTHER_RECEIVE_LIMIT),
+/// so this takes at most that many calls, and four more for its length.
+fn receive(
+    connection: &mut ServerConnection,
+    bytes: &[u8],
+    now: Duration,
+) -> VecDeque<ServerAction> {
+    let mut actions = VecDeque::new();
+    let mut rest = bytes;
+    if !connection.is_established() {
+        while !connection.is_established() && !connection.is_closed() {
+            let Some((byte, tail)) = rest.split_first() else {
+                return actions;
+            };
+            actions.extend(connection.receive(std::slice::from_ref(byte), Timestamp::now(), now));
+            rest = tail;
+        }
+        if connection.is_established() {
+            connection.set_receive_limit(Standing::Active.receive_limit());
+        }
+    }
+    if !rest.is_empty() {
+        actions.extend(connection.receive(rest, Timestamp::now(), now));
+    }
+    actions
+}
+
+/// Writes what a connection the active list stopped has left to write: the
+/// rest of the frame the stop interrupted, then the error it is told why
+/// with, if any. Gives up when `token` is cancelled or [`CLOSE_TIMEOUT`]
+/// passes, as it does when the peer has stopped reading.
+async fn send_closing_frames<S: AsyncWrite + Unpin>(
+    tls: &mut S,
+    unsent: &[u8],
+    error: Option<&Frame>,
+    remote: SocketAddr,
+    token: &CancellationToken,
+) {
+    let write = async {
+        tls.write_all(unsent).await?;
+        if let Some(frame) = error {
+            tls.write_all(frame.as_bytes()).await?;
+        }
+        tls.flush().await
+    };
+    select! {
+        biased;
+        () = token.cancelled() => {}
+        written = tokio::time::timeout(CLOSE_TIMEOUT, write) => match written {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => debug!("Endpoint connection from {remote}: closing frame not sent: {e}"),
+            Err(_) => debug!(
+                "Endpoint connection from {remote}: closing frame not written within \
+                 {CLOSE_TIMEOUT:?}"
+            ),
+        },
     }
 }
 
@@ -474,8 +634,20 @@ struct Liveness<'a> {
     due: &'a mut VecDeque<ServerAction>,
 }
 
+/// How [`send`] ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Sent {
+    /// Every byte was written and flushed.
+    Written,
+    /// `token` was cancelled. `unsent` holds the bytes the stream had not
+    /// taken yet; the ones it took may still await a flush.
+    Stopped { unsent: Vec<u8> },
+    /// The write failed, or liveness or the bound after closing gave it up.
+    Failed,
+}
+
 /// Writes `bytes` to `tls`, or gives up when liveness closes the connection
-/// or `token` is cancelled. Returns whether every byte was written.
+/// or `token` is cancelled.
 ///
 /// A peer that stops reading leaves the write pending, and nothing is read
 /// meanwhile. Liveness keeps running over it, so the write is bounded by the
@@ -492,12 +664,8 @@ async fn send<S: AsyncWrite + Unpin>(
     liveness: &mut Liveness<'_>,
     remote: SocketAddr,
     token: &CancellationToken,
-) -> bool {
-    let write = async {
-        tls.write_all(bytes).await?;
-        tls.flush().await
-    };
-    tokio::pin!(write);
+) -> Sent {
+    let mut rest = bytes;
     let mut closing_until = None;
     loop {
         let deadline = liveness.connection.next_deadline();
@@ -505,30 +673,45 @@ async fn send<S: AsyncWrite + Unpin>(
             Some(deadline) => liveness.origin + deadline,
             None => *closing_until.get_or_insert_with(|| Instant::now() + CLOSE_TIMEOUT),
         };
-        // `write_all` is not cancel safe, but the branches that cancel it,
-        // shutdown, a liveness close and the bound on a closed connection,
-        // close the connection anyway. The write is pinned outside the loop,
-        // so a liveness `ping` does not cancel it.
+        // Each step, a `write` or the final `flush`, is cancel safe: a
+        // `write` that loses the race has taken no byte, so `rest` is
+        // exactly what is left, and a `flush` resumes where it stopped. A
+        // liveness `ping` therefore loses nothing, and a stop by the active
+        // list hands the rest over to be finished before the closing frame.
+        let step = async {
+            if rest.is_empty() {
+                tls.flush().await.map(|()| 0)
+            } else {
+                tls.write(rest).await
+            }
+        };
         select! {
             biased;
-            () = token.cancelled() => return false,
-            written = &mut write => {
-                return written
-                    .inspect_err(|e| debug!("Endpoint connection from {remote}: send failed: {e}"))
-                    .is_ok();
-            }
+            () = token.cancelled() => return Sent::Stopped { unsent: rest.to_vec() },
+            written = step => match written {
+                Ok(0) if rest.is_empty() => return Sent::Written,
+                Ok(0) => {
+                    debug!("Endpoint connection from {remote}: send failed: the stream took no bytes");
+                    return Sent::Failed;
+                }
+                Ok(n) => rest = rest.get(n..).unwrap_or_default(),
+                Err(e) => {
+                    debug!("Endpoint connection from {remote}: send failed: {e}");
+                    return Sent::Failed;
+                }
+            },
             () = tokio::time::sleep_until(wake) => {
                 if deadline.is_none() {
                     debug!(
                         "Endpoint connection from {remote}: the frames left after closing were \
                          not written within {CLOSE_TIMEOUT:?}"
                     );
-                    return false;
+                    return Sent::Failed;
                 }
                 match liveness.connection.poll(Timestamp::now(), liveness.origin.elapsed()) {
                     Some(ServerAction::Close(reason)) => {
                         debug!("Endpoint connection from {remote} closed: {reason}");
-                        return false;
+                        return Sent::Failed;
                     }
                     action => liveness.due.extend(action),
                 }
@@ -557,29 +740,39 @@ mod tests {
     };
 
     use senta_protocol::{
-        auth::tls::CONTROL_ALPN,
+        auth::{
+            active_list::{DEFAULT_LEASE_LENGTH, EntryState, ListUpdate},
+            tls::CONTROL_ALPN,
+        },
         connection::{
             AcceptedKind, ENDPOINT_RECEIVE_LIMIT, EndpointAction, EndpointChannel, EndpointConfig,
             EndpointConnection, Envelope, Frame, FrameDecoder, Hello, HelloAck, Message,
             PING_INTERVAL, PROTOCOL_VERSION, Ping, Pong, SERVER_ACTIVE_RECEIVE_LIMIT,
-            TelemetryEntry, Unsupported, VersionRange,
+            SERVER_OTHER_RECEIVE_LIMIT, TelemetryEntry, Unsupported, VersionRange,
         },
+        telemetry::ErrorMessage,
+        telemetry_codes::TelemetryError,
     };
     use tempfile::TempDir;
-    use tokio::{io::ReadBuf, task::JoinHandle};
+    use tokio::{io::ReadBuf, sync::watch, task::JoinHandle};
+    use uuid::Uuid;
 
     use super::*;
     use crate::{
+        comm::endpoint::active_list::tests::{
+            ENTRY_ID, diff, encode, entry, error_of, full, suspended,
+        },
+        storage::DbOptions,
         test_bootroot::{
-            CaGeneration, NodeCert, capture_logs, endpoint_client_config_over,
-            endpoint_client_config_trusting, endpoint_connect, init_crypto, presented_chain,
-            wait_for_log, write_node_files, x25519_only_provider,
+            CaGeneration, ENDPOINT_SEED, NodeCert, capture_logs, endpoint_client_config_for,
+            endpoint_client_config_over, endpoint_client_config_trusting, endpoint_connect,
+            endpoint_spki, init_crypto, presented_chain, wait_for_log, write_node_files,
+            x25519_only_provider,
         },
         tls_reload::{load_tls_material, test_tls_watch},
     };
 
     const NODE: &str = "001.giganto.node1.example.test";
-    const ENTRY_ID: Uuid = Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
     const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
     type EndpointStream = tokio_rustls::client::TlsStream<TcpStream>;
@@ -616,21 +809,50 @@ mod tests {
         token: CancellationToken,
         handle: JoinHandle<Result<()>>,
         tls_tx: Option<watch::Sender<Arc<TlsMaterial>>>,
+        list: Arc<EndpointList>,
+        db: Database,
+        _db_dir: TempDir,
     }
 
     impl Running {
+        /// Starts an entry whose node is ready with `entry_id` when one is
+        /// given: a full list listing the fake endpoint's key as active is
+        /// applied with it.
         async fn start(material: Arc<TlsMaterial>, entry_id: Option<Uuid>) -> Self {
+            let running = Self::start_with_lease(material, DEFAULT_LEASE_LENGTH).await;
+            if let Some(entry_id) = entry_id {
+                running
+                    .apply(
+                        &full(
+                            1,
+                            vec![entry(1, endpoint_spki(&ENDPOINT_SEED), EntryState::Active)],
+                        ),
+                        entry_id,
+                    )
+                    .await
+                    .expect("the full list applies");
+            }
+            running
+        }
+
+        /// Starts an unready entry whose lease is `lease` long.
+        async fn start_with_lease(material: Arc<TlsMaterial>, lease: Duration) -> Self {
             let endpoint_tls = Arc::new(EndpointTls::default());
             let tls_config = endpoint_tls
                 .build(&material)
                 .expect("the endpoint TLS configuration is built");
             let (tls_tx, tls_watch) = test_tls_watch(material);
-            let (_readiness_tx, readiness) = watch::channel(entry_id);
+            let db_dir = tempfile::tempdir().expect("tempdir");
+            let db =
+                Database::open(db_dir.path(), &DbOptions::default()).expect("open the database");
+            let list = Arc::new(EndpointList::new(lease));
+            list.load_entry_id(&db);
             let server = Server::new(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
                 tls_config,
                 endpoint_tls,
-                readiness,
+                Arc::clone(&list),
+                db.clone(),
             )
             .bind()
             .await
@@ -643,7 +865,33 @@ mod tests {
                 token,
                 handle,
                 tls_tx: Some(tls_tx),
+                list,
+                db,
+                _db_dir: db_dir,
             }
+        }
+
+        /// Waits until the entry has built `count` connections in all: in
+        /// TLS 1.3 the client finishes its handshake before the server does.
+        async fn wait_opened(&self, count: u64) {
+            tokio::time::timeout(IO_TIMEOUT, async {
+                while self.list.connections_opened() < count {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .expect("the entry builds the connection in time");
+        }
+
+        /// Applies `update` with `entry_id`, as REview does.
+        async fn apply(
+            &self,
+            update: &ListUpdate,
+            entry_id: Uuid,
+        ) -> Result<ListAck, ApplyRefusal> {
+            self.list
+                .apply(&encode(update), &entry_id.to_string(), &self.db)
+                .await
         }
 
         /// Publishes `material` as reloaded TLS material.
@@ -656,11 +904,16 @@ mod tests {
         }
 
         async fn connect(&self, root_pem: String) -> EndpointStream {
+            self.connect_with_key(root_pem, &ENDPOINT_SEED).await
+        }
+
+        /// Connects a fake endpoint holding the key `seed`.
+        async fn connect_with_key(&self, root_pem: String, seed: &[u8; 32]) -> EndpointStream {
             tokio::time::timeout(
                 IO_TIMEOUT,
                 endpoint_connect(
                     self.addr,
-                    endpoint_client_config_trusting(&[root_pem]),
+                    endpoint_client_config_for(&[root_pem], seed),
                     NODE,
                 ),
             )
@@ -855,7 +1108,15 @@ mod tests {
     /// Completes the protocol handshake on `stream` and returns what the
     /// entry announced.
     async fn handshake(stream: &mut EndpointStream) -> (EndpointConnection, TelemetryEntry) {
-        let (mut endpoint, hello) = hello(ENTRY_ID);
+        handshake_expecting(stream, ENTRY_ID).await
+    }
+
+    /// The same, from an endpoint that expects `expected_entry_id`.
+    async fn handshake_expecting(
+        stream: &mut EndpointStream,
+        expected_entry_id: Uuid,
+    ) -> (EndpointConnection, TelemetryEntry) {
+        let (mut endpoint, hello) = hello(expected_entry_id);
         send(stream, &hello).await;
         let mut buf = vec![0_u8; READ_BUFFER_SIZE];
         loop {
@@ -1387,14 +1648,14 @@ mod tests {
         let remote = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
 
         let started = Instant::now();
+        let channel = ServerChannel::Telemetry {
+            entry_id: ENTRY_ID,
+            accepted_kinds: Vec::new(),
+        };
+        let config = ServerConfig::new(channel, Standing::Active.receive_limit());
         let served = tokio::time::timeout(
             IDLE_TIMEOUT,
-            serve(
-                &mut stream,
-                remote,
-                Some(ENTRY_ID),
-                &CancellationToken::new(),
-            ),
+            serve(&mut stream, remote, config, &CancellationToken::new()),
         )
         .await;
         assert!(
@@ -1420,5 +1681,569 @@ mod tests {
             "the entry gives up a close_notify it cannot write"
         );
         assert_eq!(closing.elapsed(), CLOSE_TIMEOUT);
+    }
+
+    /// A message of a kind the entry does not handle, as large as wanted.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Bulky {
+        padding: String,
+    }
+
+    impl Message for Bulky {
+        const T: &'static str = "bulky_test";
+    }
+
+    fn other_entry_id() -> Uuid {
+        Uuid::from_u128(0x00ab_cdef)
+    }
+
+    /// Reads until the entry closes the connection, and returns the kind and
+    /// payload of every frame it sent.
+    async fn frames_until_closed(stream: &mut EndpointStream) -> Vec<(String, Vec<u8>)> {
+        let received = read_until_closed(stream).await;
+        let mut decoder = FrameDecoder::new(ENDPOINT_RECEIVE_LIMIT);
+        decoder.push(&received);
+        let mut frames = Vec::new();
+        while let Some(payload) = decoder.next_frame().expect("a frame within the limit") {
+            let envelope = Envelope::parse(&payload).expect("an envelope");
+            frames.push((envelope.t().to_owned(), payload));
+        }
+        frames
+    }
+
+    /// Asserts that the entry sent `error` alone, then closed.
+    async fn assert_closed_with(stream: &mut EndpointStream, error: TelemetryError) {
+        let frames = frames_until_closed(stream).await;
+        let kinds: Vec<&str> = frames.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(kinds, [ErrorMessage::T], "the error alone, no hello_ack");
+        let (_, payload) = frames.first().expect("one frame");
+        let mut whole_frame = Vec::new();
+        whole_frame.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+        whole_frame.extend_from_slice(payload);
+        assert_eq!(error_of(&whole_frame), error);
+    }
+
+    const KEY_PENDING: [u8; 32] = [1; 32];
+    const KEY_SUSPENDED: [u8; 32] = [2; 32];
+    const KEY_ACTIVE: [u8; 32] = [3; 32];
+    const KEY_UNLISTED: [u8; 32] = [4; 32];
+    const KEY_OTHER: [u8; 32] = [5; 32];
+
+    #[tokio::test]
+    async fn each_standing_is_answered_at_hello() {
+        let node = Node::new();
+        let material = node.material(&node.cert, &node.ca.bundle_pem());
+        let running = Running::start(material, None).await;
+        running
+            .apply(
+                &full(
+                    1,
+                    vec![
+                        entry(1, endpoint_spki(&KEY_PENDING), EntryState::LicensePending),
+                        entry(2, endpoint_spki(&KEY_SUSPENDED), suspended()),
+                        entry(3, endpoint_spki(&KEY_ACTIVE), EntryState::Active),
+                    ],
+                ),
+                ENTRY_ID,
+            )
+            .await
+            .expect("the full list applies");
+
+        for (key, error) in [
+            (KEY_PENDING, TelemetryError::NotListed),
+            (KEY_UNLISTED, TelemetryError::NotListed),
+            (KEY_SUSPENDED, TelemetryError::Suspended),
+        ] {
+            let mut stream = running.connect_with_key(node.ca.root.pem(), &key).await;
+            let (_endpoint, hello) = hello(ENTRY_ID);
+            send(&mut stream, &hello).await;
+            assert_closed_with(&mut stream, error).await;
+        }
+
+        let mut stream = running
+            .connect_with_key(node.ca.root.pem(), &KEY_ACTIVE)
+            .await;
+        let (_endpoint, entry) = handshake(&mut stream).await;
+        assert_eq!(entry.entry_id, ENTRY_ID);
+        ping_pong(&mut stream).await;
+        drop(stream);
+        running.stop().await;
+    }
+
+    #[tokio::test]
+    async fn an_expired_lease_is_answered_at_hello_whatever_the_standing() {
+        let node = Node::new();
+        let material = node.material(&node.cert, &node.ca.bundle_pem());
+        // Expired by the time any endpoint can say `hello`.
+        let running = Running::start_with_lease(material, Duration::from_millis(1)).await;
+        running
+            .apply(
+                &full(
+                    1,
+                    vec![entry(1, endpoint_spki(&KEY_ACTIVE), EntryState::Active)],
+                ),
+                ENTRY_ID,
+            )
+            .await
+            .expect("the full list applies");
+        for key in [KEY_ACTIVE, KEY_UNLISTED] {
+            let mut stream = running.connect_with_key(node.ca.root.pem(), &key).await;
+            let (_endpoint, hello) = hello(ENTRY_ID);
+            send(&mut stream, &hello).await;
+            assert_closed_with(&mut stream, TelemetryError::LeaseExpired).await;
+        }
+        running.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_list_change_tells_and_closes_the_connections_it_changes() {
+        let node = Node::new();
+        let material = node.material(&node.cert, &node.ca.bundle_pem());
+        let running = Running::start(material, None).await;
+        running
+            .apply(
+                &full(
+                    1,
+                    vec![
+                        entry(1, endpoint_spki(&KEY_SUSPENDED), EntryState::Active),
+                        entry(2, endpoint_spki(&KEY_UNLISTED), EntryState::Active),
+                        entry(3, endpoint_spki(&KEY_OTHER), EntryState::Active),
+                        entry(4, endpoint_spki(&KEY_ACTIVE), EntryState::Active),
+                    ],
+                ),
+                ENTRY_ID,
+            )
+            .await
+            .expect("the full list applies");
+        let mut streams = Vec::new();
+        for key in [KEY_SUSPENDED, KEY_UNLISTED, KEY_OTHER, KEY_ACTIVE] {
+            let mut stream = running.connect_with_key(node.ca.root.pem(), &key).await;
+            handshake(&mut stream).await;
+            streams.push(stream);
+        }
+        let [mut to_suspend, mut to_remove, mut to_reassign, mut kept] =
+            <[EndpointStream; 4]>::try_from(streams).expect("four connections");
+
+        running
+            .apply(
+                &diff(
+                    1,
+                    2,
+                    vec![
+                        entry(1, endpoint_spki(&KEY_SUSPENDED), suspended()),
+                        entry(9, endpoint_spki(&KEY_OTHER), EntryState::Active),
+                    ],
+                    vec![2, 3],
+                ),
+                ENTRY_ID,
+            )
+            .await
+            .expect("the diff applies");
+        // The answer came after the three closed connections stopped.
+        assert_eq!(running.list.registered(), (1, 1));
+
+        assert_closed_with(&mut to_suspend, TelemetryError::Suspended).await;
+        assert_closed_with(&mut to_remove, TelemetryError::NotListed).await;
+        assert!(
+            frames_until_closed(&mut to_reassign).await.is_empty(),
+            "an entry given to another endpoint closes without an error"
+        );
+        ping_pong(&mut kept).await;
+        drop(kept);
+        running.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_connection_built_before_its_entry_id_is_closed_at_hello() {
+        let node = Node::new();
+        let material = node.material(&node.cert, &node.ca.bundle_pem());
+        let running = Running::start(material, None).await;
+        let entries = vec![entry(1, endpoint_spki(&ENDPOINT_SEED), EntryState::Active)];
+
+        // The TLS handshake completes before the first full list.
+        let mut early = running.connect(node.ca.root.pem()).await;
+        running.wait_opened(1).await;
+        running
+            .apply(&full(1, entries.clone()), ENTRY_ID)
+            .await
+            .expect("the full list applies");
+        let (_endpoint, hello_frame) = hello(Uuid::nil());
+        send(&mut early, &hello_frame).await;
+        assert!(
+            read_until_closed(&mut early).await.is_empty(),
+            "a connection built with no entry_id is closed with nothing sent"
+        );
+        let mut again = running.connect(node.ca.root.pem()).await;
+        assert_eq!(handshake(&mut again).await.1.entry_id, ENTRY_ID);
+
+        // The TLS handshake completes before the entry_id changes; the
+        // change closes the established one.
+        let mut before_change = running.connect(node.ca.root.pem()).await;
+        running.wait_opened(3).await;
+        running
+            .apply(&full(2, entries), other_entry_id())
+            .await
+            .expect("the full list applies");
+        assert_eq!(read_until_closed(&mut again).await, Vec::<u8>::new());
+        let (_endpoint, hello_frame) = hello(ENTRY_ID);
+        send(&mut before_change, &hello_frame).await;
+        assert!(
+            read_until_closed(&mut before_change).await.is_empty(),
+            "a connection built with a superseded entry_id is closed with nothing sent"
+        );
+        let mut current = running.connect(node.ca.root.pem()).await;
+        let (_endpoint, entry) = handshake_expecting(&mut current, other_entry_id()).await;
+        assert_eq!(entry.entry_id, other_entry_id());
+        running.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_new_entry_id_closes_every_connection_and_reconnects_see_it() {
+        let node = Node::new();
+        let material = node.material(&node.cert, &node.ca.bundle_pem());
+        let running = Running::start(material, None).await;
+        let entries = vec![
+            entry(1, endpoint_spki(&KEY_ACTIVE), EntryState::Active),
+            entry(2, endpoint_spki(&KEY_OTHER), EntryState::Active),
+        ];
+        running
+            .apply(&full(1, entries.clone()), ENTRY_ID)
+            .await
+            .expect("the full list applies");
+        let mut first = running
+            .connect_with_key(node.ca.root.pem(), &KEY_ACTIVE)
+            .await;
+        handshake(&mut first).await;
+        let mut second = running
+            .connect_with_key(node.ca.root.pem(), &KEY_OTHER)
+            .await;
+        handshake(&mut second).await;
+
+        running
+            .apply(&full(2, entries), other_entry_id())
+            .await
+            .expect("the full list applies");
+        assert_eq!(running.list.registered(), (0, 0));
+        assert_eq!(read_until_closed(&mut first).await, Vec::<u8>::new());
+        assert_eq!(read_until_closed(&mut second).await, Vec::<u8>::new());
+
+        let mut again = running
+            .connect_with_key(node.ca.root.pem(), &KEY_ACTIVE)
+            .await;
+        let (_endpoint, entry) = handshake_expecting(&mut again, other_entry_id()).await;
+        assert_eq!(entry.entry_id, other_entry_id());
+        running.stop().await;
+    }
+
+    #[tokio::test]
+    async fn the_receive_limit_rises_once_the_hello_is_admitted() {
+        let node = Node::new();
+        let material = node.material(&node.cert, &node.ca.bundle_pem());
+        let running = Running::start(material, Some(ENTRY_ID)).await;
+        let over_limit = usize::try_from(SERVER_OTHER_RECEIVE_LIMIT).unwrap() + 1;
+
+        // A `hello` over the limit, which would be answered if it were taken.
+        let mut stream = running.connect(node.ca.root.pem()).await;
+        let large_hello = Frame::from_message(&Hello {
+            crate_version: "0".repeat(over_limit),
+            versions: VersionRange::new(PROTOCOL_VERSION, PROTOCOL_VERSION),
+            sent_at: Timestamp::now(),
+        })
+        .expect("encode the hello");
+        send(&mut stream, &large_hello).await;
+        assert!(
+            read_until_closed(&mut stream).await.is_empty(),
+            "before admission a frame over the limit closes the connection"
+        );
+
+        let mut stream = running.connect(node.ca.root.pem()).await;
+        handshake(&mut stream).await;
+        let bulky = Frame::from_message(&Bulky {
+            padding: "0".repeat(over_limit),
+        })
+        .expect("encode the bulky frame");
+        send(&mut stream, &bulky).await;
+        let mut decoder = FrameDecoder::new(ENDPOINT_RECEIVE_LIMIT);
+        let mut buf = vec![0_u8; READ_BUFFER_SIZE];
+        let payload = loop {
+            if let Some(payload) = decoder.next_frame().expect("a frame within the limit") {
+                break payload;
+            }
+            let n = tokio::time::timeout(IO_TIMEOUT, stream.read(&mut buf))
+                .await
+                .expect("the refusal arrives in time")
+                .expect("read the refusal");
+            assert_ne!(
+                n, 0,
+                "the connection was closed instead of refusing the frame"
+            );
+            decoder.push(&buf[..n]);
+        };
+        let envelope = Envelope::parse(&payload).expect("an envelope");
+        assert_eq!(envelope.t(), Unsupported::T);
+        let refusal: Unsupported = envelope.body().decode().expect("decode the refusal");
+        assert_eq!(refusal.kind, Bulky::T);
+        ping_pong(&mut stream).await;
+        running.stop().await;
+    }
+
+    /// Reads `stream` until it ends, and returns the kind and payload of
+    /// every whole frame on it, then the bytes left over, which no whole
+    /// frame holds.
+    async fn frames_of<R: AsyncRead + Unpin>(stream: &mut R) -> (Vec<(String, Vec<u8>)>, usize) {
+        let mut received = Vec::new();
+        tokio::time::timeout(IO_TIMEOUT, stream.read_to_end(&mut received))
+            .await
+            .expect("the stream ends in time")
+            .expect("read the stream");
+        let mut decoder = FrameDecoder::new(ENDPOINT_RECEIVE_LIMIT);
+        decoder.push(&received);
+        let mut frames = Vec::new();
+        let mut taken = 0;
+        while let Some(payload) = decoder.next_frame().expect("a frame within the limit") {
+            taken += 4 + payload.len();
+            let envelope = Envelope::parse(&payload).expect("an envelope");
+            frames.push((envelope.t().to_owned(), payload));
+        }
+        (frames, received.len() - taken)
+    }
+
+    /// Reads from `stream` until a whole frame is in, and returns its kind
+    /// and payload.
+    async fn next_frame_of<R: AsyncRead + Unpin>(
+        stream: &mut R,
+        decoder: &mut FrameDecoder,
+    ) -> (String, Vec<u8>) {
+        let mut buf = vec![0_u8; READ_BUFFER_SIZE];
+        loop {
+            if let Some(payload) = decoder.next_frame().expect("a frame within the limit") {
+                let envelope = Envelope::parse(&payload).expect("an envelope");
+                return (envelope.t().to_owned(), payload);
+            }
+            let n = tokio::time::timeout(IO_TIMEOUT, stream.read(&mut buf))
+                .await
+                .expect("a frame arrives in time")
+                .expect("read a frame");
+            assert_ne!(n, 0, "the stream ended before a whole frame");
+            decoder.push(&buf[..n]);
+        }
+    }
+
+    /// A frame over the limit taken before admission, which arrives in the
+    /// same read as the `hello` that admits the connection, is decoded
+    /// under the limit the admission sets, as it would be in a read of its
+    /// own.
+    #[tokio::test]
+    async fn a_frame_read_with_the_admitting_hello_takes_the_raised_limit() {
+        let over_limit = usize::try_from(SERVER_OTHER_RECEIVE_LIMIT).unwrap() + 1;
+        let (_endpoint, hello) = hello(ENTRY_ID);
+        let bulky = Frame::from_message(&Bulky {
+            padding: "0".repeat(over_limit),
+        })
+        .expect("encode the bulky frame");
+        let mut both = hello.as_bytes().to_vec();
+        both.extend_from_slice(bulky.as_bytes());
+        // `both` is written whole before the entry reads, so the entry's
+        // first read holds the `hello` and the bulky frame's length prefix.
+        let capacity = usize::try_from(SERVER_ACTIVE_RECEIVE_LIMIT).unwrap();
+        let (mut endpoint_side, mut entry_side) = tokio::io::duplex(capacity);
+        endpoint_side
+            .write_all(&both)
+            .await
+            .expect("write the hello and the bulky frame");
+
+        let token = CancellationToken::new();
+        let channel = ServerChannel::Telemetry {
+            entry_id: ENTRY_ID,
+            accepted_kinds: Vec::new(),
+        };
+        let config = ServerConfig::new(channel, Standing::Unready.receive_limit());
+        let serving = tokio::spawn({
+            let token = token.clone();
+            async move {
+                let remote = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+                serve(&mut entry_side, remote, config, &token).await
+            }
+        });
+
+        let mut decoder = FrameDecoder::new(ENDPOINT_RECEIVE_LIMIT);
+        let (kind, _) = next_frame_of(&mut endpoint_side, &mut decoder).await;
+        assert_eq!(kind, HelloAck::T);
+        let (kind, payload) = next_frame_of(&mut endpoint_side, &mut decoder).await;
+        assert_eq!(
+            kind,
+            Unsupported::T,
+            "the bulky frame is refused, not fatal"
+        );
+        let envelope = Envelope::parse(&payload).expect("an envelope");
+        let refusal: Unsupported = envelope.body().decode().expect("decode the refusal");
+        assert_eq!(refusal.kind, Bulky::T);
+
+        let ping = Frame::from_message(&Ping {
+            sent_at: Timestamp::now(),
+        })
+        .expect("encode a ping");
+        endpoint_side
+            .write_all(ping.as_bytes())
+            .await
+            .expect("send a ping");
+        let (kind, _) = next_frame_of(&mut endpoint_side, &mut decoder).await;
+        assert_eq!(kind, Pong::T, "the connection stays open");
+
+        token.cancel();
+        let ended = serving.await.expect("the connection task joins");
+        assert_eq!(ended, Ended::Stopped { unsent: Vec::new() });
+    }
+
+    /// A list change that stops a connection while the entry is writing to
+    /// it, here a `hello_ack` the endpoint has not read yet, still tells it
+    /// its new standing: the rest of the frame goes out first, then the error.
+    /// The update answers without waiting for those writes.
+    #[tokio::test]
+    async fn a_list_change_during_a_write_finishes_the_frame_then_sends_the_error() {
+        let (_endpoint, hello) = hello(ENTRY_ID);
+        stop_while_writing_the_reply_to(&hello, HelloAck::T).await;
+    }
+
+    /// The same holds for a frame the entry closes the connection after: a
+    /// listed endpoint is admitted, and so registered, before its `hello`'s
+    /// versions are compared, and stays registered while the version
+    /// refusal goes out.
+    #[tokio::test]
+    async fn a_list_change_during_a_version_refusal_finishes_it_then_sends_the_error() {
+        let next = PROTOCOL_VERSION + 1;
+        let hello = Frame::from_message(&Hello {
+            crate_version: "0.1.0".to_owned(),
+            versions: VersionRange::new(next, next),
+            sent_at: Timestamp::now(),
+        })
+        .expect("encode the hello");
+        stop_while_writing_the_reply_to(&hello, Unsupported::T).await;
+    }
+
+    /// Sends `hello` from a listed endpoint over a pipe narrower than any
+    /// frame, suspends the endpoint's entry while the entry is writing its
+    /// reply, of kind `reply`, and checks that the endpoint receives the
+    /// whole reply, then `suspended`, and nothing cut short.
+    async fn stop_while_writing_the_reply_to(hello: &Frame, reply: &str) {
+        // Narrower than any frame, so every write waits for the endpoint to
+        // read.
+        const PIPE_CAPACITY: usize = 16;
+
+        let db_dir = tempfile::tempdir().expect("tempdir");
+        let database =
+            Database::open(db_dir.path(), &DbOptions::default()).expect("open the database");
+        let list = Arc::new(EndpointList::new(DEFAULT_LEASE_LENGTH));
+        list.load_entry_id(&database);
+        let entries = vec![entry(1, KEY_ACTIVE, EntryState::Active)];
+        list.apply(&encode(&full(1, entries)), &ENTRY_ID.to_string(), &database)
+            .await
+            .expect("the full list applies");
+
+        let (mut endpoint_side, mut entry_side) = tokio::io::duplex(PIPE_CAPACITY);
+        let token = CancellationToken::new();
+        let running = tokio::spawn({
+            let entry = Entry {
+                list: Arc::clone(&list),
+                database: database.clone(),
+            };
+            let token = token.clone();
+            async move {
+                let remote = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+                run_admitted_by_list(&mut entry_side, remote, KEY_ACTIVE, entry, &token).await;
+            }
+        });
+        endpoint_side
+            .write_all(hello.as_bytes())
+            .await
+            .expect("send the hello");
+        // Admitted, and so writing its reply, which the endpoint does not
+        // read until the update has answered.
+        tokio::time::timeout(IO_TIMEOUT, async {
+            while list.registered() != (1, 1) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the hello is admitted in time");
+
+        list.apply(
+            &encode(&diff(1, 2, vec![entry(1, KEY_ACTIVE, suspended())], vec![])),
+            &ENTRY_ID.to_string(),
+            &database,
+        )
+        .await
+        .expect("the diff applies");
+        assert_eq!(list.registered(), (0, 0));
+
+        let (frames, left_over) = frames_of(&mut endpoint_side).await;
+        let kinds: Vec<&str> = frames.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(kinds, [reply, ErrorMessage::T]);
+        assert_eq!(left_over, 0, "no frame is cut short");
+        let (_, payload) = frames.last().expect("the error frame");
+        let mut whole_frame = u32::try_from(payload.len()).unwrap().to_be_bytes().to_vec();
+        whole_frame.extend_from_slice(payload);
+        assert_eq!(error_of(&whole_frame), TelemetryError::Suspended);
+        running.await.expect("the connection task joins");
+    }
+
+    #[tokio::test]
+    async fn a_second_connection_with_the_same_key_closes_the_first_silently() {
+        let node = Node::new();
+        let material = node.material(&node.cert, &node.ca.bundle_pem());
+        let running = Running::start(material, Some(ENTRY_ID)).await;
+        let mut first = running.connect(node.ca.root.pem()).await;
+        handshake(&mut first).await;
+        let mut second = running.connect(node.ca.root.pem()).await;
+        handshake(&mut second).await;
+        assert!(
+            read_until_closed(&mut first).await.is_empty(),
+            "a replaced connection is closed without an error"
+        );
+        ping_pong(&mut second).await;
+        assert_eq!(running.list.registered(), (1, 1));
+        running.stop().await;
+    }
+
+    /// With no confirmation, the lease timer alone closes an open connection
+    /// with `lease_expired`.
+    #[tokio::test(start_paused = true)]
+    async fn the_lease_timer_closes_open_connections_with_lease_expired() {
+        const LEASE: Duration = Duration::from_secs(30);
+
+        let node = Node::new();
+        let material = node.material(&node.cert, &node.ca.bundle_pem());
+        let running = Running::start_with_lease(material, LEASE).await;
+        running
+            .apply(
+                &full(
+                    1,
+                    vec![entry(1, endpoint_spki(&ENDPOINT_SEED), EntryState::Active)],
+                ),
+                ENTRY_ID,
+            )
+            .await
+            .expect("the full list applies");
+        let addr = running.addr;
+        let config = endpoint_client_config_trusting(&[node.ca.root.pem()]);
+        let endpoint = tokio::task::spawn_blocking(move || {
+            let mut endpoint = BlockingEndpoint::connect(addr, config);
+            let (_endpoint, hello) = hello(ENTRY_ID);
+            endpoint.send(&hello);
+            let ack = endpoint.next_kind();
+            (endpoint, ack)
+        });
+        let (endpoint, ack) = endpoint.await.expect("the endpoint's thread joins");
+        assert_eq!(ack.as_deref(), Some(HelloAck::T));
+
+        tokio::time::advance(LEASE).await;
+        let kinds = tokio::task::spawn_blocking(move || {
+            let mut endpoint = endpoint;
+            (endpoint.next_kind(), endpoint.next_kind())
+        })
+        .await
+        .expect("the endpoint's thread joins");
+        assert_eq!(kinds, (Some(ErrorMessage::T.to_owned()), None));
+        running.stop().await;
     }
 }

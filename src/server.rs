@@ -378,6 +378,17 @@ pub fn connected_client_display_from_cert(cert_info: &[CertificateDer]) -> Resul
     Ok(format_connected_client_display(&identity))
 }
 
+/// Parses a peer certificate the verifier has already accepted and returns
+/// the service name it carries, SAN DNS label 2.
+///
+/// # Errors
+///
+/// Returns an error if no certificate is present in the chain, the leaf
+/// certificate cannot be parsed, or it does not carry a valid SAN identity.
+pub(crate) fn service_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
+    Ok(parse_client_identity(cert_info)?.service_name().to_string())
+}
+
 pub fn peer_name_from_cert(cert_info: &[CertificateDer]) -> Result<String> {
     Ok(parse_client_identity(cert_info)?.peer_connect_name())
 }

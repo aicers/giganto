@@ -838,7 +838,7 @@ pub(crate) fn write_node_files(
 }
 
 /// The seed of the fake endpoint's Ed25519 key.
-const ENDPOINT_SEED: [u8; 32] = [7; 32];
+pub(crate) const ENDPOINT_SEED: [u8; 32] = [7; 32];
 
 /// Returns the TLS configuration of a fake endpoint, built the way senta
 /// builds it: trusting only `trust_roots`, presenting its self-signed Ed25519
@@ -848,15 +848,47 @@ pub(crate) fn endpoint_client_config_over(
     trust_roots: &[String],
     alpn: &[u8],
 ) -> rustls::ClientConfig {
+    endpoint_client_config_with_key(provider, trust_roots, alpn, &ENDPOINT_SEED)
+}
+
+/// The same, with the Ed25519 key `seed`.
+pub(crate) fn endpoint_client_config_with_key(
+    provider: Arc<rustls::crypto::CryptoProvider>,
+    trust_roots: &[String],
+    alpn: &[u8],
+    seed: &[u8; 32],
+) -> rustls::ClientConfig {
     use senta_protocol::auth::tls::{
         endpoint_certificate, endpoint_client_config, endpoint_private_key,
     };
 
-    let cert =
-        endpoint_certificate(&ENDPOINT_SEED, jiff::Timestamp::now()).expect("endpoint certificate");
-    let key = endpoint_private_key(&ENDPOINT_SEED).expect("endpoint private key");
+    let cert = endpoint_certificate(seed, jiff::Timestamp::now()).expect("endpoint certificate");
+    let key = endpoint_private_key(seed).expect("endpoint private key");
     endpoint_client_config(provider, trust_roots, cert, key.into(), alpn)
         .expect("endpoint client config")
+}
+
+/// Returns the TLS configuration of a fake endpoint with the Ed25519 key
+/// `seed`, over Giganto's own provider and offering the telemetry ALPN.
+pub(crate) fn endpoint_client_config_for(
+    trust_roots: &[String],
+    seed: &[u8; 32],
+) -> rustls::ClientConfig {
+    endpoint_client_config_with_key(
+        Arc::new(crate::server::server_crypto_provider()),
+        trust_roots,
+        senta_protocol::auth::tls::TELEMETRY_ALPN,
+        seed,
+    )
+}
+
+/// Returns the SHA-256 of the `SubjectPublicKeyInfo` of the fake endpoint key
+/// `seed`, the hash the active list names it by.
+pub(crate) fn endpoint_spki(seed: &[u8; 32]) -> [u8; 32] {
+    use senta_protocol::auth::tls::{endpoint_certificate, spki_hash_from_certificate};
+
+    let cert = endpoint_certificate(seed, jiff::Timestamp::now()).expect("endpoint certificate");
+    spki_hash_from_certificate(&cert).expect("an endpoint certificate parses")
 }
 
 /// The same, over Giganto's own provider and offering the telemetry ALPN.

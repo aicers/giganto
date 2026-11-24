@@ -122,9 +122,34 @@ endpoint_srv_addr = "10.0.0.10:38372"
 The endpoint entry is a TLS 1.3 port, separate from the module ports in both
 code path and client verification. It offers only the `senta-telemetry/1` ALPN
 protocol and the X25519MLKEM768 key exchange, and accepts the self-signed
-certificate an endpoint presents. The entry accepts telemetry only once the
-node has been assigned an entry ID; until then it closes every endpoint
-connection without answering.
+certificate an endpoint presents.
+
+Which endpoints may send telemetry is decided by the active list REview pushes
+to every Giganto node, together with the node's entry ID, through GraphQL
+(`endpointApplyActiveList`, `endpointConfirmActiveList` and
+`endpointActiveListState`). Only REview may call these fields: a caller whose
+client certificate names any other service, a peer Giganto included, is
+refused.
+
+- The node is ready once a full list has been applied and an entry ID is
+  stored. Until then it closes every endpoint connection at its `hello`
+  without answering.
+- The list is kept in memory only. After a process restart the node is not
+  ready until REview sends a full list again, although the entry ID, which is
+  stored in the database, survives. A restart of the services, such as after a
+  configuration update, keeps the list.
+- An endpoint is judged when it says `hello`. A listed, active endpoint gets
+  the entry ID in its `hello_ack`. An endpoint that is not listed, or whose
+  license is pending, gets `not_listed`; a suspended one gets `suspended`; and
+  when the lease has expired every endpoint gets `lease_expired`. Each error
+  is sent instead of `hello_ack`, and the connection is then closed.
+- The list is held under a 30-minute lease, which REview extends by
+  confirming the version applied; a full list extends it too. When the lease
+  expires, every open endpoint connection is sent `lease_expired` and closed.
+- An update that suspends or removes an endpoint's entry sends its open
+  connection the new standing's error and closes it. An update that changes
+  the entry ID closes every endpoint connection; reconnecting endpoints get
+  the new entry ID.
 
 Endpoints trust only the root CA, while the `--cert` file holds only the node's
 leaf certificate. On this port, and only here, Giganto therefore presents the

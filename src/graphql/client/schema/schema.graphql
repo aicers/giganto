@@ -979,6 +979,25 @@ type DriverLoadEventEdge {
 }
 
 """
+The node's active list state.
+"""
+type EndpointActiveListState {
+	"""
+	The entry ID stored, or null when none is.
+	"""
+	entryId: ID
+	"""
+	Whether the node is ready: a full list applied and an entry ID
+	stored.
+	"""
+	ready: Boolean!
+	"""
+	The version applied; null whenever `ready` is false.
+	"""
+	version: StringNumberU64
+}
+
+"""
 One record of an auditd event.
 """
 type EndpointAuditRecord {
@@ -1215,6 +1234,21 @@ type EndpointJournaldEventEdge {
 	A cursor for use in pagination
 	"""
 	cursor: String!
+}
+
+"""
+What the node answers an active list update or confirmation with.
+"""
+type EndpointListAck {
+	"""
+	Whether the node is ready: a full list applied and an entry ID
+	stored.
+	"""
+	ready: Boolean!
+	"""
+	The version applied; null whenever `ready` is false.
+	"""
+	version: StringNumberU64
 }
 
 """
@@ -2744,6 +2778,22 @@ type Mutation {
 	Starts asynchronous deletion of customer-owned data across the Giganto cluster.
 	"""
 	deleteCustomerData(serviceFqdnList: [String!]!, customerId: StringNumberU32!, requestFromPeer: Boolean, periodicTimeSeriesIds: [String!]): CustomerDataDeletionRequestStatus!
+	"""
+	Applies an endpoint active list update, the standard base64 (with
+	padding) of the update's CBOR, with `entryId` as the node's entry ID.
+	
+	A refusal is an error whose `code` extension names why and whose
+	`version` extension is the version applied, null before the first
+	full list. Only REview may call it.
+	"""
+	endpointApplyActiveList(update: String!, entryId: ID!): EndpointListAck!
+	"""
+	Confirms that the endpoint active list REview pushes is at
+	`version`, which extends the lease when it is the version applied.
+	
+	Only REview may call it.
+	"""
+	endpointConfirmActiveList(version: StringNumberU64!): EndpointListAck!
 }
 
 type Netflow5RawEvent {
@@ -3718,6 +3768,13 @@ type Query {
 	Returns the auditd events an endpoint sent.
 	"""
 	endpointAuditdEvents(filter: EndpointLogFilter!, after: String, before: String, first: Int, last: Int): EndpointAuditdEventConnection!
+	"""
+	Returns the endpoint active list's state: the entry ID stored, whether
+	the node is ready, and the version applied.
+	
+	Only REview may call it.
+	"""
+	endpointActiveListState: EndpointActiveListState!
 }
 
 """
