@@ -42,6 +42,11 @@ query KerberosRawEvents(
         realm
         snameType
         sname
+        msgType
+        preauth
+        reqEtypes
+        encPartEtype
+        ticketEtype
       }
     }
   }

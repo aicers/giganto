@@ -55,6 +55,9 @@ query DhcpRawEvents(
           code
           value
         }
+        xid
+        chaddr
+        srcMac
       }
     }
   }

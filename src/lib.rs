@@ -332,6 +332,18 @@ fn graphql_field_conversion(field: &syn::Field) -> darling::Result<proc_macro2::
                 #to_field_name: node.#from_field_name.map(|x| x.into()),
             }
         }
+        (SegmentType::OptionVec, CastStyle::As) => {
+            quote! {
+                #to_field_name: node.#from_field_name
+                    .map(|inner| inner.into_iter().map(|x| x as _).collect()),
+            }
+        }
+        (SegmentType::OptionVec, CastStyle::Into) => {
+            quote! {
+                #to_field_name: node.#from_field_name
+                    .map(|inner| inner.into_iter().map(|x| x.into()).collect()),
+            }
+        }
         (SegmentType::Other, CastStyle::Into) => {
             quote! {
                 #to_field_name: node.#from_field_name.into(),
@@ -362,6 +374,7 @@ enum SegmentType {
     Vec,
     VecVec,
     Option,
+    OptionVec,
 }
 
 #[derive(PartialEq)]
@@ -396,6 +409,12 @@ fn segment_type_and_cast_style(
             if let PathArguments::AngleBracketed(option_element_type_arg) = &segment.arguments {
                 for arg in &option_element_type_arg.args {
                     if let GenericArgument::Type(el_type) = arg {
+                        if let Some(inner_type) = extract_vec_inner_type(el_type) {
+                            return Ok((
+                                SegmentType::OptionVec,
+                                cast_style(inner_type, recursive_into)?,
+                            ));
+                        }
                         return Ok((SegmentType::Option, cast_style(el_type, recursive_into)?));
                     }
                 }
@@ -651,6 +670,28 @@ mod tests {
                 .expect("Option integer field should convert")
                 .to_string(),
             "value : node . value . map (| x | x as _) ,"
+        );
+    }
+
+    #[test]
+    fn optional_vec_fields_convert_each_element() {
+        let as_field: syn::Field = syn::parse_quote!(value: Option<Vec<u8>>);
+        let into_field: syn::Field = syn::parse_quote!(
+            #[graphql_client_type(recursive_into = true)]
+            details: Option<Vec<Detail>>
+        );
+
+        assert_eq!(
+            graphql_field_conversion(&as_field)
+                .expect("Option<Vec> integer field should convert")
+                .to_string(),
+            "value : node . value . map (| inner | inner . into_iter () . map (| x | x as _) . collect ()) ,"
+        );
+        assert_eq!(
+            graphql_field_conversion(&into_field)
+                .expect("Option<Vec> recursive field should convert")
+                .to_string(),
+            "details : node . details . map (| inner | inner . into_iter () . map (| x | x . into ()) . collect ()) ,"
         );
     }
 

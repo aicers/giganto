@@ -1722,12 +1722,27 @@ pub(super) fn insert_kerberos_raw_event(
     sensor: &str,
     timestamp: i64,
 ) {
+    insert_kerberos_record(store, sensor, timestamp, &kerberos_raw_event_body());
+}
+
+pub(super) fn insert_kerberos_record(
+    store: &RawEventStore<Kerberos>,
+    sensor: &str,
+    timestamp: i64,
+    body: &Kerberos,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
-    let kerberos_body = Kerberos {
+    store
+        .append(&key, &bincode::serialize(body).unwrap())
+        .unwrap();
+}
+
+pub(super) fn kerberos_raw_event_body() -> Kerberos {
+    Kerberos {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -1753,10 +1768,7 @@ pub(super) fn insert_kerberos_raw_event(
         req_etypes: vec![],
         enc_part_etype: None,
         ticket_etype: None,
-    };
-    let ser_kerberos_body = bincode::serialize(&kerberos_body).unwrap();
-
-    store.append(&key, &ser_kerberos_body).unwrap();
+    }
 }
 
 pub(super) fn insert_ssh_raw_event(store: &RawEventStore<Ssh>, sensor: &str, timestamp: i64) {
@@ -2133,12 +2145,27 @@ pub(super) fn insert_bootp_raw_event(store: &RawEventStore<Bootp>, sensor: &str,
 }
 
 pub(super) fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, timestamp: i64) {
+    insert_dhcp_record(store, sensor, timestamp, &dhcp_raw_event_body());
+}
+
+pub(super) fn insert_dhcp_record(
+    store: &RawEventStore<Dhcp>,
+    sensor: &str,
+    timestamp: i64,
+    body: &Dhcp,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
-    let dhcp_body = Dhcp {
+    store
+        .append(&key, &bincode::serialize(body).unwrap())
+        .unwrap();
+}
+
+pub(super) fn dhcp_raw_event_body() -> Dhcp {
+    Dhcp {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "31.3.245.133".parse::<IpAddr>().unwrap(),
@@ -2178,8 +2205,5 @@ pub(super) fn insert_dhcp_raw_event(store: &RawEventStore<Dhcp>, sensor: &str, t
         xid: 0,
         chaddr: vec![],
         src_mac: None,
-    };
-    let ser_dhcp_body = bincode::serialize(&dhcp_body).unwrap();
-
-    store.append(&key, &ser_dhcp_body).unwrap();
+    }
 }

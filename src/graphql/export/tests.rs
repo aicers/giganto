@@ -3,7 +3,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::anyhow;
-use giganto_client::ingest::{log::OpLog, network::Conn};
+use giganto_client::ingest::{
+    log::OpLog,
+    network::{Conn, Dhcp, Kerberos},
+};
 use mockito::Server;
 use tempfile::tempdir;
 
@@ -24,6 +27,10 @@ use crate::graphql::export::tests::fixture::{
     insert_smb_raw_event, insert_smtp_raw_event, insert_ssh_raw_event, insert_statistics_raw_event,
     insert_time_series, insert_tls_raw_event, run_export_case, sensor_bounds,
     test_event_timestamp_nanos,
+};
+use crate::graphql::export::tests::fixture::{
+    dhcp_raw_event_body, insert_dhcp_record, insert_kerberos_record, kerberos_raw_event_body,
+    read_export_file_with_retry,
 };
 use crate::graphql::tests::TestSchema;
 use crate::storage::{Database, DbOptions, Direction, KeyExtractor, TimestampKeyExtractor};
@@ -887,6 +894,110 @@ async fn export_kerberos() {
     assert_export_response(&schema, &res, "kerberos", "json").await;
 }
 
+async fn export_identification_lines(
+    schema: &TestSchema,
+    protocol: &str,
+    export_type: &str,
+) -> Vec<String> {
+    let query = format!(
+        r#"
+    {{
+        export(
+            filter:{{
+                protocol: "{protocol}",
+                sensorId: "src1",
+                time: {{ start: "2026-01-01T00:00:00Z", end: "2026-01-02T00:00:00Z" }}
+            }}
+            ,exportType:"{export_type}")
+    }}"#
+    );
+    let res = schema.execute(&query).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    let token = res.data.into_json().unwrap()["export"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    read_export_file_with_retry(&token)
+        .await
+        .lines()
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// Asserts that `keys` are the last keys of the JSON object `line`, in order.
+fn assert_keys_in_order(line: &str, keys: &[&str]) {
+    let positions: Vec<usize> = keys
+        .iter()
+        .map(|key| {
+            line.find(&format!("\"{key}\":"))
+                .unwrap_or_else(|| panic!("{key} missing from {line}"))
+        })
+        .collect();
+    assert!(positions.is_sorted(), "{keys:?} out of order in {line}");
+    let last = keys.last().unwrap();
+    let tail = &line[*positions.last().unwrap() + last.len() + 3..];
+    assert!(
+        !tail.contains("\":"),
+        "{last} is not the last key in {line}"
+    );
+}
+
+#[tokio::test]
+async fn export_kerberos_identification_fields() {
+    let schema = TestSchema::new();
+    let store = schema.db.kerberos_store().unwrap();
+    let request = Kerberos {
+        msg_type: 10,
+        preauth: 2,
+        req_etypes: vec![18, 17, 23, -135],
+        ..kerberos_raw_event_body()
+    };
+    let reply = Kerberos {
+        msg_type: 11,
+        preauth: 2,
+        enc_part_etype: Some(18),
+        ticket_etype: Some(-128),
+        ..kerberos_raw_event_body()
+    };
+    let timestamp = test_event_timestamp_nanos();
+    insert_kerberos_record(&store, "src1", timestamp, &request);
+    insert_kerberos_record(&store, "src1", timestamp + 1, &reply);
+
+    let csv = export_identification_lines(&schema, "kerberos", "csv").await;
+    assert_eq!(csv.len(), 2);
+    assert!(csv[0].ends_with(&format!("\t{request}")));
+    assert!(csv[0].ends_with("\tservice_name\t10\t2\t18,17,23,-135\t-\t-"));
+    assert!(csv[1].ends_with(&format!("\t{reply}")));
+    assert!(csv[1].ends_with("\tservice_name\t11\t2\t-\t18\t-128"));
+
+    let lines = export_identification_lines(&schema, "kerberos", "json").await;
+    assert_keys_in_order(
+        &lines[0],
+        &[
+            "sname",
+            "msg_type",
+            "preauth",
+            "req_etypes",
+            "enc_part_etype",
+            "ticket_etype",
+        ],
+    );
+    let json: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(json.len(), 2);
+    assert_eq!(json[0]["msg_type"], serde_json::json!(10));
+    assert_eq!(json[0]["preauth"], serde_json::json!(2));
+    assert_eq!(json[0]["req_etypes"], serde_json::json!([18, 17, 23, -135]));
+    assert!(json[0]["enc_part_etype"].is_null());
+    assert!(json[0]["ticket_etype"].is_null());
+    assert_eq!(json[1]["msg_type"], serde_json::json!(11));
+    assert_eq!(json[1]["req_etypes"], serde_json::json!([]));
+    assert_eq!(json[1]["enc_part_etype"], serde_json::json!(18));
+    assert_eq!(json[1]["ticket_etype"], serde_json::json!(-128));
+}
+
 #[tokio::test]
 async fn export_ssh() {
     let schema = TestSchema::new();
@@ -1464,6 +1575,54 @@ async fn export_dhcp() {
     }"#;
     let res = schema.execute(query).await;
     assert_export_response(&schema, &res, "dhcp", "json").await;
+}
+
+#[tokio::test]
+async fn export_dhcp_identification_fields() {
+    let schema = TestSchema::new();
+    let store = schema.db.dhcp_store().unwrap();
+    let with_mac = Dhcp {
+        xid: 0x8000_0001,
+        chaddr: vec![0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e],
+        src_mac: Some([0xaa, 0xbb, 0xcc, 0x00, 0x11, 0x22]),
+        ..dhcp_raw_event_body()
+    };
+    let without_mac = Dhcp {
+        xid: 7,
+        chaddr: vec![0x01, 0x02],
+        src_mac: None,
+        ..dhcp_raw_event_body()
+    };
+    let timestamp = test_event_timestamp_nanos();
+    insert_dhcp_record(&store, "src1", timestamp, &with_mac);
+    insert_dhcp_record(&store, "src1", timestamp + 1, &without_mac);
+
+    let csv = export_identification_lines(&schema, "dhcp", "csv").await;
+    assert_eq!(csv.len(), 2);
+    assert!(csv[0].ends_with(&format!("\t{with_mac}")));
+    assert!(csv[0].ends_with("\t2147483649\t0,26,43,60,77,94\taa:bb:cc:00:11:22"));
+    assert!(csv[1].ends_with(&format!("\t{without_mac}")));
+    assert!(csv[1].ends_with("\t7\t1,2\t-"));
+
+    let lines = export_identification_lines(&schema, "dhcp", "json").await;
+    assert_keys_in_order(&lines[1], &["options", "xid", "chaddr", "src_mac"]);
+    let json: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(json.len(), 2);
+    assert_eq!(json[0]["xid"], serde_json::json!(2_147_483_649_u32));
+    assert_eq!(
+        json[0]["chaddr"],
+        serde_json::json!([0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e])
+    );
+    assert_eq!(
+        json[0]["src_mac"],
+        serde_json::json!([0xaa, 0xbb, 0xcc, 0x00, 0x11, 0x22])
+    );
+    assert_eq!(json[1]["xid"], serde_json::json!(7));
+    assert_eq!(json[1]["chaddr"], serde_json::json!([1, 2]));
+    assert!(json[1]["src_mac"].is_null());
 }
 
 #[tokio::test]
