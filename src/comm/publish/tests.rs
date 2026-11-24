@@ -31,7 +31,7 @@ use giganto_client::{
         timeseries::PeriodicTimeSeries,
     },
     publish::{
-        PcapFilter,
+        PcapFilter, TimeSeriesGeneratorData,
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_range_data, receive_range_data_request, receive_semi_supervised_data,
         receive_semi_supervised_stream_start_message, receive_time_series_generator_data,
@@ -2330,11 +2330,23 @@ mod fixtures {
             .unwrap();
         assert_eq!(start_msg, policy_id);
 
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
-            .await
-            .unwrap();
-        assert_eq!(db_timestamp, recv_timestamp);
-        assert_eq!(db_payload, recv_data);
+        assert_eq!(
+            receive_time_series_generator_data(&mut stream)
+                .await
+                .unwrap(),
+            TimeSeriesGeneratorData::Event {
+                record: db_payload,
+                timestamp: db_timestamp,
+            },
+        );
+        assert_eq!(
+            receive_time_series_generator_data(&mut stream)
+                .await
+                .unwrap(),
+            TimeSeriesGeneratorData::ReplayEnd {
+                timestamp: request.start,
+            },
+        );
 
         let key = NetworkKey::new(sensor, record_type);
         notify_direct_stream(
@@ -2346,11 +2358,15 @@ mod fixtures {
         )
         .unwrap();
 
-        let (recv_data, recv_timestamp) = receive_time_series_generator_data(&mut stream)
-            .await
-            .unwrap();
-        assert_eq!(direct_timestamp, recv_timestamp);
-        assert_eq!(direct_payload, recv_data);
+        assert_eq!(
+            receive_time_series_generator_data(&mut stream)
+                .await
+                .unwrap(),
+            TimeSeriesGeneratorData::Event {
+                record: direct_payload,
+                timestamp: direct_timestamp,
+            },
+        );
     }
 
     pub(super) fn insert_stream_from_store<T, StoreFn>(
@@ -3070,6 +3086,11 @@ mod fixtures {
             realm: "realm".to_string(),
             sname_type: 1,
             sname: vec!["service_name".to_string()],
+            msg_type: 0,
+            preauth: 0,
+            req_etypes: vec![],
+            enc_part_etype: None,
+            ticket_etype: None,
         };
 
         bincode::serialize(&kerberos_body).unwrap()
@@ -3446,6 +3467,9 @@ mod fixtures {
             client_id_type: 1,
             client_id: vec![0, 1, 2],
             options: vec![(53, vec![1]), (12, vec![0x74, 0x65, 0x73, 0x74])],
+            xid: 0,
+            chaddr: vec![],
+            src_mac: None,
         };
 
         bincode::serialize(&dhcp_body).unwrap()
@@ -6064,6 +6088,23 @@ pub(super) async fn pause_before_start_message(channels: &StreamDirectChannels) 
     }
 }
 
+// Keyed by the request's policy id, which is all `start_stream` has to tell
+// subscriptions apart; a test that installs one uses an id no other test uses.
+static REPLAY_END_HOOKS: OnceLock<StdMutex<HashMap<String, StartMessageHook>>> = OnceLock::new();
+
+pub(super) async fn pause_before_replay_end(id: Option<&str>) {
+    let Some(id) = id else { return };
+    let hook = REPLAY_END_HOOKS
+        .get_or_init(StdMutex::default)
+        .lock()
+        .unwrap()
+        .remove(id);
+    if let Some((paused, resume)) = hook {
+        paused.send(()).unwrap();
+        resume.await.unwrap();
+    }
+}
+
 async fn store_conn_and_notify(
     db: &Database,
     channels: &crate::comm::StreamDirectChannelMap,
@@ -6116,16 +6157,33 @@ async fn receive_conn_subscription(client: &TestClient) -> RecvStream {
     stream
 }
 
-async fn assert_next_conn(stream: &mut RecvStream, timestamp: i64, payload: &[u8]) {
-    let (received, ts) = tokio::time::timeout(
+async fn next_generator_data(stream: &mut RecvStream) -> TimeSeriesGeneratorData {
+    tokio::time::timeout(
         StdDuration::from_secs(10),
         receive_time_series_generator_data(stream),
     )
     .await
-    .expect("subscription must deliver the next record")
-    .unwrap();
-    assert_eq!(ts, timestamp);
-    assert_eq!(received, payload);
+    .expect("subscription must deliver the next frame")
+    .unwrap()
+}
+
+async fn assert_next_conn(stream: &mut RecvStream, timestamp: i64, payload: &[u8]) {
+    assert_eq!(
+        next_generator_data(stream).await,
+        TimeSeriesGeneratorData::Event {
+            record: payload.to_vec(),
+            timestamp,
+        }
+    );
+}
+
+/// Asserts that the next frame is the replay-end frame of a request whose
+/// start time is `start`.
+async fn assert_replay_end(stream: &mut RecvStream, start: i64) {
+    assert_eq!(
+        next_generator_data(stream).await,
+        TimeSeriesGeneratorData::ReplayEnd { timestamp: start }
+    );
 }
 
 #[tokio::test]
@@ -6139,6 +6197,11 @@ async fn time_series_generator_delivers_late_realtime_records() {
             let mut stream = receive_conn_subscription(&harness.publish).await;
             assert_next_conn(&mut stream, 100, &first).await;
             assert_next_conn(&mut stream, 200, &last).await;
+            assert_replay_end(
+                &mut stream,
+                build_network_time_series_generator_request().start,
+            )
+            .await;
 
             // Stored after the snapshot, even though its timestamp precedes replay's end.
             let late = gen_conn_raw_event();
@@ -6210,6 +6273,11 @@ async fn time_series_generator_does_not_duplicate_record_before_start_message() 
             resume_tx.send(()).unwrap();
             let mut stream = receive_conn_subscription(&harness.publish).await;
             assert_next_conn(&mut stream, 100, &initial).await;
+            assert_replay_end(
+                &mut stream,
+                build_network_time_series_generator_request().start,
+            )
+            .await;
             assert_next_conn(&mut stream, 200, &record).await;
             let marker = gen_dns_raw_event();
             store_conn_and_notify(
@@ -6243,6 +6311,11 @@ async fn time_series_generator_serializes_snapshot_with_store_and_notification()
             drop(channels);
             let mut stream = receive_conn_subscription(&harness.publish).await;
             assert_next_conn(&mut stream, 200, &record).await;
+            assert_replay_end(
+                &mut stream,
+                build_network_time_series_generator_request().start,
+            )
+            .await;
             let marker = gen_dns_raw_event();
             store_conn_and_notify(
                 &harness.db,
@@ -6253,6 +6326,315 @@ async fn time_series_generator_serializes_snapshot_with_store_and_notification()
             .await;
             assert_next_conn(&mut stream, 201, &marker).await;
         })
+    })
+    .await;
+}
+
+/// Builds a `Conn` generator request for `SENSOR_TIME_SERIES_GENERATOR_THREE`
+/// with a start time other than zero, so a replay-end frame carrying the
+/// request's start cannot be mistaken for one carrying a default.
+fn conn_generator_request(id: u32, start: i64) -> RequestTimeSeriesGeneratorStream {
+    RequestTimeSeriesGeneratorStream {
+        start,
+        id: id.to_string(),
+        ..build_network_time_series_generator_request()
+    }
+}
+
+async fn subscribe_conn_generator(
+    client: &mut TestClient,
+    request: RequestTimeSeriesGeneratorStream,
+) -> RecvStream {
+    let id: u32 = request.id.parse().unwrap();
+    send_stream_request(
+        &mut client.send,
+        StreamRequestPayload::TimeSeriesGenerator {
+            record_type: RequestStreamRecord::Conn,
+            request,
+        },
+    )
+    .await
+    .unwrap();
+    let mut stream = client.conn.accept_uni().await.unwrap();
+    assert_eq!(
+        receive_time_series_generator_stream_start_message(&mut stream)
+            .await
+            .unwrap(),
+        id
+    );
+    stream
+}
+
+#[tokio::test]
+async fn time_series_generator_sends_replay_end_after_replayed_records() {
+    const START: i64 = 50;
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let sensor = SENSOR_TIME_SERIES_GENERATOR_THREE;
+            // Before the start time, so not replayed.
+            insert_conn_stream(&harness.db, sensor, 10);
+            let first = insert_conn_stream(&harness.db, sensor, 100);
+            let last = insert_conn_stream(&harness.db, sensor, 200);
+            let mut stream =
+                subscribe_conn_generator(&mut harness.publish, conn_generator_request(11, START))
+                    .await;
+            assert_next_conn(&mut stream, 100, &first).await;
+            assert_next_conn(&mut stream, 200, &last).await;
+            assert_replay_end(&mut stream, START).await;
+
+            let realtime = gen_conn_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                300,
+                &realtime,
+            )
+            .await;
+            assert_next_conn(&mut stream, 300, &realtime).await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn time_series_generator_sends_replay_end_when_nothing_is_stored() {
+    const START: i64 = 50;
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let mut stream =
+                subscribe_conn_generator(&mut harness.publish, conn_generator_request(12, START))
+                    .await;
+            assert_replay_end(&mut stream, START).await;
+
+            let realtime = gen_conn_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                300,
+                &realtime,
+            )
+            .await;
+            assert_next_conn(&mut stream, 300, &realtime).await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn time_series_generator_sends_replay_end_when_ip_filter_drops_every_record() {
+    const START: i64 = 50;
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let sensor = SENSOR_TIME_SERIES_GENERATOR_THREE;
+            insert_conn_stream(&harness.db, sensor, 100);
+            insert_conn_stream(&harness.db, sensor, 200);
+            // The stored records run 192.168.4.76 -> 31.3.245.133.
+            let request = RequestTimeSeriesGeneratorStream {
+                src_ip: Some("10.0.0.1".parse::<IpAddr>().unwrap()),
+                dst_ip: Some("10.0.0.2".parse::<IpAddr>().unwrap()),
+                ..conn_generator_request(13, START)
+            };
+            let mut stream = subscribe_conn_generator(&mut harness.publish, request).await;
+            assert_replay_end(&mut stream, START).await;
+
+            let realtime = gen_conn_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                300,
+                &realtime,
+            )
+            .await;
+            assert_next_conn(&mut stream, 300, &realtime).await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn time_series_generator_delivers_record_notified_during_replay_after_replay_end() {
+    const START: i64 = 50;
+    const ID: u32 = 14;
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let sensor = SENSOR_TIME_SERIES_GENERATOR_THREE;
+            let first = insert_conn_stream(&harness.db, sensor, 100);
+            let last = insert_conn_stream(&harness.db, sensor, 200);
+            let (paused_tx, paused_rx) = oneshot::channel();
+            let (resume_tx, resume_rx) = oneshot::channel();
+            REPLAY_END_HOOKS
+                .get_or_init(StdMutex::default)
+                .lock()
+                .unwrap()
+                .insert(ID.to_string(), (paused_tx, resume_rx));
+
+            let mut stream =
+                subscribe_conn_generator(&mut harness.publish, conn_generator_request(ID, START))
+                    .await;
+            assert_next_conn(&mut stream, 100, &first).await;
+            assert_next_conn(&mut stream, 200, &last).await;
+            tokio::time::timeout(StdDuration::from_secs(10), paused_rx)
+                .await
+                .unwrap()
+                .unwrap();
+
+            // Replay has sent every stored record but not the replay-end
+            // frame yet; this record goes to the subscription's channel.
+            let during = gen_conn_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                150,
+                &during,
+            )
+            .await;
+            resume_tx.send(()).unwrap();
+
+            assert_replay_end(&mut stream, START).await;
+            assert_next_conn(&mut stream, 150, &during).await;
+            let marker = gen_dns_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                201,
+                &marker,
+            )
+            .await;
+            // The marker following directly shows the record was neither
+            // duplicated nor followed by a second replay-end frame.
+            assert_next_conn(&mut stream, 201, &marker).await;
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn time_series_generator_cancelled_before_replay_end_runs_cleanup() {
+    const START: i64 = 50;
+    const ID: u32 = 15;
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let sensor = SENSOR_TIME_SERIES_GENERATOR_THREE;
+            let first = insert_conn_stream(&harness.db, sensor, 100);
+            let (paused_tx, paused_rx) = oneshot::channel();
+            // Held to the end: cancellation, not a resume, must end the pause.
+            let (_resume_tx, resume_rx) = oneshot::channel();
+            REPLAY_END_HOOKS
+                .get_or_init(StdMutex::default)
+                .lock()
+                .unwrap()
+                .insert(ID.to_string(), (paused_tx, resume_rx));
+
+            let mut stream =
+                subscribe_conn_generator(&mut harness.publish, conn_generator_request(ID, START))
+                    .await;
+            assert_next_conn(&mut stream, 100, &first).await;
+            tokio::time::timeout(StdDuration::from_secs(10), paused_rx)
+                .await
+                .unwrap()
+                .unwrap();
+
+            // Queued in the subscription's channel while replay-end is pending.
+            let queued = gen_conn_raw_event();
+            store_conn_and_notify(
+                &harness.db,
+                &*harness.stream_direct_channels.read().await,
+                150,
+                &queued,
+            )
+            .await;
+
+            harness.server_handle.token.cancel();
+            wait_for_registered_sensors(
+                &harness.stream_direct_channels,
+                "the subscription's cleanup did not run after cancellation",
+                <[String]>::is_empty,
+            )
+            .await;
+
+            // The stream ends with neither the replay-end frame nor the
+            // queued realtime record.
+            let next = tokio::time::timeout(
+                StdDuration::from_secs(10),
+                receive_time_series_generator_data(&mut stream),
+            )
+            .await
+            .expect("the cancelled subscription's stream must end");
+            assert!(
+                next.is_err(),
+                "unexpected frame after cancellation: {next:?}"
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn time_series_generator_replay_end_write_failure_ends_subscription() {
+    const START: i64 = 50;
+    const FAILING_ID: u32 = 16;
+    const WITNESS_ID: u32 = 17;
+    with_log_capture(|log_capture| async move {
+        with_test_harness(|harness| {
+            Box::pin(async move {
+                let (paused_tx, paused_rx) = oneshot::channel();
+                let (resume_tx, resume_rx) = oneshot::channel();
+                REPLAY_END_HOOKS
+                    .get_or_init(StdMutex::default)
+                    .lock()
+                    .unwrap()
+                    .insert(FAILING_ID.to_string(), (paused_tx, resume_rx));
+
+                let _failing = subscribe_conn_generator(
+                    &mut harness.publish,
+                    conn_generator_request(FAILING_ID, START),
+                )
+                .await;
+                tokio::time::timeout(StdDuration::from_secs(10), paused_rx)
+                    .await
+                    .unwrap()
+                    .unwrap();
+
+                // A second subscription on the same connection reaches the
+                // realtime loop, which ends and cleans up once the server
+                // sees the connection close. That is the signal that the
+                // paused subscription's next write can only fail.
+                let mut witness = subscribe_conn_generator(
+                    &mut harness.publish,
+                    conn_generator_request(WITNESS_ID, START),
+                )
+                .await;
+                assert_replay_end(&mut witness, START).await;
+                assert_eq!(
+                    registered_target_sensors(&harness.stream_direct_channels).await,
+                    vec![SENSOR_TIME_SERIES_GENERATOR_THREE.to_string(); 2]
+                );
+
+                harness.publish.conn.close(0_u32.into(), b"");
+                wait_for_registered_sensors(
+                    &harness.stream_direct_channels,
+                    "the witness subscription did not observe the closed connection",
+                    |sensors| sensors.len() == 1,
+                )
+                .await;
+                resume_tx.send(()).unwrap();
+
+                // The failed replay-end write ends the subscription the way a
+                // failed replayed record does: reported under its task name,
+                // after its cleanup has run.
+                assert_log_contains(
+                    &log_capture,
+                    "publish-stream-src3-Conn-16 failed: Failed to write the time series generator replay-end frame",
+                )
+                .await;
+                assert_eq!(
+                    registered_target_sensors(&harness.stream_direct_channels).await,
+                    Vec::<String>::new(),
+                    "expected no channel keys to survive the failed replay-end write"
+                );
+            })
+        })
+        .await;
     })
     .await;
 }

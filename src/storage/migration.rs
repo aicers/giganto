@@ -257,6 +257,9 @@ fn migrate_dhcp_0_26_to_0_27(db: &Database) -> Result<()> {
             client_id_type: old.client_id_type,
             client_id: old.client_id,
             options: Vec::new(),
+            xid: 0,
+            chaddr: Vec::new(),
+            src_mac: None,
         };
         let new = bincode::serialize(&new_data)?;
         store.append(&key, &new)?;
@@ -1287,6 +1290,11 @@ mod tests {
             realm: kerberos_old.realm.clone(),
             sname_type: kerberos_old.sname_type,
             sname: kerberos_old.service_name.clone(),
+            msg_type: 0,
+            preauth: 0,
+            req_etypes: Vec::new(),
+            enc_part_etype: None,
+            ticket_etype: None,
         };
         migrate_and_assert_raw_event::<KerberosBeforeV26, KerberosFromV26>(
             &kerberos_store,
@@ -2613,6 +2621,9 @@ mod tests {
             client_id_type: old.client_id_type,
             client_id: old.client_id,
             options: Vec::new(),
+            xid: 0,
+            chaddr: Vec::new(),
+            src_mac: None,
         };
         assert_eq!(expected, migrated);
     }

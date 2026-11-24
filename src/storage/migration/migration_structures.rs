@@ -747,6 +747,11 @@ impl MigrationNew<KerberosBeforeV26> for KerberosFromV26 {
             realm: old_data.realm,
             sname_type: old_data.sname_type,
             sname: old_data.service_name,
+            msg_type: 0,
+            preauth: 0,
+            req_etypes: Vec::new(),
+            enc_part_etype: None,
+            ticket_etype: None,
         }
     }
 }

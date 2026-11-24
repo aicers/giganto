@@ -34,7 +34,7 @@ use giganto_client::{
         PcapFilter, pcap_extract_request,
         range::{MessageCode, RequestRange, RequestRawData, ResponseRangeData},
         receive_range_data_request, receive_stream_request, send_err, send_ok, send_range_data,
-        send_semi_supervised_stream_start_message,
+        send_semi_supervised_stream_start_message, send_time_series_generator_replay_end,
         stream::{RequestStreamRecord, StreamRequestPayload},
     },
 };
@@ -1029,11 +1029,13 @@ where
         #[cfg(test)]
         tests::pause_before_start_message(&stream_direct_channels).await;
 
-        // Cancellation branch. The start message and the records replayed
-        // ahead of the realtime stream are QUIC writes a client that stopped
-        // reading can stall; dropping them truncates a stream the client can
-        // detect. The cleanup below still runs, because only this inner
-        // future is dropped, not the task.
+        // Cancellation branch. The start message, the records replayed
+        // ahead of the realtime stream and, on a time series generator
+        // stream, the replay-end frame after them are QUIC writes a client
+        // that stopped reading can stall; dropping them truncates a stream
+        // the client can detect. The cleanup below still runs, because only
+        // this inner future is dropped, not the task, and nothing realtime is
+        // forwarded after it.
         select! {
             biased;
             () = token.cancelled() => return Ok(()),
@@ -1125,6 +1127,19 @@ where
                 send_time_series_generator_data(sender, timestamp, val).await?;
             }
         }
+
+        #[cfg(test)]
+        tests::pause_before_replay_end(msg.id().as_deref()).await;
+
+        // Marks where replay ends, so the client knows it has caught up with
+        // storage before any realtime record follows. Sent exactly once per
+        // subscription, also when nothing was replayed. Realtime records
+        // notified meanwhile wait in the subscription's channel and follow it.
+        send_time_series_generator_replay_end(sender, msg.start_time())
+            .await
+            .map_err(|e| {
+                anyhow!("Failed to write the time series generator replay-end frame: {e}")
+            })?;
     }
 
     Ok(())
