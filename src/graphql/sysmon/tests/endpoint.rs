@@ -12,6 +12,7 @@ use super::fixtures::sensor_timestamp_key;
 use crate::{
     datetime::DateTime,
     graphql::{
+        MAXIMUM_PAGE_SIZE,
         endpoint_header::fixtures::{
             HEADER_SELECTION, LOGON_ID_FULL, create_remote_thread, dns_event, driver_load,
             file_create, file_create_stream_hash, file_creation_time_changed, file_delete,
@@ -349,9 +350,11 @@ async fn sysmon_events_returns_every_kind_in_time_order_with_headers() {
     let schema = TestSchema::new();
     let mut expected = Vec::new();
     for (index, kind) in (0_i64..).zip(kinds()) {
-        let with_header = BASE + index * 2_000;
-        let without_header = with_header + 1_000;
+        let with_header = BASE + index * 3_000;
+        let with_sparse_header = with_header + 1_000;
+        let without_header = with_header + 2_000;
         (kind.store)(&schema.db, with_header, Some(full_header()));
+        (kind.store)(&schema.db, with_sparse_header, Some(sparse_header()));
         (kind.store)(&schema.db, without_header, None);
         expected.push(json!({
             "__typename": kind.type_name,
@@ -360,12 +363,22 @@ async fn sysmon_events_returns_every_kind_in_time_order_with_headers() {
         }));
         expected.push(json!({
             "__typename": kind.type_name,
+            "time": time(with_sparse_header),
+            "endpoint": sparse_header_graphql(),
+        }));
+        expected.push(json!({
+            "__typename": kind.type_name,
             "time": time(without_header),
             "endpoint": null,
         }));
     }
+    assert_eq!(expected.len(), kinds().len() * 3);
 
-    let data = execute(&schema, &sysmon_events_query("first: 50")).await;
+    let data = execute(
+        &schema,
+        &sysmon_events_query(&format!("first: {MAXIMUM_PAGE_SIZE}")),
+    )
+    .await;
     assert_eq!(nodes(&data, "sysmonEvents"), expected);
 
     let data = execute(&schema, &sysmon_events_query("last: 3")).await;
@@ -622,7 +635,7 @@ async fn execute_cluster_query(schema: &TestSchema, file: &str, sensor: &str) ->
     let query = std::fs::read_to_string(&path).unwrap();
     let request = Request::new(query).variables(Variables::from_json(json!({
         "filter": { "sensor": sensor },
-        "first": 50,
+        "first": MAXIMUM_PAGE_SIZE,
     })));
     let res = schema.schema.execute(request).await;
     assert!(res.errors.is_empty(), "{file}: {:?}", res.errors);
@@ -630,8 +643,9 @@ async fn execute_cluster_query(schema: &TestSchema, file: &str, sensor: &str) ->
 }
 
 /// Asserts that a node relaying `file`'s query to a peer returns what the
-/// peer returned for its locally stored records.
-pub(crate) async fn assert_relayed_from_peer(local: &TestSchema, file: &str) {
+/// peer returned for its locally stored records, and returns the relayed
+/// nodes.
+pub(crate) async fn assert_relayed_from_peer(local: &TestSchema, file: &str) -> Vec<Value> {
     let peer_data = execute_cluster_query(local, file, SENSOR).await;
     let query_name = peer_data
         .as_object()
@@ -656,13 +670,13 @@ pub(crate) async fn assert_relayed_from_peer(local: &TestSchema, file: &str) {
         .port();
     let cluster = TestSchema::new_with_graphql_peer(peer_port);
 
-    let relayed = execute_cluster_query(&cluster, file, PEER_SENSOR).await;
-    assert_eq!(
-        nodes(&relayed, &query_name),
-        nodes(&peer_data, &query_name),
-        "{file}"
+    let relayed = nodes(
+        &execute_cluster_query(&cluster, file, PEER_SENSOR).await,
+        &query_name,
     );
+    assert_eq!(relayed, nodes(&peer_data, &query_name), "{file}");
     mock.assert_async().await;
+    relayed
 }
 
 #[tokio::test]
@@ -683,9 +697,40 @@ async fn results_relayed_from_a_peer_carry_headers_and_new_fields() {
     }
 
     let peer = TestSchema::new();
+    let mut stored = Vec::new();
+    let mut sparse = Vec::new();
     for (index, kind) in (0_i64..).zip(kinds()) {
-        (kind.store)(&peer.db, BASE + index * 2, Some(full_header()));
-        (kind.store)(&peer.db, BASE + index * 2 + 1, None);
+        let with_header = BASE + index * 3;
+        let with_sparse_header = with_header + 1;
+        let without_header = with_header + 2;
+        (kind.store)(&peer.db, with_header, Some(full_header()));
+        (kind.store)(&peer.db, with_sparse_header, Some(sparse_header()));
+        (kind.store)(&peer.db, without_header, None);
+        for timestamp in [with_header, with_sparse_header, without_header] {
+            stored.push((kind.type_name, time(timestamp)));
+        }
+        sparse.push((kind.type_name, time(with_sparse_header)));
     }
-    assert_relayed_from_peer(&peer, "sysmon_events").await;
+    let relayed = assert_relayed_from_peer(&peer, "sysmon_events").await;
+
+    // Every stored record is on the relayed page, in time order.
+    let relayed_records = relayed
+        .iter()
+        .map(|node| {
+            (
+                node["__typename"].as_str().expect("a type name"),
+                node["time"].as_str().expect("a time").to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(relayed_records, stored);
+
+    // Each kind's record with a header but no clock offset keeps its header.
+    for (type_name, sparse_time) in sparse {
+        let node = relayed
+            .iter()
+            .find(|node| node["__typename"] == type_name && node["time"] == sparse_time.as_str())
+            .unwrap_or_else(|| panic!("{type_name} at {sparse_time} is relayed"));
+        assert_eq!(node["endpoint"], sparse_header_graphql(), "{type_name}");
+    }
 }
