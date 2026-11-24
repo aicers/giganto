@@ -326,7 +326,7 @@ mod tests {
             "the first entry_id builds the stream"
         );
 
-        schema.endpoint_flows.controls().fail_writes(true);
+        schema.db.fail_entry_id_writes_for_test(true);
         let response = as_review(&schema, &apply_query(&full_list(2), OTHER_ENTRY_ID)).await;
         assert_eq!(
             error_extensions(&response),

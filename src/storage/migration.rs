@@ -631,6 +631,7 @@ mod tests {
         Database {
             db: std::sync::Arc::new(db),
             append_unique_max_probes: super::super::APPEND_UNIQUE_MAX_PROBES,
+            entry_id_write_fault: std::sync::Arc::default(),
         }
     }
 

@@ -289,6 +289,10 @@ impl DbOptions {
 pub struct Database {
     db: Arc<DB>,
     append_unique_max_probes: i64,
+    /// Makes `replace_endpoint_entry_id` fail, writing nothing, while set;
+    /// shared by every clone.
+    #[cfg(test)]
+    entry_id_write_fault: Arc<AtomicBool>,
 }
 
 impl Database {
@@ -320,6 +324,8 @@ impl Database {
         Ok(Database {
             db: Arc::new(db),
             append_unique_max_probes: APPEND_UNIQUE_MAX_PROBES,
+            #[cfg(test)]
+            entry_id_write_fault: Arc::default(),
         })
     }
 

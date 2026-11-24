@@ -226,18 +226,27 @@ impl EndpointFlows {
 }
 
 impl FlowsGuard<'_> {
-    /// Makes `entry_id` the node's, replacing `previous`: builds the new
-    /// `entry_id`'s stream, then, in one synced write, stores the `entry_id`
-    /// and forgets the stream states of `previous`, and only then holds the
-    /// new stream. The loss records of `previous` stay.
+    /// Makes `entry_id` the node's, replacing the one stored: reads the
+    /// `entry_id` stored, builds the new `entry_id`'s stream, then, in one
+    /// synced write, stores the `entry_id` and forgets the stream states of
+    /// the one it replaces, and only then holds the new stream. The loss
+    /// records of the replaced `entry_id` stay.
+    ///
+    /// The `entry_id` replaced is read from the database under the lock, not
+    /// taken from the active list's copy, which stays `None` when the read
+    /// at the generation's start failed even after the database can be read
+    /// again and the stream of the stored `entry_id` was built.
     ///
     /// # Errors
     ///
-    /// Returns an error if the new stream's state cannot be read or the write
-    /// fails; then nothing has changed.
-    pub(crate) fn change_entry_id(&mut self, entry_id: Uuid, previous: Option<Uuid>) -> Result<()> {
-        #[cfg(test)]
-        self.flows.controls.check_failure()?;
+    /// Returns an error if the stored `entry_id` or the new stream's state
+    /// cannot be read or the write fails; then nothing has changed.
+    pub(crate) fn change_entry_id(&mut self, entry_id: Uuid) -> Result<()> {
+        let previous = self
+            .flows
+            .database
+            .endpoint_entry_id()
+            .context("cannot tell which entry_id the new one replaces")?;
         let stream = ReceiverStream::restore(entry_id, self.flows.store())
             .context("cannot read the telemetry stream state of the new entry_id")?;
         self.flows

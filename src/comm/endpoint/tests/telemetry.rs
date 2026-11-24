@@ -562,17 +562,35 @@ async fn a_new_entry_id_moves_the_streams_or_changes_nothing() {
     assert_eq!(endpoint.next().await, ack(STREAM, 3));
 
     // A change that cannot be stored changes nothing.
-    running.flows.controls().fail_writes(true);
+    let streams = running.db.entries_for_test(ENDPOINT_STREAMS_CF).unwrap();
+    let losses = running.db.entries_for_test(ENDPOINT_LOSSES_CF).unwrap();
+    assert_eq!(losses.len(), 1);
+    running.db.fail_entry_id_writes_for_test(true);
     let refusal = running
         .apply(&full(2, entries.clone()), other_entry_id())
         .await
         .expect_err("the entry_id cannot be stored");
-    assert!(matches!(refusal.failure, ApplyFailure::Store(_)));
-    running.flows.controls().fail_writes(false);
+    assert!(
+        matches!(&refusal.failure, ApplyFailure::Store(e)
+            if format!("{e:#}").contains("injected failure writing the endpoint entry_id")),
+        "{:?}",
+        refusal.failure
+    );
+    running.db.fail_entry_id_writes_for_test(false);
     assert_eq!(running.list.state().entry_id, Some(ENTRY_ID));
     assert_eq!(running.list.state().version, Some(1));
     assert_eq!(running.flows.entry_id(), Some(ENTRY_ID));
     assert_eq!(running.db.endpoint_entry_id().unwrap(), Some(ENTRY_ID));
+    assert_eq!(
+        running.db.entries_for_test(ENDPOINT_STREAMS_CF).unwrap(),
+        streams,
+        "the stream states stay"
+    );
+    assert_eq!(
+        running.db.entries_for_test(ENDPOINT_LOSSES_CF).unwrap(),
+        losses,
+        "the losses stay"
+    );
     ping_pong(&mut endpoint.stream).await;
 
     running

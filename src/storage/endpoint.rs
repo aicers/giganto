@@ -344,6 +344,13 @@ impl Database {
                 batch.delete_cf(streams_cf, key.context("cannot read the endpoint streams")?);
             }
         }
+        #[cfg(test)]
+        if self
+            .entry_id_write_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            bail!("injected failure writing the endpoint entry_id");
+        }
         // REview is told the update is applied once this returns, and every
         // `hello_ack` carries the value from then on, so a crash must not
         // bring back the one it replaced. The database flushes its WAL only
@@ -353,6 +360,17 @@ impl Database {
         self.db
             .write_opt(batch, &synced())
             .context("cannot write the endpoint entry_id")
+    }
+
+    /// Makes every later [`replace_endpoint_entry_id`] on this database or a
+    /// clone of it fail, after it has read what it deletes and before it
+    /// writes anything, while `fail` is `true`.
+    ///
+    /// [`replace_endpoint_entry_id`]: Self::replace_endpoint_entry_id
+    #[cfg(test)]
+    pub(crate) fn fail_entry_id_writes_for_test(&self, fail: bool) {
+        self.entry_id_write_fault
+            .store(fail, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Returns the state of every stream stored under `entry_id`, by endpoint

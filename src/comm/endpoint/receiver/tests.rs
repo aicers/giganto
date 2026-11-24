@@ -43,8 +43,8 @@ impl Controls {
         self.waiting.load(Ordering::SeqCst)
     }
 
-    /// Makes every later batch write and `entry_id` change fail, writing
-    /// nothing, while `fail` is `true`.
+    /// Makes every later batch write fail, writing nothing, while `fail` is
+    /// `true`.
     pub(crate) fn fail_writes(&self, fail: bool) {
         self.fail.store(fail, Ordering::SeqCst);
     }
@@ -1160,22 +1160,31 @@ fn a_new_entry_id_forgets_the_old_streams_and_keeps_their_losses() {
         }),
     );
 
-    // A failure changes nothing.
-    node.flows.controls().fail_writes(true);
+    let state = node.state(STREAM);
+    assert_eq!(state.as_ref().map(|state| state.a), Some(4));
+    let losses = node.losses();
+    assert_eq!(losses.len(), 1);
+
+    // A write that fails once the new stream is built changes nothing.
+    node.db.fail_entry_id_writes_for_test(true);
+    let e = node
+        .flows
+        .lock()
+        .change_entry_id(OTHER_ENTRY)
+        .expect_err("the entry_id cannot be stored");
+    node.db.fail_entry_id_writes_for_test(false);
     assert!(
-        node.flows
-            .lock()
-            .change_entry_id(OTHER_ENTRY, Some(ENTRY))
-            .is_err()
+        format!("{e:#}").contains("injected failure writing the endpoint entry_id"),
+        "{e:#}"
     );
-    node.flows.controls().fail_writes(false);
     assert_eq!(node.db.endpoint_entry_id().unwrap(), Some(ENTRY));
     assert_eq!(node.flows.entry_id(), Some(ENTRY));
-    assert_eq!(node.state(STREAM).map(|state| state.a), Some(4));
+    assert_eq!(node.state(STREAM), state, "the stream state stays");
+    assert_eq!(node.losses(), losses, "the losses stay");
 
     node.flows
         .lock()
-        .change_entry_id(OTHER_ENTRY, Some(ENTRY))
+        .change_entry_id(OTHER_ENTRY)
         .expect("the entry_id changes");
     assert_eq!(node.db.endpoint_entry_id().unwrap(), Some(OTHER_ENTRY));
     assert_eq!(node.flows.entry_id(), Some(OTHER_ENTRY));
@@ -1225,10 +1234,38 @@ fn without_an_entry_id_no_stream_is_held_until_one_is_stored() {
     );
     flows
         .lock()
-        .change_entry_id(ENTRY, None)
+        .change_entry_id(ENTRY)
         .expect("the first entry_id is stored");
     assert_eq!(flows.entry_id(), Some(ENTRY));
     assert_eq!(db.endpoint_entry_id().unwrap(), Some(ENTRY));
+}
+
+#[test]
+fn an_entry_id_change_is_refused_while_the_stored_one_cannot_be_read() {
+    let node = Node::new();
+    let mut conn = node.connection();
+    node.open_stream(&mut conn, STREAM);
+    let mut guard = node.flows.lock();
+    node.db
+        .put_cf_for_test(ENDPOINT_ENTRY_CF, b"entry_id", b"short")
+        .expect("write");
+    let e = guard
+        .change_entry_id(OTHER_ENTRY)
+        .expect_err("the replaced entry_id is unknown");
+    drop(guard);
+    assert!(
+        format!("{e:#}").contains("cannot tell which entry_id the new one replaces"),
+        "{e:#}"
+    );
+    assert_eq!(
+        node.db
+            .get_cf_for_test(ENDPOINT_ENTRY_CF, b"entry_id")
+            .unwrap(),
+        Some(b"short".to_vec()),
+        "nothing is written"
+    );
+    assert!(node.state(STREAM).is_some(), "the stream state stays");
+    assert_eq!(node.flows.entry_id(), Some(ENTRY), "the stream held stays");
 }
 
 #[test]

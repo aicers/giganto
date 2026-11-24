@@ -372,7 +372,7 @@ impl EndpointList {
             }
         };
         if let Some(before) = before
-            && let Err(e) = flows.change_entry_id(entry_id, inner.entry_id)
+            && let Err(e) = flows.change_entry_id(entry_id)
         {
             error!("Endpoint active list: {e:#}; the update is not applied");
             inner.list = before;
@@ -1504,12 +1504,17 @@ pub(super) mod tests {
             )
             .await
             .expect("a full list applies");
-        fixture.flows.controls().fail_writes(true);
+        fixture.db.fail_entry_id_writes_for_test(true);
         let refusal = fixture
             .apply(&full(2, Vec::new()), OTHER_ENTRY_ID)
             .await
             .expect_err("the entry_id cannot be stored");
-        assert!(matches!(refusal.failure, ApplyFailure::Store(_)));
+        assert!(
+            matches!(&refusal.failure, ApplyFailure::Store(e)
+                if format!("{e:#}").contains("injected failure writing the endpoint entry_id")),
+            "{:?}",
+            refusal.failure
+        );
         assert_eq!(refusal.version, Some(1));
         assert_eq!(
             fixture.list.state(),
@@ -1687,6 +1692,70 @@ pub(super) mod tests {
                 version: None,
             }
         );
+    }
+
+    /// An `entry_id` read at the generation's start that failed, and
+    /// can be read again by the time a new one is applied: the stream states
+    /// of the one stored are forgotten all the same, though the list took
+    /// the `entry_id` as none.
+    #[tokio::test]
+    async fn a_new_entry_id_replaces_the_stored_one_the_list_could_not_read() {
+        use senta_protocol::telemetry::{OpenStream, ReceiverConnection, TelemetryMessage};
+
+        use crate::{
+            comm::endpoint::{
+                convert,
+                receiver::{Delivered, Handled},
+            },
+            storage::endpoint::ENDPOINT_ENTRY_CF,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        db.replace_endpoint_entry_id(ENTRY_ID, None)
+            .expect("store the entry_id");
+        let endpoint_id = Uuid::from_u128(0xe1);
+        let stream = Uuid::from_u128(0x51);
+        let flows = EndpointFlows::new(db.clone());
+        let mut conn = ReceiverConnection::new(endpoint_id, convert::accepted_kinds());
+        let handled = flows.handle(
+            &CancellationToken::new(),
+            &mut conn,
+            Delivered::Message(TelemetryMessage::OpenStream(OpenStream { stream })),
+        );
+        assert!(matches!(handled, Handled::Done { .. }), "{handled:?}");
+        assert_eq!(db.endpoint_streams(ENTRY_ID).unwrap().len(), 1);
+        drop(flows);
+
+        // The next generation cannot read the `entry_id` when it starts.
+        db.put_cf_for_test(ENDPOINT_ENTRY_CF, b"entry_id", b"short")
+            .expect("raw write");
+        let list = Arc::new(EndpointList::new(LEASE));
+        list.load_entry_id(&db);
+        let flows = Arc::new(EndpointFlows::new(db.clone()));
+        flows.load();
+        assert_eq!(list.state().entry_id, None);
+
+        // Then it can, and the stream of the stored `entry_id` is built.
+        db.put_cf_for_test(ENDPOINT_ENTRY_CF, b"entry_id", ENTRY_ID.as_bytes())
+            .expect("raw write");
+        assert_eq!(flows.entry_id(), Some(ENTRY_ID));
+        assert_eq!(list.state().entry_id, None, "the list's copy stays");
+
+        list.apply(
+            &encode(&full(1, Vec::new())),
+            &OTHER_ENTRY_ID.to_string(),
+            &flows,
+        )
+        .await
+        .expect("the new entry_id applies");
+        assert!(
+            db.endpoint_streams(ENTRY_ID).unwrap().is_empty(),
+            "the replaced entry_id's stream states are forgotten"
+        );
+        assert_eq!(db.endpoint_entry_id().unwrap(), Some(OTHER_ENTRY_ID));
+        assert_eq!(flows.entry_id(), Some(OTHER_ENTRY_ID));
+        assert_eq!(list.state().entry_id, Some(OTHER_ENTRY_ID));
     }
 
     /// Connections completing `hello` while an update removes or suspends
