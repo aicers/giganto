@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use giganto_client::ingest::{
     Packet,
-    log::{Log, OpLog, OpLogLevel, SecuLog},
+    log::{Auditd, Journald, Log, OpLog, OpLogLevel, SecuLog, WindowsEventLog},
     netflow::{Netflow5, Netflow9},
     network::{
         Bootp, Conn, DceRpc, Dhcp, Dns, Ftp, Http, Icmp, Kerberos, Ldap, MalformedDns, Mqtt, Nfs,
@@ -10,9 +10,10 @@ use giganto_client::ingest::{
     },
     statistics::Statistics,
     sysmon::{
-        DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-        ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+        CreateRemoteThread, DnsEvent, DriverLoad, FileCreate, FileCreateStreamHash,
+        FileCreationTimeChanged, FileDelete, FileDeleteDetected, ImageLoaded, NetworkConnection,
+        PipeEvent, ProcessAccess, ProcessCreate, ProcessTampering, ProcessTerminated,
+        RawAccessRead, RegistryKeyValueRename, RegistryObjectAddDel, RegistryValueSet,
     },
     timeseries::PeriodicTimeSeries,
 };
@@ -1106,3 +1107,84 @@ impl EventFilter for SecuLog {
         Some(self.contents.clone())
     }
 }
+
+/// Implements `EventFilter` for a Sysmon kind that carries no address, port,
+/// log level or contents and is filtered by its agent ID.
+macro_rules! impl_sysmon_agent_event_filter {
+    ($($ty:ty => $data_type:literal),* $(,)?) => {
+        $(
+            impl EventFilter for $ty {
+                fn data_type(&self) -> String {
+                    $data_type.to_string()
+                }
+                fn orig_addr(&self) -> Option<IpAddr> {
+                    None
+                }
+                fn resp_addr(&self) -> Option<IpAddr> {
+                    None
+                }
+                fn orig_port(&self) -> Option<u16> {
+                    None
+                }
+                fn resp_port(&self) -> Option<u16> {
+                    None
+                }
+                fn log_level(&self) -> Option<String> {
+                    None
+                }
+                fn log_contents(&self) -> Option<String> {
+                    None
+                }
+                fn agent_id(&self) -> Option<String> {
+                    Some(self.agent_id.clone())
+                }
+            }
+        )*
+    };
+}
+
+impl_sysmon_agent_event_filter!(
+    DriverLoad => "driver load",
+    CreateRemoteThread => "create remote thread",
+    RawAccessRead => "raw access read",
+    ProcessAccess => "process access",
+    RegistryObjectAddDel => "registry object add del",
+);
+
+/// Implements `EventFilter` for an endpoint log kind, which carries no
+/// address, port, log level, contents or agent ID.
+macro_rules! impl_endpoint_log_event_filter {
+    ($($ty:ty => $data_type:literal),* $(,)?) => {
+        $(
+            impl EventFilter for $ty {
+                fn data_type(&self) -> String {
+                    $data_type.to_string()
+                }
+                fn orig_addr(&self) -> Option<IpAddr> {
+                    None
+                }
+                fn resp_addr(&self) -> Option<IpAddr> {
+                    None
+                }
+                fn orig_port(&self) -> Option<u16> {
+                    None
+                }
+                fn resp_port(&self) -> Option<u16> {
+                    None
+                }
+                fn log_level(&self) -> Option<String> {
+                    None
+                }
+                fn log_contents(&self) -> Option<String> {
+                    None
+                }
+            }
+        )*
+    };
+}
+
+impl_endpoint_log_event_filter!(
+    WindowsEventLog => "endpoint windows event log",
+    Journald => "endpoint journald",
+    Auditd => "endpoint auditd",
+);

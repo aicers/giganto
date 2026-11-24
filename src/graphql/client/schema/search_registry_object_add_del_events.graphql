@@ -1,0 +1,3 @@
+query SearchRegistryObjectAddDelEvents($filter: SearchFilter!) {
+  searchRegistryObjectAddDelEvents(filter: $filter)
+}

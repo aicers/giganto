@@ -1,0 +1,3 @@
+query SearchCreateRemoteThreadEvents($filter: SearchFilter!) {
+  searchCreateRemoteThreadEvents(filter: $filter)
+}

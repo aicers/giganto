@@ -47,6 +47,10 @@ query SysmonEvents(
           parentImage
           parentCommandLine
           parentUser
+          endpoint {
+            ...EndpointHeaderFields
+          }
+          logonIdFull
         }
         ... on FileCreationTimeChangedEvent {
           time
@@ -59,6 +63,9 @@ query SysmonEvents(
           creationUtcTime
           previousCreationUtcTime
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on NetworkConnectionEvent {
           time
@@ -80,6 +87,9 @@ query SysmonEvents(
           destinationHostname
           destinationPort
           destinationPortName
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on ProcessTerminatedEvent {
           time
@@ -89,6 +99,9 @@ query SysmonEvents(
           processId
           image
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on ImageLoadedEvent {
           time
@@ -108,6 +121,9 @@ query SysmonEvents(
           signature
           signatureStatus
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on FileCreateEvent {
           time
@@ -119,6 +135,9 @@ query SysmonEvents(
           targetFilename
           creationUtcTime
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on RegistryValueSetEvent {
           time
@@ -131,6 +150,9 @@ query SysmonEvents(
           targetObject
           details
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on RegistryKeyValueRenameEvent {
           time
@@ -143,6 +165,9 @@ query SysmonEvents(
           targetObject
           newName
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on FileCreateStreamHashEvent {
           time
@@ -156,6 +181,9 @@ query SysmonEvents(
           hash
           contents
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on PipeEventEvent {
           time
@@ -167,6 +195,9 @@ query SysmonEvents(
           pipeName
           image
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on DnsEventEvent {
           time
@@ -179,6 +210,9 @@ query SysmonEvents(
           queryResults
           image
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on FileDeleteEvent {
           time
@@ -192,6 +226,9 @@ query SysmonEvents(
           hashes
           isExecutable
           archived
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on ProcessTamperingEvent {
           time
@@ -202,6 +239,9 @@ query SysmonEvents(
           image
           tamperType
           user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
         ... on FileDeleteDetectedEvent {
           time
@@ -214,8 +254,112 @@ query SysmonEvents(
           targetFilename
           hashes
           isExecutable
+          endpoint {
+            ...EndpointHeaderFields
+          }
+        }
+        ... on DriverLoadEvent {
+          time
+          agentName
+          agentId
+          imageLoaded
+          hashes
+          signed
+          signature
+          signatureStatus
+          endpoint {
+            ...EndpointHeaderFields
+          }
+        }
+        ... on CreateRemoteThreadEvent {
+          time
+          agentName
+          agentId
+          sourceProcessGuid
+          sourceProcessId
+          sourceImage
+          targetProcessGuid
+          targetProcessId
+          targetImage
+          newThreadId
+          startAddress
+          startModule
+          startFunction
+          sourceUser
+          targetUser
+          endpoint {
+            ...EndpointHeaderFields
+          }
+        }
+        ... on RawAccessReadEvent {
+          time
+          agentName
+          agentId
+          processGuid
+          processId
+          image
+          device
+          user
+          endpoint {
+            ...EndpointHeaderFields
+          }
+        }
+        ... on ProcessAccessEvent {
+          time
+          agentName
+          agentId
+          sourceProcessGuid
+          sourceProcessId
+          sourceThreadId
+          sourceImage
+          targetProcessGuid
+          targetProcessId
+          targetImage
+          grantedAccess
+          callTrace
+          sourceUser
+          targetUser
+          endpoint {
+            ...EndpointHeaderFields
+          }
+        }
+        ... on RegistryObjectAddDelEvent {
+          time
+          agentName
+          agentId
+          eventType
+          processGuid
+          processId
+          image
+          targetObject
+          user
+          endpoint {
+            ...EndpointHeaderFields
+          }
         }
       }
     }
   }
+}
+
+fragment EndpointHeaderFields on EndpointHeader {
+  endpointId
+  stream
+  seq
+  eventTime
+  collectedAt
+  clockOffset {
+    offsetMs
+    uncertaintyMs
+    measuredAt
+  }
+  hostname
+  ips
+  defaultRouteIp
+  netStateSource
+  osFamily
+  osVersion
+  collectionMode
+  processKey
+  schema
 }

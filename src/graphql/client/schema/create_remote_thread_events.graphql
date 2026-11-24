@@ -1,0 +1,67 @@
+query CreateRemoteThreadEvents(
+  $filter: SysmonEventFilter!
+  $after: String
+  $before: String
+  $first: Int
+  $last: Int
+) {
+  createRemoteThreadEvents(
+    filter: $filter
+    after: $after
+    before: $before
+    first: $first
+    last: $last
+  ) {
+    pageInfo {
+      hasPreviousPage
+      hasNextPage
+      startCursor
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        time
+        agentName
+        agentId
+        sourceProcessGuid
+        sourceProcessId
+        sourceImage
+        targetProcessGuid
+        targetProcessId
+        targetImage
+        newThreadId
+        startAddress
+        startModule
+        startFunction
+        sourceUser
+        targetUser
+        endpoint {
+          ...EndpointHeaderFields
+        }
+      }
+    }
+  }
+}
+
+fragment EndpointHeaderFields on EndpointHeader {
+  endpointId
+  stream
+  seq
+  eventTime
+  collectedAt
+  clockOffset {
+    offsetMs
+    uncertaintyMs
+    measuredAt
+  }
+  hostname
+  ips
+  defaultRouteIp
+  netStateSource
+  osFamily
+  osVersion
+  collectionMode
+  processKey
+  schema
+}

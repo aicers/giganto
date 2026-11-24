@@ -31,7 +31,32 @@ query RegistryKeyRenameEvents(
         targetObject
         newName
         user
+        endpoint {
+          ...EndpointHeaderFields
+        }
       }
     }
   }
+}
+
+fragment EndpointHeaderFields on EndpointHeader {
+  endpointId
+  stream
+  seq
+  eventTime
+  collectedAt
+  clockOffset {
+    offsetMs
+    uncertaintyMs
+    measuredAt
+  }
+  hostname
+  ips
+  defaultRouteIp
+  netStateSource
+  osFamily
+  osVersion
+  collectionMode
+  processKey
+  schema
 }

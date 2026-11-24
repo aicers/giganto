@@ -5,6 +5,7 @@ use std::{
 
 use crate::graphql::tests::TestSchema;
 
+pub(crate) mod endpoint;
 mod fixtures;
 use fixtures::{
     insert_dns_event, insert_file_create_event, insert_file_create_stream_hash_event,

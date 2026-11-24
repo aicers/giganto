@@ -21,7 +21,7 @@ use anyhow::{Context, Result, anyhow, bail};
 pub use giganto_client::ingest::network::{Conn, Http, Ntlm, Smtp, Ssh, Tls};
 use giganto_client::ingest::{
     Packet,
-    log::{Log, OpLog, SecuLog},
+    log::{Auditd, Journald, Log, OpLog, SecuLog, WindowsEventLog},
     netflow::{Netflow5, Netflow9},
     network::{
         Bootp, DceRpc, Dhcp, Dns, Ftp, Icmp, Kerberos, Ldap, MalformedDns as ClientMalformedDns,
@@ -29,9 +29,10 @@ use giganto_client::ingest::{
     },
     statistics::Statistics,
     sysmon::{
-        DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-        FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate,
-        ProcessTampering, ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+        CreateRemoteThread, DnsEvent, DriverLoad, FileCreate, FileCreateStreamHash,
+        FileCreationTimeChanged, FileDelete, FileDeleteDetected, ImageLoaded, NetworkConnection,
+        PipeEvent, ProcessAccess, ProcessCreate, ProcessTampering, ProcessTerminated,
+        RawAccessRead, RegistryKeyValueRename, RegistryObjectAddDel, RegistryValueSet,
     },
     timeseries::PeriodicTimeSeries,
 };
@@ -55,7 +56,7 @@ use crate::{
     graphql::{RawEventFilter, TIMESTAMP_SIZE},
 };
 
-pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
+pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 50] = [
     "conn",
     "dns",
     "malformed_dns",
@@ -98,6 +99,14 @@ pub(crate) const RAW_DATA_COLUMN_FAMILY_NAMES: [&str; 42] = [
     "netflow5",
     "netflow9",
     "seculog",
+    "driver load",
+    "create remote thread",
+    "raw access read",
+    "process access",
+    "registry object add del",
+    "endpoint windows event log",
+    "endpoint journald",
+    "endpoint auditd",
 ];
 const META_DATA_COLUMN_FAMILY_NAMES: [&str; 1] = ["sensors"];
 const CUSTOMER_DELETION_JOBS_CF: &str = "customer deletion jobs";
@@ -916,6 +925,86 @@ impl Database {
     /// Returns the store for security log.
     pub fn secu_log_store(&self) -> Result<RawEventStore<'_, SecuLog>> {
         let cf = self.get_cf_handle("seculog")?;
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
+    }
+
+    /// Returns the store for sysmon event `DriverLoad` (#6).
+    pub fn driver_load_store(&self) -> Result<RawEventStore<'_, DriverLoad>> {
+        let cf = self.get_cf_handle("driver load")?;
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
+    }
+
+    /// Returns the store for sysmon event `CreateRemoteThread` (#8).
+    pub fn create_remote_thread_store(&self) -> Result<RawEventStore<'_, CreateRemoteThread>> {
+        let cf = self.get_cf_handle("create remote thread")?;
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
+    }
+
+    /// Returns the store for sysmon event `RawAccessRead` (#9).
+    pub fn raw_access_read_store(&self) -> Result<RawEventStore<'_, RawAccessRead>> {
+        let cf = self.get_cf_handle("raw access read")?;
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
+    }
+
+    /// Returns the store for sysmon event `ProcessAccess` (#10).
+    pub fn process_access_store(&self) -> Result<RawEventStore<'_, ProcessAccess>> {
+        let cf = self.get_cf_handle("process access")?;
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
+    }
+
+    /// Returns the store for sysmon event `RegistryObjectAddDel` (#12).
+    pub fn registry_object_add_del_store(&self) -> Result<RawEventStore<'_, RegistryObjectAddDel>> {
+        let cf = self.get_cf_handle("registry object add del")?;
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
+    }
+
+    /// Returns the store for endpoint Windows event log records.
+    pub fn endpoint_windows_event_log_store(&self) -> Result<RawEventStore<'_, WindowsEventLog>> {
+        let cf = self.get_cf_handle("endpoint windows event log")?;
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
+    }
+
+    /// Returns the store for endpoint journald records.
+    pub fn endpoint_journald_store(&self) -> Result<RawEventStore<'_, Journald>> {
+        let cf = self.get_cf_handle("endpoint journald")?;
+        Ok(RawEventStore::new(
+            &self.db,
+            cf,
+            self.append_unique_max_probes,
+        ))
+    }
+
+    /// Returns the store for endpoint auditd records.
+    pub fn endpoint_auditd_store(&self) -> Result<RawEventStore<'_, Auditd>> {
+        let cf = self.get_cf_handle("endpoint auditd")?;
         Ok(RawEventStore::new(
             &self.db,
             cf,
@@ -2400,8 +2489,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        APPEND_UNIQUE_MAX_PROBES, BoundaryIter, Database, DbOptions, RAW_DATA_COLUMN_FAMILY_NAMES,
-        RawEventStore, StorageKey, UniqueAppend,
+        APPEND_UNIQUE_MAX_PROBES, BoundaryIter, Database, DbOptions, NON_STANDARD_CFS,
+        RAW_DATA_COLUMN_FAMILY_NAMES, RawEventStore, StorageKey, UniqueAppend,
         deletion_coordination::CustomerDeletionCoordinator, read_compression_metadata,
         store_compression_metadata,
     };
@@ -4088,6 +4177,81 @@ mod tests {
         cancel.cancel();
         let result = task.await.unwrap();
         assert!(result.is_ok());
+    }
+
+    /// The record column families of the endpoint record kinds.
+    const ENDPOINT_RECORD_CFS: [&str; 8] = [
+        "driver load",
+        "create remote thread",
+        "raw access read",
+        "process access",
+        "registry object add del",
+        "endpoint windows event log",
+        "endpoint journald",
+        "endpoint auditd",
+    ];
+
+    #[test]
+    fn endpoint_record_column_families_are_raw_data_with_stores() {
+        let (_dir, db) = setup_db();
+        for cf in ENDPOINT_RECORD_CFS {
+            assert!(RAW_DATA_COLUMN_FAMILY_NAMES.contains(&cf), "{cf}");
+            assert!(!NON_STANDARD_CFS.contains(&cf), "{cf}");
+            assert!(db.get_cf_handle(cf).is_ok(), "{cf}");
+        }
+        assert!(db.driver_load_store().is_ok());
+        assert!(db.create_remote_thread_store().is_ok());
+        assert!(db.raw_access_read_store().is_ok());
+        assert!(db.process_access_store().is_ok());
+        assert!(db.registry_object_add_del_store().is_ok());
+        assert!(db.endpoint_windows_event_log_store().is_ok());
+        assert!(db.endpoint_journald_store().is_ok());
+        assert!(db.endpoint_auditd_store().is_ok());
+    }
+
+    #[tokio::test]
+    async fn retain_periodically_deletes_expired_endpoint_records() {
+        let (_dir, db) = setup_db();
+        let sensor = "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0";
+        register_sensor(&db, sensor);
+
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let retention_period = std::time::Duration::from_secs(3600);
+        let key = |timestamp: i64| {
+            StorageKey::builder()
+                .start_key(sensor)
+                .end_key(timestamp)
+                .build()
+                .key()
+        };
+        let old_key = key(now_nanos - 7_200_000_000_000);
+        let new_key = key(now_nanos - 60_000_000_000);
+        for cf in ENDPOINT_RECORD_CFS {
+            let handle = db.get_cf_handle(cf).unwrap();
+            db.db.put_cf(handle, &old_key, b"old").unwrap();
+            db.db.put_cf(handle, &new_key, b"new").unwrap();
+        }
+
+        let (cancel, task) = spawn_retention(&db, retention_period, retention_period);
+
+        let deadline = std::time::Instant::now() + STORAGE_TEST_TIMEOUT;
+        for cf in ENDPOINT_RECORD_CFS {
+            let handle = db.get_cf_handle(cf).unwrap();
+            while db.db.get_cf(handle, &old_key).unwrap().is_some() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "cleanup did not delete old {cf} records"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(
+                db.db.get_cf(handle, &new_key).unwrap().is_some(),
+                "cleanup kept recent {cf} records"
+            );
+        }
+
+        cancel.cancel();
+        assert!(task.await.unwrap().is_ok());
     }
 
     /// Starts a retention task over `db` that runs a pass every 10ms.

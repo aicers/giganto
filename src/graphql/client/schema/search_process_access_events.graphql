@@ -1,0 +1,3 @@
+query SearchProcessAccessEvents($filter: SearchFilter!) {
+  searchProcessAccessEvents(filter: $filter)
+}

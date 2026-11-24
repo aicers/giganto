@@ -5,9 +5,10 @@ use async_graphql::{
     connection::{Connection, Edge, query},
 };
 use giganto_client::ingest::sysmon::{
-    DnsEvent, FileCreate, FileCreateStreamHash, FileCreationTimeChanged, FileDelete,
-    FileDeleteDetected, ImageLoaded, NetworkConnection, PipeEvent, ProcessCreate, ProcessTampering,
-    ProcessTerminated, RegistryKeyValueRename, RegistryValueSet,
+    CreateRemoteThread, DnsEvent, DriverLoad, FileCreate, FileCreateStreamHash,
+    FileCreationTimeChanged, FileDelete, FileDeleteDetected, ImageLoaded, NetworkConnection,
+    PipeEvent, ProcessAccess, ProcessCreate, ProcessTampering, ProcessTerminated, RawAccessRead,
+    RegistryKeyValueRename, RegistryObjectAddDel, RegistryValueSet,
 };
 #[cfg(feature = "cluster")]
 use giganto_proc_macro::ConvertGraphQLEdgesNode;
@@ -16,11 +17,11 @@ use graphql_client::GraphQLQuery;
 
 use super::{
     Engine, FromKeyValue, RawEventFilter, SearchFilter, SysmonEventFilter, base64_engine,
-    check_agent_id, collect_exist_times, events_vec_in_cluster, get_peekable_iter,
-    get_time_from_key, handle_paged_events, min_max_time, paged_events_in_cluster,
+    check_agent_id, collect_exist_times, endpoint_header::EndpointHeader, events_vec_in_cluster,
+    get_peekable_iter, get_time_from_key, handle_paged_events, min_max_time,
+    paged_events_in_cluster,
 };
 use crate::datetime::DateTime;
-use crate::graphql::StringNumberU32;
 #[cfg(feature = "cluster")]
 use crate::graphql::client::{
     cluster::{
@@ -30,27 +31,36 @@ use crate::graphql::client::{
         impl_from_giganto_time_range_struct_for_graphql_client,
     },
     derives::{
-        DnsQueryEvents, FileCreateEvents, FileCreateStreamHashEvents, FileCreateTimeEvents,
-        FileDeleteDetectedEvents, FileDeleteEvents, ImageLoadEvents, NetworkConnectEvents,
-        PipeEventEvents, ProcessCreateEvents, ProcessTamperEvents, ProcessTerminateEvents,
-        RegistryKeyRenameEvents, RegistryValueSetEvents, SearchDnsQueryEvents,
-        SearchFileCreateEvents, SearchFileCreateStreamHashEvents, SearchFileCreateTimeEvents,
-        SearchFileDeleteDetectedEvents, SearchFileDeleteEvents, SearchImageLoadEvents,
-        SearchNetworkConnectEvents, SearchPipeEventEvents, SearchProcessCreateEvents,
-        SearchProcessTamperEvents, SearchProcessTerminateEvents, SearchRegistryKeyRenameEvents,
-        SearchRegistryValueSetEvents, SysmonEvents as SysmonEventsDerive, dns_query_events,
-        file_create_events, file_create_stream_hash_events, file_create_time_events,
-        file_delete_detected_events, file_delete_events, image_load_events, network_connect_events,
-        pipe_event_events, process_create_events, process_tamper_events, process_terminate_events,
-        registry_key_rename_events, registry_value_set_events, search_dns_query_events,
-        search_file_create_events, search_file_create_stream_hash_events,
-        search_file_create_time_events, search_file_delete_detected_events,
-        search_file_delete_events, search_image_load_events, search_network_connect_events,
-        search_pipe_event_events, search_process_create_events, search_process_tamper_events,
-        search_process_terminate_events, search_registry_key_rename_events,
+        CreateRemoteThreadEvents, DnsQueryEvents, DriverLoadEvents, FileCreateEvents,
+        FileCreateStreamHashEvents, FileCreateTimeEvents, FileDeleteDetectedEvents,
+        FileDeleteEvents, ImageLoadEvents, NetworkConnectEvents, PipeEventEvents,
+        ProcessAccessEvents, ProcessCreateEvents, ProcessTamperEvents, ProcessTerminateEvents,
+        RawAccessReadEvents, RegistryKeyRenameEvents, RegistryObjectAddDelEvents,
+        RegistryValueSetEvents, SearchCreateRemoteThreadEvents, SearchDnsQueryEvents,
+        SearchDriverLoadEvents, SearchFileCreateEvents, SearchFileCreateStreamHashEvents,
+        SearchFileCreateTimeEvents, SearchFileDeleteDetectedEvents, SearchFileDeleteEvents,
+        SearchImageLoadEvents, SearchNetworkConnectEvents, SearchPipeEventEvents,
+        SearchProcessAccessEvents, SearchProcessCreateEvents, SearchProcessTamperEvents,
+        SearchProcessTerminateEvents, SearchRawAccessReadEvents, SearchRegistryKeyRenameEvents,
+        SearchRegistryObjectAddDelEvents, SearchRegistryValueSetEvents,
+        SysmonEvents as SysmonEventsDerive, create_remote_thread_events, dns_query_events,
+        driver_load_events, file_create_events, file_create_stream_hash_events,
+        file_create_time_events, file_delete_detected_events, file_delete_events,
+        image_load_events, network_connect_events, pipe_event_events, process_access_events,
+        process_create_events, process_tamper_events, process_terminate_events,
+        raw_access_read_events, registry_key_rename_events, registry_object_add_del_events,
+        registry_value_set_events, search_create_remote_thread_events, search_dns_query_events,
+        search_driver_load_events, search_file_create_events,
+        search_file_create_stream_hash_events, search_file_create_time_events,
+        search_file_delete_detected_events, search_file_delete_events, search_image_load_events,
+        search_network_connect_events, search_pipe_event_events, search_process_access_events,
+        search_process_create_events, search_process_tamper_events,
+        search_process_terminate_events, search_raw_access_read_events,
+        search_registry_key_rename_events, search_registry_object_add_del_events,
         search_registry_value_set_events, sysmon_events as sysmon_events_module,
     },
 };
+use crate::graphql::{StringNumberU32, StringNumberU64};
 use crate::storage::{Database, FilteredIter, KeyExtractor};
 
 #[derive(Default)]
@@ -126,6 +136,17 @@ struct ProcessCreateEvent {
     parent_image: String,
     parent_command_line: String,
     parent_user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
+    /// Full Logon ID
+    ///
+    /// The 64-bit logon ID an endpoint sent; `logonId` then holds it if it fits
+    /// in 32 bits and `4294967295` otherwise. `null` unless an endpoint sent
+    /// the record.
+    logon_id_full: Option<StringNumberU64>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -145,6 +166,11 @@ struct FileCreationTimeChangedEvent {
     creation_utc_time: DateTime,
     previous_creation_utc_time: DateTime,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -173,6 +199,11 @@ struct NetworkConnectionEvent {
     destination_hostname: String,
     destination_port: u16,
     destination_port_name: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -189,6 +220,11 @@ struct ProcessTerminatedEvent {
     process_id: StringNumberU32,
     image: String,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -215,6 +251,11 @@ struct ImageLoadedEvent {
     signature: String,
     signature_status: String,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -233,6 +274,11 @@ struct FileCreateEvent {
     target_filename: String,
     creation_utc_time: DateTime,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -252,6 +298,11 @@ struct RegistryValueSetEvent {
     target_object: String,
     details: String,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -271,6 +322,11 @@ struct RegistryKeyValueRenameEvent {
     target_object: String,
     new_name: String,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -291,6 +347,11 @@ struct FileCreateStreamHashEvent {
     hash: Vec<String>,
     contents: String,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -309,6 +370,11 @@ struct PipeEventEvent {
     pipe_name: String,
     image: String,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -328,6 +394,11 @@ struct DnsEventEvent {
     query_results: Vec<String>, // divided by ';'
     image: String,
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -348,6 +419,11 @@ struct FileDeleteEvent {
     hashes: Vec<String>,
     is_executable: bool,
     archived: bool,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -365,6 +441,11 @@ struct ProcessTamperingEvent {
     image: String,
     tamper_type: String, // type
     user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[derive(SimpleObject, Debug)]
@@ -384,6 +465,135 @@ struct FileDeleteDetectedEvent {
     target_filename: String,
     hashes: Vec<String>,
     is_executable: bool,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
+}
+
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    driver_load_events::DriverLoadEventsDriverLoadEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnDriverLoadEvent
+]))]
+struct DriverLoadEvent {
+    time: DateTime,
+    agent_name: String,
+    agent_id: String,
+    image_loaded: String,
+    hashes: Vec<String>,
+    signed: bool,
+    signature: String,
+    signature_status: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
+}
+
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    create_remote_thread_events::CreateRemoteThreadEventsCreateRemoteThreadEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnCreateRemoteThreadEvent
+]))]
+struct CreateRemoteThreadEvent {
+    time: DateTime,
+    agent_name: String,
+    agent_id: String,
+    source_process_guid: String,
+    source_process_id: StringNumberU32,
+    source_image: String,
+    target_process_guid: String,
+    target_process_id: StringNumberU32,
+    target_image: String,
+    new_thread_id: StringNumberU32,
+    start_address: String,
+    start_module: String,
+    start_function: String,
+    source_user: String,
+    target_user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
+}
+
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    raw_access_read_events::RawAccessReadEventsRawAccessReadEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRawAccessReadEvent
+]))]
+struct RawAccessReadEvent {
+    time: DateTime,
+    agent_name: String,
+    agent_id: String,
+    process_guid: String,
+    process_id: StringNumberU32,
+    image: String,
+    device: String,
+    user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
+}
+
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    process_access_events::ProcessAccessEventsProcessAccessEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnProcessAccessEvent
+]))]
+struct ProcessAccessEvent {
+    time: DateTime,
+    agent_name: String,
+    agent_id: String,
+    source_process_guid: String,
+    source_process_id: StringNumberU32,
+    source_thread_id: StringNumberU32,
+    source_image: String,
+    target_process_guid: String,
+    target_process_id: StringNumberU32,
+    target_image: String,
+    granted_access: StringNumberU64,
+    call_trace: String,
+    source_user: String,
+    target_user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
+}
+
+#[derive(SimpleObject, Debug)]
+#[cfg_attr(feature = "cluster", derive(ConvertGraphQLEdgesNode))]
+#[cfg_attr(feature = "cluster", graphql_client_type(names = [
+    registry_object_add_del_events::RegistryObjectAddDelEventsRegistryObjectAddDelEventsEdgesNode,
+    sysmon_events_module::SysmonEventsSysmonEventsEdgesNodeOnRegistryObjectAddDelEvent
+]))]
+struct RegistryObjectAddDelEvent {
+    time: DateTime,
+    agent_name: String,
+    agent_id: String,
+    event_type: String,
+    process_guid: String,
+    process_id: StringNumberU32,
+    image: String,
+    target_object: String,
+    user: String,
+    /// Endpoint Header
+    ///
+    /// `null` unless an endpoint sent the record.
+    #[cfg_attr(feature = "cluster", graphql_client_type(recursive_into = true))]
+    endpoint: Option<EndpointHeader>,
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -403,6 +613,11 @@ enum SysmonEvents {
     FileDeleteEvent(FileDeleteEvent),
     ProcessTamperingEvent(ProcessTamperingEvent),
     FileDeleteDetectedEvent(FileDeleteDetectedEvent),
+    DriverLoadEvent(DriverLoadEvent),
+    CreateRemoteThreadEvent(CreateRemoteThreadEvent),
+    RawAccessReadEvent(RawAccessReadEvent),
+    ProcessAccessEvent(ProcessAccessEvent),
+    RegistryObjectAddDelEvent(RegistryObjectAddDelEvent),
 }
 
 #[cfg(feature = "cluster")]
@@ -423,12 +638,20 @@ impl From<sysmon_events_module::SysmonEventsSysmonEventsEdgesNode> for SysmonEve
             sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::FileDeleteEvent(event) => SysmonEvents::FileDeleteEvent(event.into()),
             sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::ProcessTamperingEvent(event) => SysmonEvents::ProcessTamperingEvent(event.into()),
             sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::FileDeleteDetectedEvent(event) => SysmonEvents::FileDeleteDetectedEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::DriverLoadEvent(event) => SysmonEvents::DriverLoadEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::CreateRemoteThreadEvent(event) => SysmonEvents::CreateRemoteThreadEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::RawAccessReadEvent(event) => SysmonEvents::RawAccessReadEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::ProcessAccessEvent(event) => SysmonEvents::ProcessAccessEvent(event.into()),
+            sysmon_events_module::SysmonEventsSysmonEventsEdgesNode::RegistryObjectAddDelEvent(event) => SysmonEvents::RegistryObjectAddDelEvent(event.into()),
         }
     }
 }
 
 macro_rules! from_key_value {
-    ($to:ty, $from:ty, $($plain_field:ident),* ; $( $str_num_field:ident ),* ) => {
+    (
+        $to:ty, $from:ty, $($plain_field:ident),* ; $( $str_num_field:ident ),*
+        $(; $( $opt_num_field:ident ),* )?
+    ) => {
         impl FromKeyValue<$from> for $to {
             fn from_key_value(key: &[u8], val: $from) -> Result<Self> {
                 let time = get_time_from_key(key)?;
@@ -440,9 +663,13 @@ macro_rules! from_key_value {
                     $(
                         $plain_field: val.$plain_field,
                     )*
-                     $(
+                    $(
                         $str_num_field: val.$str_num_field.into(),
                     )*
+                    $($(
+                        $opt_num_field: val.$opt_num_field.map(Into::into),
+                    )*)?
+                    endpoint: val.endpoint.map(Into::into),
                 })
             }
         }
@@ -471,7 +698,8 @@ from_key_value!(
     process_id,
     logon_id,
     terminal_session_id,
-    parent_process_id
+    parent_process_id;
+    logon_id_full
 );
 
 impl FromKeyValue<FileCreationTimeChanged> for FileCreationTimeChangedEvent {
@@ -489,6 +717,7 @@ impl FromKeyValue<FileCreationTimeChanged> for FileCreationTimeChangedEvent {
             previous_creation_utc_time: DateTime::from_timestamp_nanos(
                 val.previous_creation_utc_time,
             ),
+            endpoint: val.endpoint.map(Into::into),
         })
     }
 }
@@ -525,6 +754,7 @@ impl FromKeyValue<FileCreate> for FileCreateEvent {
             user: val.user,
             process_id: val.process_id.into(),
             creation_utc_time: DateTime::from_timestamp_nanos(val.creation_utc_time),
+            endpoint: val.endpoint.map(Into::into),
         })
     }
 }
@@ -565,6 +795,7 @@ impl FromKeyValue<FileCreateStreamHash> for FileCreateStreamHashEvent {
             user: val.user,
             process_id: val.process_id.into(),
             creation_utc_time: DateTime::from_timestamp_nanos(val.creation_utc_time),
+            endpoint: val.endpoint.map(Into::into),
         })
     }
 }
@@ -644,6 +875,101 @@ impl FromKeyValue<NetworkConnection> for NetworkConnectionEvent {
             destination_hostname: value.destination_hostname,
             destination_port: value.destination_port,
             destination_port_name: value.destination_port_name,
+            endpoint: value.endpoint.map(Into::into),
+        })
+    }
+}
+
+impl FromKeyValue<DriverLoad> for DriverLoadEvent {
+    fn from_key_value(key: &[u8], val: DriverLoad) -> Result<Self> {
+        Ok(Self {
+            time: get_time_from_key(key)?,
+            agent_name: val.agent_name,
+            agent_id: val.agent_id,
+            image_loaded: val.image_loaded,
+            hashes: val.hashes,
+            signed: val.signed,
+            signature: val.signature,
+            signature_status: val.signature_status,
+            endpoint: val.endpoint.map(Into::into),
+        })
+    }
+}
+
+impl FromKeyValue<CreateRemoteThread> for CreateRemoteThreadEvent {
+    fn from_key_value(key: &[u8], val: CreateRemoteThread) -> Result<Self> {
+        Ok(Self {
+            time: get_time_from_key(key)?,
+            agent_name: val.agent_name,
+            agent_id: val.agent_id,
+            source_process_guid: val.source_process_guid,
+            source_process_id: val.source_process_id.into(),
+            source_image: val.source_image,
+            target_process_guid: val.target_process_guid,
+            target_process_id: val.target_process_id.into(),
+            target_image: val.target_image,
+            new_thread_id: val.new_thread_id.into(),
+            start_address: val.start_address,
+            start_module: val.start_module,
+            start_function: val.start_function,
+            source_user: val.source_user,
+            target_user: val.target_user,
+            endpoint: val.endpoint.map(Into::into),
+        })
+    }
+}
+
+impl FromKeyValue<RawAccessRead> for RawAccessReadEvent {
+    fn from_key_value(key: &[u8], val: RawAccessRead) -> Result<Self> {
+        Ok(Self {
+            time: get_time_from_key(key)?,
+            agent_name: val.agent_name,
+            agent_id: val.agent_id,
+            process_guid: val.process_guid,
+            process_id: val.process_id.into(),
+            image: val.image,
+            device: val.device,
+            user: val.user,
+            endpoint: val.endpoint.map(Into::into),
+        })
+    }
+}
+
+impl FromKeyValue<ProcessAccess> for ProcessAccessEvent {
+    fn from_key_value(key: &[u8], val: ProcessAccess) -> Result<Self> {
+        Ok(Self {
+            time: get_time_from_key(key)?,
+            agent_name: val.agent_name,
+            agent_id: val.agent_id,
+            source_process_guid: val.source_process_guid,
+            source_process_id: val.source_process_id.into(),
+            source_thread_id: val.source_thread_id.into(),
+            source_image: val.source_image,
+            target_process_guid: val.target_process_guid,
+            target_process_id: val.target_process_id.into(),
+            target_image: val.target_image,
+            granted_access: val.granted_access.into(),
+            call_trace: val.call_trace,
+            source_user: val.source_user,
+            target_user: val.target_user,
+            endpoint: val.endpoint.map(Into::into),
+        })
+    }
+}
+
+impl FromKeyValue<RegistryObjectAddDel> for RegistryObjectAddDelEvent {
+    fn from_key_value(key: &[u8], val: RegistryObjectAddDel) -> Result<Self> {
+        Ok(Self {
+            time: get_time_from_key(key)?,
+            agent_name: val.agent_name,
+            agent_id: val.agent_id,
+            event_type: val.event_type,
+            process_guid: val.process_guid,
+            process_id: val.process_id.into(),
+            image: val.image,
+            target_object: val.target_object,
+            user: val.user,
+            endpoint: val.endpoint.map(Into::into),
         })
     }
 }
@@ -840,6 +1166,76 @@ async fn handle_file_delete_detected_events(
 ) -> Result<Connection<String, FileDeleteDetectedEvent>> {
     let db = ctx.data::<Database>()?;
     let store = db.file_delete_detected_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_driver_load_events(
+    ctx: &Context<'_>,
+    filter: SysmonEventFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, DriverLoadEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.driver_load_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_create_remote_thread_events(
+    ctx: &Context<'_>,
+    filter: SysmonEventFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, CreateRemoteThreadEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.create_remote_thread_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_raw_access_read_events(
+    ctx: &Context<'_>,
+    filter: SysmonEventFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, RawAccessReadEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.raw_access_read_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_process_access_events(
+    ctx: &Context<'_>,
+    filter: SysmonEventFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, ProcessAccessEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.process_access_store()?;
+
+    handle_paged_events(store, filter, after, before, first, last).await
+}
+
+async fn handle_registry_object_add_del_events(
+    ctx: &Context<'_>,
+    filter: SysmonEventFilter,
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+) -> Result<Connection<String, RegistryObjectAddDelEvent>> {
+    let db = ctx.data::<Database>()?;
+    let store = db.registry_object_add_del_store()?;
 
     handle_paged_events(store, filter, after, before, first, last).await
 }
@@ -1606,6 +2002,277 @@ impl SysmonQuery {
         )
     }
 
+    async fn driver_load_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SysmonEventFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, DriverLoadEvent>> {
+        let handler = handle_driver_load_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            DriverLoadEvents,
+            driver_load_events::Variables,
+            driver_load_events::ResponseData,
+            driver_load_events
+        )
+    }
+
+    async fn create_remote_thread_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SysmonEventFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, CreateRemoteThreadEvent>> {
+        let handler = handle_create_remote_thread_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            CreateRemoteThreadEvents,
+            create_remote_thread_events::Variables,
+            create_remote_thread_events::ResponseData,
+            create_remote_thread_events
+        )
+    }
+
+    async fn raw_access_read_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SysmonEventFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, RawAccessReadEvent>> {
+        let handler = handle_raw_access_read_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            RawAccessReadEvents,
+            raw_access_read_events::Variables,
+            raw_access_read_events::ResponseData,
+            raw_access_read_events
+        )
+    }
+
+    async fn process_access_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SysmonEventFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, ProcessAccessEvent>> {
+        let handler = handle_process_access_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            ProcessAccessEvents,
+            process_access_events::Variables,
+            process_access_events::ResponseData,
+            process_access_events
+        )
+    }
+
+    async fn registry_object_add_del_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SysmonEventFilter,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<i32>,
+        last: Option<i32>,
+    ) -> Result<Connection<String, RegistryObjectAddDelEvent>> {
+        let handler = handle_registry_object_add_del_events;
+
+        paged_events_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            after,
+            before,
+            first,
+            last,
+            handler,
+            RegistryObjectAddDelEvents,
+            registry_object_add_del_events::Variables,
+            registry_object_add_del_events::ResponseData,
+            registry_object_add_del_events
+        )
+    }
+
+    async fn search_driver_load_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime>> {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.driver_load_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
+            Ok(collect_exist_times::<DriverLoad>(&exist_data, filter))
+        };
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            handler,
+            SearchDriverLoadEvents,
+            search_driver_load_events::Variables,
+            search_driver_load_events::ResponseData,
+            search_driver_load_events
+        )
+    }
+
+    async fn search_create_remote_thread_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime>> {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.create_remote_thread_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
+            Ok(collect_exist_times::<CreateRemoteThread>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            handler,
+            SearchCreateRemoteThreadEvents,
+            search_create_remote_thread_events::Variables,
+            search_create_remote_thread_events::ResponseData,
+            search_create_remote_thread_events
+        )
+    }
+
+    async fn search_raw_access_read_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime>> {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.raw_access_read_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
+            Ok(collect_exist_times::<RawAccessRead>(&exist_data, filter))
+        };
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            handler,
+            SearchRawAccessReadEvents,
+            search_raw_access_read_events::Variables,
+            search_raw_access_read_events::ResponseData,
+            search_raw_access_read_events
+        )
+    }
+
+    async fn search_process_access_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime>> {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.process_access_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
+            Ok(collect_exist_times::<ProcessAccess>(&exist_data, filter))
+        };
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            handler,
+            SearchProcessAccessEvents,
+            search_process_access_events::Variables,
+            search_process_access_events::ResponseData,
+            search_process_access_events
+        )
+    }
+
+    async fn search_registry_object_add_del_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: SearchFilter,
+    ) -> Result<Vec<DateTime>> {
+        let handler = |ctx: &Context<'_>, filter: &SearchFilter| {
+            let db = ctx.data::<Database>()?;
+            let store = db.registry_object_add_del_store()?;
+            let exist_data = store
+                .batched_multi_get_from_ts(&filter.sensor, &filter.times)
+                .into_iter()
+                .collect::<BTreeSet<(DateTime, Vec<u8>)>>();
+            Ok(collect_exist_times::<RegistryObjectAddDel>(
+                &exist_data,
+                filter,
+            ))
+        };
+        events_vec_in_cluster!(
+            ctx,
+            filter,
+            filter.sensor,
+            handler,
+            SearchRegistryObjectAddDelEvents,
+            search_registry_object_add_del_events::Variables,
+            search_registry_object_add_del_events::ResponseData,
+            search_registry_object_add_del_events
+        )
+    }
+
     async fn sysmon_events(
         &self,
         ctx: &Context<'_>,
@@ -1776,6 +2443,51 @@ async fn handle_sysmon_events(
                 last,
             )?;
 
+            let (driver_load_iter, _) = get_peekable_iter(
+                &db.driver_load_store()?,
+                &filter,
+                after.as_deref(),
+                before.as_deref(),
+                first,
+                last,
+            )?;
+
+            let (create_remote_thread_iter, _) = get_peekable_iter(
+                &db.create_remote_thread_store()?,
+                &filter,
+                after.as_deref(),
+                before.as_deref(),
+                first,
+                last,
+            )?;
+
+            let (raw_access_read_iter, _) = get_peekable_iter(
+                &db.raw_access_read_store()?,
+                &filter,
+                after.as_deref(),
+                before.as_deref(),
+                first,
+                last,
+            )?;
+
+            let (process_access_iter, _) = get_peekable_iter(
+                &db.process_access_store()?,
+                &filter,
+                after.as_deref(),
+                before.as_deref(),
+                first,
+                last,
+            )?;
+
+            let (registry_object_add_del_iter, _) = get_peekable_iter(
+                &db.registry_object_add_del_store()?,
+                &filter,
+                after.as_deref(),
+                before.as_deref(),
+                first,
+                last,
+            )?;
+
             let mut is_forward: bool = true;
             if before.is_some() || last.is_some() {
                 is_forward = false;
@@ -1796,6 +2508,11 @@ async fn handle_sysmon_events(
                 file_delete_iter,
                 process_tamper_iter,
                 file_delete_detected_iter,
+                driver_load_iter,
+                create_remote_thread_iter,
+                raw_access_read_iter,
+                process_access_iter,
+                registry_object_add_del_iter,
                 size,
                 is_forward,
                 after.is_some(),
@@ -1824,6 +2541,13 @@ fn sysmon_connection(
     mut file_delete_iter: Peekable<FilteredIter<FileDelete, SysmonEventFilter>>,
     mut process_tamper_iter: Peekable<FilteredIter<ProcessTampering, SysmonEventFilter>>,
     mut file_delete_detected_iter: Peekable<FilteredIter<FileDeleteDetected, SysmonEventFilter>>,
+    mut driver_load_iter: Peekable<FilteredIter<DriverLoad, SysmonEventFilter>>,
+    mut create_remote_thread_iter: Peekable<FilteredIter<CreateRemoteThread, SysmonEventFilter>>,
+    mut raw_access_read_iter: Peekable<FilteredIter<RawAccessRead, SysmonEventFilter>>,
+    mut process_access_iter: Peekable<FilteredIter<ProcessAccess, SysmonEventFilter>>,
+    mut registry_object_add_del_iter: Peekable<
+        FilteredIter<RegistryObjectAddDel, SysmonEventFilter>,
+    >,
     size: usize,
     is_forward: bool,
     has_after: bool,
@@ -1849,6 +2573,11 @@ fn sysmon_connection(
     let mut file_delete_data = file_delete_iter.next();
     let mut process_tamper_data = process_tamper_iter.next();
     let mut file_delete_detected_data = file_delete_detected_iter.next();
+    let mut driver_load_data = driver_load_iter.next();
+    let mut create_remote_thread_data = create_remote_thread_iter.next();
+    let mut raw_access_read_data = raw_access_read_iter.next();
+    let mut process_access_data = process_access_iter.next();
+    let mut registry_object_add_del_data = registry_object_add_del_iter.next();
 
     loop {
         if (result_vec.len() >= size)
@@ -1865,7 +2594,12 @@ fn sysmon_connection(
                 && dns_query_data.is_none()
                 && file_delete_data.is_none()
                 && process_tamper_data.is_none()
-                && file_delete_detected_data.is_none())
+                && file_delete_detected_data.is_none()
+                && driver_load_data.is_none()
+                && create_remote_thread_data.is_none()
+                && raw_access_read_data.is_none()
+                && process_access_data.is_none()
+                && registry_object_add_del_data.is_none())
         {
             if process_create_data.is_some()
                 || file_create_time_data.is_some()
@@ -1881,6 +2615,11 @@ fn sysmon_connection(
                 || file_delete_data.is_some()
                 || process_tamper_data.is_some()
                 || file_delete_detected_data.is_some()
+                || driver_load_data.is_some()
+                || create_remote_thread_data.is_some()
+                || raw_access_read_data.is_some()
+                || process_access_data.is_some()
+                || registry_object_add_del_data.is_some()
             {
                 has_next_value = true;
             }
@@ -1977,6 +2716,36 @@ fn sysmon_connection(
             min_max_time(is_forward)
         };
 
+        let driver_load_ts = if let Some((ref key, _)) = driver_load_data {
+            get_time_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let create_remote_thread_ts = if let Some((ref key, _)) = create_remote_thread_data {
+            get_time_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let raw_access_read_ts = if let Some((ref key, _)) = raw_access_read_data {
+            get_time_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let process_access_ts = if let Some((ref key, _)) = process_access_data {
+            get_time_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
+        let registry_object_add_del_ts = if let Some((ref key, _)) = registry_object_add_del_data {
+            get_time_from_key(key)?
+        } else {
+            min_max_time(is_forward)
+        };
+
         let selected = if is_forward {
             time.min(file_create_time_ts)
                 .min(process_create_ts)
@@ -1992,6 +2761,11 @@ fn sysmon_connection(
                 .min(file_delete_ts)
                 .min(process_tamper_ts)
                 .min(file_delete_detected_ts)
+                .min(driver_load_ts)
+                .min(create_remote_thread_ts)
+                .min(raw_access_read_ts)
+                .min(process_access_ts)
+                .min(registry_object_add_del_ts)
         } else {
             time.max(file_create_time_ts)
                 .max(process_create_ts)
@@ -2007,6 +2781,11 @@ fn sysmon_connection(
                 .max(file_delete_ts)
                 .max(process_tamper_ts)
                 .max(file_delete_detected_ts)
+                .max(driver_load_ts)
+                .max(create_remote_thread_ts)
+                .max(raw_access_read_ts)
+                .max(process_access_ts)
+                .max(registry_object_add_del_ts)
         };
 
         match selected {
@@ -2160,6 +2939,61 @@ fn sysmon_connection(
                     file_delete_detected_data = file_delete_detected_iter.next();
                 }
             }
+            _ if selected == driver_load_ts => {
+                if let Some((key, value)) = driver_load_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::DriverLoadEvent(DriverLoadEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    driver_load_data = driver_load_iter.next();
+                }
+            }
+            _ if selected == create_remote_thread_ts => {
+                if let Some((key, value)) = create_remote_thread_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::CreateRemoteThreadEvent(
+                            CreateRemoteThreadEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    create_remote_thread_data = create_remote_thread_iter.next();
+                }
+            }
+            _ if selected == raw_access_read_ts => {
+                if let Some((key, value)) = raw_access_read_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::RawAccessReadEvent(RawAccessReadEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    raw_access_read_data = raw_access_read_iter.next();
+                }
+            }
+            _ if selected == process_access_ts => {
+                if let Some((key, value)) = process_access_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::ProcessAccessEvent(ProcessAccessEvent::from_key_value(
+                            &key, value,
+                        )?),
+                    ));
+                    process_access_data = process_access_iter.next();
+                }
+            }
+            _ if selected == registry_object_add_del_ts => {
+                if let Some((key, value)) = registry_object_add_del_data {
+                    result_vec.push(Edge::new(
+                        base64_engine.encode(&key),
+                        SysmonEvents::RegistryObjectAddDelEvent(
+                            RegistryObjectAddDelEvent::from_key_value(&key, value)?,
+                        ),
+                    ));
+                    registry_object_add_del_data = registry_object_add_del_iter.next();
+                }
+            }
             _ => {}
         }
     }
@@ -2192,7 +3026,12 @@ impl_from_giganto_time_range_struct_for_graphql_client!(
     process_tamper_events,
     process_terminate_events,
     registry_key_rename_events,
-    registry_value_set_events
+    registry_value_set_events,
+    driver_load_events,
+    create_remote_thread_events,
+    raw_access_read_events,
+    process_access_events,
+    registry_object_add_del_events
 );
 
 #[cfg(feature = "cluster")]
@@ -2210,7 +3049,12 @@ impl_from_giganto_range_structs_for_graphql_client!(
     search_process_tamper_events,
     search_process_terminate_events,
     search_registry_key_rename_events,
-    search_registry_value_set_events
+    search_registry_value_set_events,
+    search_driver_load_events,
+    search_create_remote_thread_events,
+    search_raw_access_read_events,
+    search_process_access_events,
+    search_registry_object_add_del_events
 );
 
 #[cfg(feature = "cluster")]
@@ -2229,7 +3073,12 @@ impl_from_giganto_sysmon_event_filter_for_graphql_client!(
     process_tamper_events,
     process_terminate_events,
     registry_key_rename_events,
-    registry_value_set_events
+    registry_value_set_events,
+    driver_load_events,
+    create_remote_thread_events,
+    raw_access_read_events,
+    process_access_events,
+    registry_object_add_del_events
 );
 
 #[cfg(feature = "cluster")]
@@ -2247,7 +3096,12 @@ impl_from_giganto_search_filter_for_graphql_client!(
     search_process_tamper_events,
     search_process_terminate_events,
     search_registry_key_rename_events,
-    search_registry_value_set_events
+    search_registry_value_set_events,
+    search_driver_load_events,
+    search_create_remote_thread_events,
+    search_raw_access_read_events,
+    search_process_access_events,
+    search_registry_object_add_del_events
 );
 
 #[cfg(test)]

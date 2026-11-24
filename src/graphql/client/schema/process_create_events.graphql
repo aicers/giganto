@@ -45,7 +45,33 @@ query ProcessCreateEvents(
         parentImage
         parentCommandLine
         parentUser
+        endpoint {
+          ...EndpointHeaderFields
+        }
+        logonIdFull
       }
     }
   }
+}
+
+fragment EndpointHeaderFields on EndpointHeader {
+  endpointId
+  stream
+  seq
+  eventTime
+  collectedAt
+  clockOffset {
+    offsetMs
+    uncertaintyMs
+    measuredAt
+  }
+  hostname
+  ips
+  defaultRouteIp
+  netStateSource
+  osFamily
+  osVersion
+  collectionMode
+  processKey
+  schema
 }

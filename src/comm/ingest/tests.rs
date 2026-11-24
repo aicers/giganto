@@ -1230,6 +1230,8 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 parent_command_line: "pcmd".to_string(),
                 agent_id: "agent_id".to_string(),
                 parent_user: "puser".to_string(),
+                endpoint: None,
+                logon_id_full: None,
             },
         ),
         single_event_case(
@@ -1245,6 +1247,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 previous_creation_utc_time: 900,
                 agent_id: "agent_id".to_string(),
                 user: "user".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1269,6 +1272,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 destination_port: 80,
                 destination_port_name: "http".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1281,6 +1285,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 image: "image".to_string(),
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1303,6 +1308,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 signature_status: "status".to_string(),
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1317,6 +1323,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 creation_utc_time: 1000,
                 agent_id: "agent_id".to_string(),
                 user: "user".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1332,6 +1339,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 event_type: "type".to_string(),
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1347,6 +1355,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 event_type: "type".to_string(),
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1363,6 +1372,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 contents: "contents".to_string(),
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1377,6 +1387,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 event_type: "type".to_string(),
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1392,6 +1403,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 image: "image".to_string(),
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1408,6 +1420,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 is_executable: true,
                 archived: true,
                 user: "user".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1421,6 +1434,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 tamper_type: "type".to_string(),
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1436,6 +1450,7 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 is_executable: true,
                 user: "user".to_string(),
                 agent_id: "agent_id".to_string(),
+                endpoint: None,
             },
         ),
         single_event_case(
@@ -1778,6 +1793,51 @@ fn http_event(uri: &str) -> Vec<u8> {
         state: String::new(),
     })
     .expect("serialize http event")
+}
+
+/// Sends `record` as one batch of `kind` and asserts that it is stored
+/// byte for byte and reads back as sent.
+async fn assert_ingested_unchanged<T>(
+    harness: &TestHarness,
+    kind: RawEventKind,
+    store: &RawEventStore<'_, T>,
+    record: &T,
+) where
+    T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    let (mut send, mut recv) = harness.open_bi().await;
+    send_record_header(&mut send, kind).await.unwrap();
+    let timestamp = next_timestamp();
+    let bytes = bincode::serialize(record).unwrap();
+    let ack = send_batch_and_receive_ack(&mut send, &mut recv, &[(timestamp, bytes.clone())]).await;
+    assert_eq!(ack, timestamp);
+
+    let stored = stored_timestamps_and_values(store);
+    assert_eq!(stored, vec![(timestamp, bytes)]);
+    assert_eq!(&bincode::deserialize::<T>(&stored[0].1).unwrap(), record);
+    send.finish().expect("failed to shutdown stream");
+}
+
+#[tokio::test]
+async fn sysmon_records_with_an_endpoint_header_are_stored_unchanged() {
+    use crate::graphql::endpoint_header::fixtures::{file_create, file_delete, full_header};
+
+    let harness = TestHarness::with_ack_transmission(1).await;
+    assert_ingested_unchanged(
+        &harness,
+        RawEventKind::FileCreate,
+        &harness.db.file_create_store().unwrap(),
+        &file_create(Some(full_header())),
+    )
+    .await;
+    assert_ingested_unchanged(
+        &harness,
+        RawEventKind::FileDelete,
+        &harness.db.file_delete_store().unwrap(),
+        &file_delete(Some(full_header())),
+    )
+    .await;
+    harness.shutdown(b"done").await;
 }
 
 #[tokio::test]
