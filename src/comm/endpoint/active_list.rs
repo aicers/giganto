@@ -28,7 +28,8 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use jiff::Timestamp;
 use senta_protocol::{
     auth::active_list::{
-        ActiveList, ApplyError, ConnectionId, DuplicateKey, Lease, ListUpdate, Standing, allowed,
+        ActiveList, ApplyError, ConnectionId, ConnectionStanding, DuplicateKey, Lease, ListUpdate,
+        Standing, allowed,
     },
     connection::{ConnectionKind, Frame, Hello, Message, StandingVerdict},
 };
@@ -41,6 +42,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use super::receiver::{EndpointFlows, FlowsGuard};
 use crate::storage::{Database, endpoint::DuplicateKeyEvent};
 
 /// What the node answers an update or a confirmation with.
@@ -282,27 +284,49 @@ impl EndpointList {
     }
 
     /// Applies `update`, the standard base64 of a [`ListUpdate`]'s CBOR,
-    /// with `entry_id` as the node's `entry_id`, storing it in `database`
-    /// when it changes.
+    /// with `entry_id` as the node's `entry_id`. When the `entry_id`
+    /// changes, it is stored and the telemetry streams of `flows` move to it.
     ///
-    /// It answers only once every connection it closes has stopped
-    /// processing messages.
+    /// The list is changed on a blocking thread holding the `ReceiverStream`
+    /// lock of `flows`, taken first, and then the list's, so a batch write in
+    /// progress finishes before any connection is closed; both are released
+    /// before the call waits. It answers only once every connection it
+    /// closes has stopped processing messages.
     ///
     /// # Errors
     ///
     /// Returns the refusal when the update or the `entry_id` is invalid, the
     /// list refuses the update, or the new `entry_id` cannot be stored. None
-    /// of them changes the list, its version or the `entry_id`, though a
-    /// lease expiry the call reveals is still delivered.
+    /// of them changes the list, its version, the `entry_id` or the
+    /// streams, though a lease expiry the call reveals is still delivered.
     pub(crate) async fn apply(
-        &self,
+        self: &Arc<Self>,
         update: &str,
         entry_id: &str,
-        database: &Database,
+        flows: &Arc<EndpointFlows>,
     ) -> Result<ListAck, ApplyRefusal> {
         let decoded = decode_update(update);
         let parsed = parse_entry_id(entry_id);
-        let (result, closed) = self.apply_locked(decoded, parsed, database);
+        let list = Arc::clone(self);
+        let flows = Arc::clone(flows);
+        let applied = tokio::task::spawn_blocking(move || {
+            let mut flows = flows.lock();
+            list.apply_locked(decoded, parsed, &mut flows)
+        })
+        .await;
+        let (result, closed) = match applied {
+            Ok(applied) => applied,
+            Err(e) => {
+                error!("Endpoint active list: the update was not applied: {e}");
+                let refusal = ApplyRefusal {
+                    failure: ApplyFailure::Store(anyhow::anyhow!(
+                        "the update was interrupted: {e}"
+                    )),
+                    version: self.lock().list.version(),
+                };
+                return Err(refusal);
+            }
+        };
         wait_stopped(&closed).await;
         result
     }
@@ -311,7 +335,7 @@ impl EndpointList {
         &self,
         update: Result<ListUpdate, String>,
         entry_id: Result<Uuid, String>,
-        database: &Database,
+        flows: &mut FlowsGuard<'_>,
     ) -> (Result<ListAck, ApplyRefusal>, Vec<Arc<Closing>>) {
         let mut closed = Vec::new();
         let mut inner = self.lock();
@@ -348,7 +372,7 @@ impl EndpointList {
             }
         };
         if let Some(before) = before
-            && let Err(e) = database.put_endpoint_entry_id(entry_id)
+            && let Err(e) = flows.change_entry_id(entry_id)
         {
             error!("Endpoint active list: {e:#}; the update is not applied");
             inner.list = before;
@@ -496,6 +520,10 @@ pub(super) struct Admission {
     /// The duplicate key its registration revealed, with the wall-clock time
     /// it was revealed at.
     pub(super) duplicate_key: Option<(Timestamp, DuplicateKey)>,
+    /// The endpoint id of the list entry an admitted connection's key
+    /// matched: the source of everything it sends. It is present exactly
+    /// when `verdict` admits the connection.
+    pub(super) endpoint_id: Option<Uuid>,
 }
 
 impl PendingConnection {
@@ -531,6 +559,7 @@ impl PendingConnection {
             return Admission {
                 verdict: StandingVerdict::Close,
                 duplicate_key: None,
+                endpoint_id: None,
             };
         }
         if inner.entry_id.is_none() || inner.entry_id != self.entry_id {
@@ -542,6 +571,7 @@ impl PendingConnection {
             return Admission {
                 verdict: StandingVerdict::Close,
                 duplicate_key: None,
+                endpoint_id: None,
             };
         }
         let now = self.list.now();
@@ -557,9 +587,20 @@ impl PendingConnection {
             );
             inner.close(replaced, CloseCommand::Silent, &mut closed);
         }
-        let standing = inner.list.standing(&self.spki_sha256, now).standing;
-        let verdict = allowed(&standing, ConnectionKind::Telemetry, Hello::T).to_standing_verdict();
-        if standing == Standing::Active {
+        let ConnectionStanding { standing, identity } = inner.list.standing(&self.spki_sha256, now);
+        // Only an active standing matched to a list entry is admitted: the
+        // entry's endpoint id is the source of everything the connection
+        // sends, and an active standing always comes from one.
+        let endpoint_id = identity
+            .filter(|_| standing == Standing::Active)
+            .map(|identity| identity.endpoint_id);
+        let verdict =
+            match allowed(&standing, ConnectionKind::Telemetry, Hello::T).to_standing_verdict() {
+                StandingVerdict::Accept if endpoint_id.is_none() => StandingVerdict::Close,
+                verdict => verdict,
+            };
+        let endpoint_id = endpoint_id.filter(|_| verdict == StandingVerdict::Accept);
+        if endpoint_id.is_some() {
             inner.connections.insert(self.id, Arc::clone(&self.closing));
         } else {
             debug!(
@@ -571,6 +612,7 @@ impl PendingConnection {
         Admission {
             verdict,
             duplicate_key,
+            endpoint_id,
         }
     }
 }
@@ -796,6 +838,7 @@ pub(super) mod tests {
     struct Fixture {
         list: Arc<EndpointList>,
         db: Database,
+        flows: Arc<EndpointFlows>,
         _dir: TempDir,
     }
 
@@ -805,9 +848,11 @@ pub(super) mod tests {
             let db = Database::open(dir.path(), &DbOptions::default()).expect("open the database");
             let list = Arc::new(EndpointList::new(LEASE));
             list.load_entry_id(&db);
+            let flows = Arc::new(EndpointFlows::new(db.clone()));
             Self {
                 list,
                 db,
+                flows,
                 _dir: dir,
             }
         }
@@ -818,7 +863,7 @@ pub(super) mod tests {
             entry_id: Uuid,
         ) -> Result<ListAck, ApplyRefusal> {
             self.list
-                .apply(&encode(update), &entry_id.to_string(), &self.db)
+                .apply(&encode(update), &entry_id.to_string(), &self.flows)
                 .await
         }
 
@@ -1094,7 +1139,7 @@ pub(super) mod tests {
 
         let update = encode(&diff(1, 2, Vec::new(), vec![1]));
         let entry_id = ENTRY_ID.to_string();
-        let mut apply = std::pin::pin!(fixture.list.apply(&update, &entry_id, &fixture.db));
+        let mut apply = std::pin::pin!(fixture.list.apply(&update, &entry_id, &fixture.flows));
         assert!(
             tokio::time::timeout(Duration::from_secs(60), &mut apply)
                 .await
@@ -1165,7 +1210,7 @@ pub(super) mod tests {
         ] {
             let refusal = fixture
                 .list
-                .apply(update, entry_id, &fixture.db)
+                .apply(update, entry_id, &fixture.flows)
                 .await
                 .expect_err("an invalid argument is refused");
             if invalid_update {
@@ -1451,36 +1496,76 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn an_entry_id_that_cannot_be_stored_leaves_everything_as_it_was() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut db = Database::open(dir.path(), &DbOptions::default()).expect("open");
-        let list = Arc::new(EndpointList::new(LEASE));
-        list.apply(
-            &encode(&full(1, vec![entry(1, spki(1), EntryState::Active)])),
-            &ENTRY_ID.to_string(),
-            &db,
-        )
-        .await
-        .expect("a full list applies");
-        db.drop_cf_for_test(crate::storage::endpoint::ENDPOINT_ENTRY_CF)
-            .expect("drop the entry family");
-        let refusal = list
+        let fixture = Fixture::new();
+        fixture
             .apply(
-                &encode(&full(2, Vec::new())),
-                &OTHER_ENTRY_ID.to_string(),
-                &db,
+                &full(1, vec![entry(1, spki(1), EntryState::Active)]),
+                ENTRY_ID,
             )
             .await
+            .expect("a full list applies");
+        fixture.db.fail_entry_id_writes_for_test(true);
+        let refusal = fixture
+            .apply(&full(2, Vec::new()), OTHER_ENTRY_ID)
+            .await
             .expect_err("the entry_id cannot be stored");
-        assert!(matches!(refusal.failure, ApplyFailure::Store(_)));
+        assert!(
+            matches!(&refusal.failure, ApplyFailure::Store(e)
+                if format!("{e:#}").contains("injected failure writing the endpoint entry_id")),
+            "{:?}",
+            refusal.failure
+        );
         assert_eq!(refusal.version, Some(1));
         assert_eq!(
-            list.state(),
+            fixture.list.state(),
             ListState {
                 entry_id: Some(ENTRY_ID),
                 ready: true,
                 version: Some(1),
             }
         );
+        assert_eq!(fixture.db.endpoint_entry_id().unwrap(), Some(ENTRY_ID));
+        assert_eq!(fixture.flows.entry_id(), Some(ENTRY_ID));
+    }
+
+    #[tokio::test]
+    async fn an_update_whose_call_panics_is_refused_and_changes_nothing() {
+        let fixture = Fixture::new();
+        fixture
+            .apply(
+                &full(1, vec![entry(1, spki(1), EntryState::Active)]),
+                ENTRY_ID,
+            )
+            .await
+            .expect("a full list applies");
+        fixture.flows.controls().panic_next_lock();
+        let refusal = fixture
+            .apply(&full(2, Vec::new()), OTHER_ENTRY_ID)
+            .await
+            .expect_err("the call panicked");
+        assert!(
+            matches!(&refusal.failure, ApplyFailure::Store(e) if e.to_string().contains("interrupted")),
+            "{:?}",
+            refusal.failure
+        );
+        assert_eq!(refusal.version, Some(1));
+        assert_eq!(
+            fixture.list.state(),
+            ListState {
+                entry_id: Some(ENTRY_ID),
+                ready: true,
+                version: Some(1),
+            }
+        );
+        assert_eq!(fixture.db.endpoint_entry_id().unwrap(), Some(ENTRY_ID));
+        assert_eq!(fixture.flows.entry_id(), Some(ENTRY_ID));
+
+        // The next update takes the lock again.
+        fixture
+            .apply(&full(2, Vec::new()), OTHER_ENTRY_ID)
+            .await
+            .expect("the update applies");
+        assert_eq!(fixture.flows.entry_id(), Some(OTHER_ENTRY_ID));
     }
 
     #[tokio::test]
@@ -1607,6 +1692,70 @@ pub(super) mod tests {
                 version: None,
             }
         );
+    }
+
+    /// An `entry_id` read at the generation's start that failed, and
+    /// can be read again by the time a new one is applied: the stream states
+    /// of the one stored are forgotten all the same, though the list took
+    /// the `entry_id` as none.
+    #[tokio::test]
+    async fn a_new_entry_id_replaces_the_stored_one_the_list_could_not_read() {
+        use senta_protocol::telemetry::{OpenStream, ReceiverConnection, TelemetryMessage};
+
+        use crate::{
+            comm::endpoint::{
+                convert,
+                receiver::{Delivered, Handled},
+            },
+            storage::endpoint::ENDPOINT_ENTRY_CF,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        db.replace_endpoint_entry_id(ENTRY_ID, None)
+            .expect("store the entry_id");
+        let endpoint_id = Uuid::from_u128(0xe1);
+        let stream = Uuid::from_u128(0x51);
+        let flows = EndpointFlows::new(db.clone());
+        let mut conn = ReceiverConnection::new(endpoint_id, convert::accepted_kinds());
+        let handled = flows.handle(
+            &CancellationToken::new(),
+            &mut conn,
+            Delivered::Message(TelemetryMessage::OpenStream(OpenStream { stream })),
+        );
+        assert!(matches!(handled, Handled::Done { .. }), "{handled:?}");
+        assert_eq!(db.endpoint_streams(ENTRY_ID).unwrap().len(), 1);
+        drop(flows);
+
+        // The next generation cannot read the `entry_id` when it starts.
+        db.put_cf_for_test(ENDPOINT_ENTRY_CF, b"entry_id", b"short")
+            .expect("raw write");
+        let list = Arc::new(EndpointList::new(LEASE));
+        list.load_entry_id(&db);
+        let flows = Arc::new(EndpointFlows::new(db.clone()));
+        flows.load();
+        assert_eq!(list.state().entry_id, None);
+
+        // Then it can, and the stream of the stored `entry_id` is built.
+        db.put_cf_for_test(ENDPOINT_ENTRY_CF, b"entry_id", ENTRY_ID.as_bytes())
+            .expect("raw write");
+        assert_eq!(flows.entry_id(), Some(ENTRY_ID));
+        assert_eq!(list.state().entry_id, None, "the list's copy stays");
+
+        list.apply(
+            &encode(&full(1, Vec::new())),
+            &OTHER_ENTRY_ID.to_string(),
+            &flows,
+        )
+        .await
+        .expect("the new entry_id applies");
+        assert!(
+            db.endpoint_streams(ENTRY_ID).unwrap().is_empty(),
+            "the replaced entry_id's stream states are forgotten"
+        );
+        assert_eq!(db.endpoint_entry_id().unwrap(), Some(OTHER_ENTRY_ID));
+        assert_eq!(flows.entry_id(), Some(OTHER_ENTRY_ID));
+        assert_eq!(list.state().entry_id, Some(OTHER_ENTRY_ID));
     }
 
     /// Connections completing `hello` while an update removes or suspends

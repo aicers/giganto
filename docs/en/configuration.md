@@ -151,6 +151,30 @@ refused.
   the entry ID closes every endpoint connection; reconnecting endpoints get
   the new entry ID.
 
+An admitted endpoint's records are stored with its endpoint ID, a lowercase
+hyphenated UUID, as the sensor, in the same column families module ingest
+uses for each kind. They are read through the existing Sysmon and endpoint
+log queries and export, with that endpoint ID as the sensor.
+
+- Each batch is acknowledged only once its records, together with the
+  stream's acknowledgement state, are on disk; a batch that cannot be stored
+  is not acknowledged, the connection is closed, and the endpoint sends it
+  again after reconnecting.
+- Ranges an endpoint reports dropped or lost when its state was reset, and
+  records the node cannot convert, are kept as loss records. An unconvertible
+  record is not stored; the rest of its batch is.
+- Once its records are stored, an endpoint joins the node's sensor list and
+  is announced to peers, and its records are subject to retention and
+  customer data deletion like any sensor's.
+- An update that changes the entry ID makes every endpoint start new
+  streams; the loss records kept under the old entry ID stay.
+- An endpoint that moves to another node leaves its records split between
+  the old node and the new one. A query for that single sensor, such as a
+  Sysmon query or a consumer's publish range request, returns only the
+  records of the node it reached, or of the one peer holding that sensor.
+  Queries are not routed differently because of this, and the old node's
+  records remain subject to retention and customer data deletion.
+
 Endpoints trust only the root CA, while the `--cert` file holds only the node's
 leaf certificate. On this port, and only here, Giganto therefore presents the
 leaf followed by the intermediate that issued it, taken from the `--ca-certs`

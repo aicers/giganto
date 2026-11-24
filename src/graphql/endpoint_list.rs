@@ -11,10 +11,7 @@ use async_graphql::{Context, ErrorExtensions, ID, Object, Result, SimpleObject, 
 use senta_protocol::auth::active_list::ApplyError;
 
 use super::{StringNumberU64, caller::ReviewOnly};
-use crate::{
-    comm::endpoint::{ApplyFailure, ApplyRefusal, EndpointList, ListAck},
-    storage::Database,
-};
+use crate::comm::endpoint::{ApplyFailure, ApplyRefusal, EndpointFlows, EndpointList, ListAck};
 
 #[derive(Default)]
 pub(super) struct EndpointListQuery;
@@ -90,8 +87,8 @@ impl EndpointListMutation {
         entry_id: ID,
     ) -> Result<EndpointListAck> {
         let list = ctx.data::<Arc<EndpointList>>()?;
-        let database = ctx.data::<Database>()?;
-        list.apply(&update, &entry_id, database)
+        let flows = ctx.data::<Arc<EndpointFlows>>()?;
+        list.apply(&update, &entry_id, flows)
             .await
             .map(EndpointListAck::from)
             .map_err(|refusal| refusal_error(&refusal))
@@ -316,6 +313,40 @@ mod tests {
                 "a refusal changes nothing"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn an_entry_id_that_cannot_be_stored_is_refused_and_changes_nothing() {
+        let schema = TestSchema::new();
+        let response = as_review(&schema, &apply_query(&full_list(1), ENTRY_ID)).await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(
+            schema.endpoint_flows.entry_id(),
+            Some(Uuid::parse_str(ENTRY_ID).unwrap()),
+            "the first entry_id builds the stream"
+        );
+
+        schema.db.fail_entry_id_writes_for_test(true);
+        let response = as_review(&schema, &apply_query(&full_list(2), OTHER_ENTRY_ID)).await;
+        assert_eq!(
+            error_extensions(&response),
+            (Value::from("STORE_FAILED"), Value::from("1"))
+        );
+        let state = as_review(&schema, STATE_QUERY).await;
+        assert_eq!(
+            state.data,
+            value!({
+                "endpointActiveListState": { "entryId": ENTRY_ID, "ready": true, "version": "1" }
+            })
+        );
+        assert_eq!(
+            schema.endpoint_flows.entry_id(),
+            Some(Uuid::parse_str(ENTRY_ID).unwrap())
+        );
+        assert_eq!(
+            schema.db.endpoint_entry_id().unwrap(),
+            Some(Uuid::parse_str(ENTRY_ID).unwrap())
+        );
     }
 
     #[test]
