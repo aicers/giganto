@@ -546,6 +546,34 @@ fn a_batch_is_stored_with_its_stream_state_before_it_is_acknowledged() {
     assert_eq!(node.last_received(), Some(received.to_be_bytes().to_vec()));
 }
 
+/// Deleting the streams of an endpoint the stream held does not remember
+/// keeps the stream held as it was, and its endpoint goes on from where it
+/// was.
+#[test]
+fn deleting_another_endpoints_streams_keeps_the_stream_held() {
+    let node = Node::new();
+    let mut conn = node.connection();
+    node.open_stream(&mut conn, STREAM);
+    let first = process_create(ENDPOINT, STREAM, 1, BASE, "a.exe");
+    assert_eq!(
+        node.send(&mut conn, batch(STREAM, vec![first])),
+        reply(vec![ack(STREAM, 1)])
+    );
+
+    node.flows
+        .lock()
+        .delete_endpoint_streams(&[Uuid::from_u128(0xdead)])
+        .expect("delete another endpoint's streams");
+
+    assert_eq!(node.state(STREAM).map(|state| state.a), Some(1));
+    let second = process_create(ENDPOINT, STREAM, 2, BASE + 5, "b.exe");
+    assert_eq!(
+        node.send(&mut conn, batch(STREAM, vec![second])),
+        reply(vec![ack(STREAM, 2)])
+    );
+    assert_eq!(node.records().len(), 2);
+}
+
 #[test]
 fn the_stream_and_loss_records_have_their_layouts() {
     let node = Node::new();

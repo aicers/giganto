@@ -805,3 +805,429 @@ async fn a_call_waiting_for_the_lock_of_a_closed_connection_writes_nothing() {
         [ack(stream_b, 1), list_error(TelemetryError::LeaseExpired)]
     );
 }
+
+/// The node's GraphQL schema with an entry over its active list, telemetry
+/// streams, database and sensor sets, listing endpoints 1 and 2 under
+/// `KEY_A` and `KEY_B`, served over pipes: what customer data deletion and
+/// the endpoint entry share on a node.
+struct Deleting {
+    schema: Arc<TestSchema>,
+    entry: Entry,
+    token: CancellationToken,
+}
+
+/// The endpoint the deletion tests delete, listed under `KEY_A`.
+const DELETED: Uuid = Uuid::from_u128(1);
+/// The endpoint the deletion tests keep, listed under `KEY_B`.
+const KEPT: Uuid = Uuid::from_u128(2);
+const STREAM_B: Uuid = Uuid::from_u128(0x5b);
+
+impl Deleting {
+    async fn new() -> Self {
+        let schema = Arc::new(TestSchema::new_with_ingest_sensors(&[]));
+        let entries = vec![
+            entry(1, KEY_A, EntryState::Active),
+            entry(2, KEY_B, EntryState::Active),
+        ];
+        schema
+            .endpoint_list
+            .apply(
+                &encode(&full(1, entries)),
+                &ENTRY_ID.to_string(),
+                &schema.endpoint_flows,
+            )
+            .await
+            .expect("the full list applies");
+        let entry = Entry {
+            list: Arc::clone(&schema.endpoint_list),
+            database: schema.db.clone(),
+            flows: Arc::clone(&schema.endpoint_flows),
+            sensors: Arc::new(EndpointSensors::new(
+                schema.db.clone(),
+                schema.ingest_sensors.clone(),
+                schema.runtime_ingest_sensors.clone(),
+                None,
+            )),
+        };
+        Self {
+            schema,
+            entry,
+            token: CancellationToken::new(),
+        }
+    }
+
+    fn db(&self) -> &Database {
+        &self.schema.db
+    }
+
+    async fn connect(&self, key: [u8; 32]) -> (Telemetry<DuplexStream>, JoinHandle<()>) {
+        Telemetry::piped(&self.entry, key, &self.token).await
+    }
+
+    /// Serves a connection from `key` over a pipe that says `hello`, and
+    /// returns what the entry sent it before it closed.
+    async fn hello_answer(&self, key: [u8; 32]) -> Vec<TelemetryMessage> {
+        let (mut side, mut entry_side) = tokio::io::duplex(SERVER_ACTIVE_RECEIVE_LIMIT as usize);
+        let task = tokio::spawn({
+            let entry = self.entry.clone();
+            let token = self.token.clone();
+            async move {
+                let remote = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+                run_admitted_by_list(&mut entry_side, remote, key, entry, &token).await;
+            }
+        });
+        let (_endpoint, hello) = hello(ENTRY_ID);
+        side.write_all(hello.as_bytes())
+            .await
+            .expect("send the hello");
+        let answer = Telemetry::new(side).until_closed().await;
+        task.await.expect("the connection task joins");
+        answer
+    }
+
+    /// Sends REview's deletion of `endpoint_ids` for `customer_id`, naming
+    /// no service FQDN, and returns its answer.
+    async fn delete(&self, customer_id: u32, endpoint_ids: &[Uuid]) -> String {
+        delete_as_review(&self.schema, customer_id, endpoint_ids).await
+    }
+
+    /// Waits until the deletion job of `customer_id` has succeeded.
+    async fn until_succeeded(&self, customer_id: u32) {
+        tokio::time::timeout(IO_TIMEOUT, async {
+            loop {
+                let job = self
+                    .db()
+                    .customer_deletion_job_store()
+                    .unwrap()
+                    .get(customer_id)
+                    .unwrap();
+                if let Some(job) = job
+                    && job.status != crate::storage::CustomerDataDeletionStatus::InProgress
+                {
+                    assert_eq!(
+                        job.status,
+                        crate::storage::CustomerDataDeletionStatus::Succeeded,
+                        "{:?}",
+                        job.error
+                    );
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the deletion ends in time");
+    }
+
+    /// Returns whether a record of `endpoint_id` is stored at `timestamp` in
+    /// `column_family`.
+    fn has_record(&self, column_family: &str, endpoint_id: Uuid, timestamp: i64) -> bool {
+        self.db()
+            .get_cf_for_test(
+                column_family,
+                &record_key(&endpoint_id.to_string(), timestamp),
+            )
+            .unwrap()
+            .is_some()
+    }
+
+    fn sensors_row(&self, endpoint_id: Uuid) -> Option<Vec<u8>> {
+        self.db()
+            .get_cf_for_test(SENSORS_CF, endpoint_id.to_string().as_bytes())
+            .unwrap()
+    }
+}
+
+/// Sends REview's deletion of `endpoint_ids` for `customer_id` to `schema`,
+/// naming no service FQDN, and returns its answer.
+async fn delete_as_review(schema: &TestSchema, customer_id: u32, endpoint_ids: &[Uuid]) -> String {
+    let ids = endpoint_ids
+        .iter()
+        .map(|id| format!("\"{id}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        r#"mutation {{ deleteCustomerData(serviceFqdnList: [], customerId: "{customer_id}",
+            requestFromPeer: true, endpointIds: [{ids}]) }}"#
+    );
+    let response = schema
+        .execute_as(Some(crate::graphql::caller::REVIEW_SERVICE), &query)
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    response.data.into_json().expect("JSON data")["deleteCustomerData"]
+        .as_str()
+        .expect("a status")
+        .to_owned()
+}
+
+/// REview deletes a customer whose endpoint is active and connected: the
+/// endpoint is blocked first, its connection closed, and then its records,
+/// its losses under every `entry_id`, its events, its last received time,
+/// its stream states and its sensor entries go, while another endpoint's
+/// data stays and its stream goes on. Sending the deletion again changes
+/// nothing.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One scene: what is deleted, what is kept.
+async fn a_deleted_endpoint_is_blocked_then_all_its_data_goes() {
+    let node = Deleting::new().await;
+    let db = node.db().clone();
+    let (mut a, a_task) = node.connect(KEY_A).await;
+    a.open_stream(STREAM).await;
+    a.send_batch(
+        STREAM,
+        vec![
+            process_create(DELETED, STREAM, 1, BASE, "a.exe"),
+            windows_event_log(DELETED, STREAM, 2, BASE + 1, "Security"),
+        ],
+    )
+    .await;
+    assert_eq!(a.next().await, ack(STREAM, 2));
+    let (mut b, _b_task) = node.connect(KEY_B).await;
+    b.open_stream(STREAM_B).await;
+    b.send_batch(
+        STREAM_B,
+        vec![process_create(KEPT, STREAM_B, 1, BASE, "b.exe")],
+    )
+    .await;
+    assert_eq!(b.next().await, ack(STREAM_B, 1));
+
+    // A loss under an `entry_id` the node had before, and an event each.
+    let earlier_entry = Uuid::from_u128(0xea71);
+    for endpoint_id in [DELETED, KEPT] {
+        db.write_endpoint_batch(crate::storage::endpoint::EndpointBatch {
+            entry_id: earlier_entry,
+            received_ns: BASE,
+            changes: vec![crate::storage::endpoint::EndpointChange::Loss {
+                endpoint_id,
+                stream: STREAM,
+                from: 1,
+                to: 3,
+                reason: crate::storage::endpoint::LossReason::Dropped,
+                detail: "queue_full".to_owned(),
+            }],
+            received_from: Vec::new(),
+        })
+        .expect("write a loss");
+        db.append_endpoint_duplicate_key(
+            BASE,
+            endpoint_id,
+            &crate::storage::endpoint::DuplicateKeyEvent {
+                spki_sha256: [1; 32],
+                addresses: vec!["192.0.2.1".parse().unwrap()],
+                replacements: 4,
+            },
+        )
+        .expect("write an event");
+    }
+    let deleted = DELETED.to_string();
+    assert!(node.schema.ingest_sensors.read().await.contains(&deleted));
+    assert!(
+        node.schema
+            .runtime_ingest_sensors
+            .read()
+            .await
+            .contains_key(&deleted)
+    );
+
+    assert_eq!(node.delete(7, &[DELETED]).await, "ACCEPTED");
+    assert!(db.is_endpoint_blocked(DELETED).unwrap());
+    assert_eq!(
+        a.until_closed().await,
+        [list_error(TelemetryError::NotListed)]
+    );
+    // The closed connection's teardown, its `EndpointSensors::remove`
+    // included, has run once the task ends.
+    a_task.await.expect("the connection task joins");
+    node.until_succeeded(7).await;
+
+    let assert_deleted = || {
+        assert!(!node.has_record(PROCESS_CREATE_CF, DELETED, BASE));
+        assert!(!node.has_record("endpoint windows event log", DELETED, BASE + 1));
+        assert!(node.has_record(PROCESS_CREATE_CF, KEPT, BASE));
+        let losses = db.endpoint_losses_since(-1).unwrap();
+        assert!(!losses.is_empty(), "the other endpoint's losses stay");
+        assert!(losses.iter().all(|loss| loss.endpoint_id == KEPT));
+        let events = db.endpoint_events_since(-1).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].endpoint_id, KEPT);
+        let (last_received, _) = db.endpoint_last_received(None, 10).unwrap();
+        assert_eq!(
+            last_received.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            [KEPT]
+        );
+        let streams = db.endpoint_streams(ENTRY_ID).unwrap();
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams[0].0, (KEPT, STREAM_B));
+        assert_eq!(node.sensors_row(DELETED), None, "not written back");
+        assert!(node.sensors_row(KEPT).is_some());
+        assert!(!db.holds_endpoint_data(&[DELETED]).unwrap());
+    };
+    assert_deleted();
+    assert!(!node.schema.ingest_sensors.read().await.contains(&deleted));
+    assert!(
+        !node
+            .schema
+            .runtime_ingest_sensors
+            .read()
+            .await
+            .contains_key(&deleted)
+    );
+    assert!(
+        node.schema
+            .ingest_sensors
+            .read()
+            .await
+            .contains(&KEPT.to_string())
+    );
+
+    // The other endpoint's stream stays open: its connection goes on
+    // sending on it without opening it again.
+    b.send_batch(
+        STREAM_B,
+        vec![process_create(KEPT, STREAM_B, 2, BASE + 1, "b.exe")],
+    )
+    .await;
+    assert_eq!(b.next().await, ack(STREAM_B, 2));
+    assert_eq!(stored_seqs(&db, &KEPT.to_string(), STREAM_B), [1, 2]);
+
+    // The deleted endpoint cannot come back.
+    assert_eq!(
+        node.hello_answer(KEY_A).await,
+        [list_error(TelemetryError::NotListed)]
+    );
+
+    // The same deletion again ends where the first did.
+    assert_eq!(node.delete(7, &[DELETED]).await, "ALREADY_COMPLETED");
+    assert_deleted();
+    assert_eq!(
+        db.endpoint_deletion_job(7).unwrap(),
+        Some(vec![DELETED]),
+        "the job's endpoint ids are stored"
+    );
+}
+
+/// A batch write in progress when the deletion arrives finishes before the
+/// request is answered and before anything is deleted, and is then deleted
+/// with the rest; nothing of the endpoint is written after it.
+#[tokio::test]
+async fn deletion_waits_for_a_batch_write_in_progress() {
+    let node = Deleting::new().await;
+    let db = node.db().clone();
+    let (mut a, a_task) = node.connect(KEY_A).await;
+    a.open_stream(STREAM).await;
+    let gate = node.schema.endpoint_flows.controls().hold_next_batch();
+    a.send_batch(
+        STREAM,
+        vec![process_create(DELETED, STREAM, 1, BASE, "a.exe")],
+    )
+    .await;
+    gate.entered().await;
+
+    let deletion = tokio::spawn({
+        let schema = Arc::clone(&node.schema);
+        async move { delete_as_review(&schema, 8, &[DELETED]).await }
+    });
+    until(|| node.schema.endpoint_flows.controls().waiters() == 1).await;
+    assert!(!deletion.is_finished(), "the block waits for the write");
+    assert!(db.is_endpoint_blocked(DELETED).unwrap(), "stored first");
+    assert_eq!(
+        db.customer_deletion_job_store().unwrap().get(8).unwrap(),
+        None,
+        "nothing is judged before the block is complete"
+    );
+
+    gate.release();
+    assert_eq!(deletion.await.expect("the deletion task joins"), "ACCEPTED");
+    assert_eq!(
+        a.until_closed().await,
+        [ack(STREAM, 1), list_error(TelemetryError::NotListed)]
+    );
+    a_task.await.expect("the connection task joins");
+    node.until_succeeded(8).await;
+    assert!(
+        stored_seqs(&db, &DELETED.to_string(), STREAM).is_empty(),
+        "the batch written before the block is deleted"
+    );
+    assert!(
+        db.endpoint_streams(ENTRY_ID).unwrap().is_empty(),
+        "its stream state is deleted"
+    );
+    assert_eq!(node.sensors_row(DELETED), None);
+    assert!(
+        !node
+            .schema
+            .ingest_sensors
+            .read()
+            .await
+            .contains(&DELETED.to_string()),
+        "the batch stored before the block added the endpoint to no set"
+    );
+}
+
+/// A connection whose endpoint is blocked before the block has closed it
+/// writes nothing more: its next batch is not stored or acknowledged, and
+/// the connection is closed.
+#[tokio::test]
+async fn a_connection_of_a_blocked_endpoint_writes_nothing() {
+    let node = Deleting::new().await;
+    let (mut a, a_task) = node.connect(KEY_A).await;
+    a.open_stream(STREAM).await;
+    node.db()
+        .block_endpoints(&[DELETED], 1)
+        .expect("store the block");
+    a.send_batch(
+        STREAM,
+        vec![process_create(DELETED, STREAM, 1, BASE, "a.exe")],
+    )
+    .await;
+    assert!(a.until_closed().await.is_empty(), "closed without a word");
+    a_task.await.expect("the connection task joins");
+    assert!(
+        stored_seqs(node.db(), &DELETED.to_string(), STREAM).is_empty(),
+        "nothing is stored"
+    );
+    let streams = node.db().endpoint_streams(ENTRY_ID).unwrap();
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0].1.a, 0, "nothing acknowledged");
+}
+
+/// REview's confirmation was applied but its response lost, so the node
+/// still holds the endpoint active with a live lease when the deletion
+/// arrives, before the diff removing it: once deleted, the endpoint writes
+/// nothing again, however the lease is kept up.
+#[tokio::test]
+async fn an_endpoint_still_active_in_the_list_writes_nothing_after_deletion() {
+    let node = Deleting::new().await;
+    let db = node.db().clone();
+    assert!(node.schema.endpoint_list.confirm(1).await.ready);
+    let (mut a, a_task) = node.connect(KEY_A).await;
+    a.open_stream(STREAM).await;
+    a.send_batch(
+        STREAM,
+        vec![process_create(DELETED, STREAM, 1, BASE, "a.exe")],
+    )
+    .await;
+    assert_eq!(a.next().await, ack(STREAM, 1));
+
+    assert_eq!(node.delete(9, &[DELETED]).await, "ACCEPTED");
+    assert_eq!(
+        a.until_closed().await,
+        [list_error(TelemetryError::NotListed)]
+    );
+    a_task.await.expect("the connection task joins");
+    node.until_succeeded(9).await;
+
+    for _ in 0..2 {
+        assert!(node.schema.endpoint_list.confirm(1).await.ready);
+        assert_eq!(
+            node.hello_answer(KEY_A).await,
+            [list_error(TelemetryError::NotListed)]
+        );
+    }
+    assert!(
+        stored_seqs(&db, &DELETED.to_string(), STREAM).is_empty(),
+        "no record is written again"
+    );
+    assert!(!db.holds_endpoint_data(&[DELETED]).unwrap());
+    assert_eq!(node.sensors_row(DELETED), None);
+}

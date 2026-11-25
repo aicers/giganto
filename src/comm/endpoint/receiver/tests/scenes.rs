@@ -369,3 +369,53 @@ fn a_normal_resume_continues_the_same_stream() {
     assert_eq!(stored_on(&node, stream), marks(1..=6));
     assert_eq!(node.state(stream).map(|state| state.a), Some(6));
 }
+
+/// Customer data deletion deletes a blocked endpoint's stream states while
+/// another endpoint's stream is open: that endpoint's `SenderStream` goes on
+/// sending on the same stream, on the same connection, and every record it
+/// sends is stored.
+#[test]
+fn deleting_a_blocked_endpoints_streams_keeps_another_endpoints_stream_open() {
+    let node = Node::new();
+    let mut endpoint = sent(&node, 2);
+    let stream = endpoint.stream();
+    let mut deleted = ReceiverConnection::new(super::OTHER_ENDPOINT, convert::accepted_kinds());
+    node.open_stream(&mut deleted, super::OTHER_STREAM);
+    let record = super::process_create(
+        super::OTHER_ENDPOINT,
+        super::OTHER_STREAM,
+        1,
+        super::BASE,
+        "o.exe",
+    );
+    node.answer(
+        &mut deleted,
+        super::batch(super::OTHER_STREAM, vec![record]),
+    );
+    assert!(
+        super::stored_state(&node.db, ENTRY, super::OTHER_ENDPOINT, super::OTHER_STREAM).is_some()
+    );
+
+    node.db
+        .block_endpoints(&[super::OTHER_ENDPOINT], 10)
+        .expect("block the endpoint");
+    node.flows
+        .lock()
+        .delete_endpoint_streams(&[super::OTHER_ENDPOINT])
+        .expect("delete the blocked endpoint's streams");
+    assert!(
+        node.db
+            .endpoint_streams(ENTRY)
+            .unwrap()
+            .iter()
+            .all(|((endpoint_id, _), _)| *endpoint_id == ENDPOINT),
+        "the blocked endpoint's stream states are gone"
+    );
+
+    endpoint.collect(&node, "mark-3");
+    endpoint.collect(&node, "mark-4");
+    assert!(endpoint.connection.is_some(), "the connection is kept");
+    assert_eq!(endpoint.stream(), stream, "on the same stream");
+    assert_eq!(stored_on(&node, stream), marks(1..=4));
+    assert_eq!(node.state(stream).map(|state| state.a), Some(4));
+}

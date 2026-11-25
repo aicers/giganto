@@ -618,10 +618,13 @@ struct GenerationOutcome {
 ///
 /// Returns an error if the persisted jobs cannot be read.
 #[allow(clippy::too_many_arguments)]
+// One loop over the recovered jobs, each step logged where it happens.
+#[allow(clippy::too_many_lines)]
 async fn recover_inprogress_deletions(
     database: &Database,
     top_level_tracker: &TaskTracker,
     deletion_coordination: &Arc<CustomerDeletionCoordinator>,
+    endpoint_flows: &Arc<endpoint::EndpointFlows>,
     ingest_sensors: &IngestSensors,
     runtime_ingest_sensors: &RunTimeIngestSensors,
     pcap_sensors: &PcapSensors,
@@ -670,10 +673,22 @@ async fn recover_inprogress_deletions(
             }
         };
 
+        let endpoint_ids = match database.endpoint_deletion_job(customer_id) {
+            Ok(endpoint_ids) => endpoint_ids.unwrap_or_default(),
+            Err(error) => {
+                error!(
+                    customer_id,
+                    "Could not read the endpoint IDs of the recovered customer data deletion: \
+                     {error:#}"
+                );
+                break;
+            }
+        };
         info!(
             customer_id,
             target_count = job.service_fqdn_list.len(),
             periodic_time_series_count = job.periodic_time_series_ids.len(),
+            endpoint_count = endpoint_ids.len(),
             requested_at = job.requested_at,
             "Starting recovered customer data deletion"
         );
@@ -683,6 +698,8 @@ async fn recover_inprogress_deletions(
             database.clone(),
             customer_id,
             job,
+            endpoint_ids,
+            Arc::clone(endpoint_flows),
             ingest_sensors.clone(),
             runtime_ingest_sensors.clone(),
             pcap_sensors.clone(),
@@ -858,6 +875,7 @@ async fn run_generation(
         let database = database.clone();
         let tracker = top_level_tracker.clone();
         let deletion_coordination = Arc::clone(&deletion_coordination);
+        let endpoint_flows = Arc::clone(&endpoint_flows);
         let ingest_sensors = ingest_sensors.clone();
         let runtime_ingest_sensors = runtime_ingest_sensors.clone();
         let pcap_sensors = pcap_sensors.clone();
@@ -869,6 +887,7 @@ async fn run_generation(
                     &database,
                     &tracker,
                     &deletion_coordination,
+                    &endpoint_flows,
                     &ingest_sensors,
                     &runtime_ingest_sensors,
                     &pcap_sensors,
@@ -2833,10 +2852,12 @@ mod tests {
         ),
         peer_notify: Option<Arc<Notify>>,
     ) -> Result<()> {
+        let endpoint_flows = Arc::new(endpoint::EndpointFlows::new(database.clone()));
         recover_inprogress_deletions(
             database,
             tracker,
             coordination,
+            &endpoint_flows,
             &state.0,
             &state.1,
             &state.2,
@@ -2844,6 +2865,112 @@ mod tests {
             peer_notify,
         )
         .await
+    }
+
+    /// An `InProgress` job interrupted by a restart resumes with the
+    /// endpoint IDs stored with it, and deletes those endpoints' records,
+    /// stream states and loss records.
+    #[tokio::test]
+    async fn recovery_deletes_the_endpoints_stored_with_the_job() {
+        use uuid::Uuid;
+
+        use crate::storage::endpoint::{EndpointBatch, EndpointChange, LossReason, StoredStream};
+
+        const CUSTOMER_ID: u32 = 43;
+        let deleted = Uuid::from_u128(0xde1);
+        let kept = Uuid::from_u128(0xde2);
+        let entry_id = Uuid::from_u128(0xe1);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record_key = |id: Uuid| {
+            let mut key = id.to_string().into_bytes();
+            key.push(0);
+            key.extend_from_slice(&1_i64.to_be_bytes());
+            key
+        };
+        {
+            let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+                .expect("open database");
+            for id in [deleted, kept] {
+                database
+                    .put_cf_for_test("process create", &record_key(id), b"record")
+                    .expect("seed a record");
+                database
+                    .write_endpoint_batch(EndpointBatch {
+                        entry_id,
+                        received_ns: 1,
+                        changes: vec![
+                            EndpointChange::SetStream {
+                                endpoint_id: id,
+                                stream: Uuid::from_u128(5),
+                                state: StoredStream {
+                                    a: 1,
+                                    last_stored: None,
+                                    closed_at_ns: None,
+                                },
+                            },
+                            EndpointChange::Loss {
+                                endpoint_id: id,
+                                stream: Uuid::from_u128(5),
+                                from: 1,
+                                to: 1,
+                                reason: LossReason::Dropped,
+                                detail: String::new(),
+                            },
+                        ],
+                        received_from: vec![id],
+                    })
+                    .expect("seed the endpoint's history");
+            }
+            database
+                .block_endpoints(&[deleted], 1)
+                .expect("blocked before the job was written");
+            database
+                .put_endpoint_deletion_job(CUSTOMER_ID, &[deleted])
+                .expect("seed the job's endpoint ids");
+            let mut job = in_progress_job("piglet.recovery.example.test", 1);
+            job.service_fqdn_list.clear();
+            database
+                .customer_deletion_job_store()
+                .expect("open job store")
+                .create(CUSTOMER_ID, &job)
+                .expect("seed interrupted job");
+            database.shutdown().expect("shut down");
+        }
+
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("reopen database");
+        let state = recovery_state(&database);
+        recover_with_state(
+            &database,
+            &TaskTracker::new(),
+            &Arc::new(CustomerDeletionCoordinator::new()),
+            &state,
+            None,
+        )
+        .await
+        .expect("recover interrupted deletion");
+
+        let recovered = database
+            .customer_deletion_job_store()
+            .expect("open job store")
+            .get(CUSTOMER_ID)
+            .expect("read recovered job")
+            .expect("job remains recorded");
+        assert_eq!(
+            recovered.status,
+            storage::CustomerDataDeletionStatus::Succeeded
+        );
+        let present = |id| {
+            database
+                .get_cf_for_test("process create", &record_key(id))
+                .expect("read a record")
+                .is_some()
+        };
+        assert!(!present(deleted));
+        assert!(present(kept));
+        assert!(!database.holds_endpoint_data(&[deleted]).expect("read"));
+        assert!(database.holds_endpoint_data(&[kept]).expect("read"));
+        assert!(database.is_endpoint_blocked(deleted).expect("read"));
     }
 
     #[tokio::test]
@@ -3215,6 +3342,55 @@ mod tests {
                     .expect("recovery released store"),
             );
         }
+    }
+
+    /// A job whose endpoint IDs cannot be read is not resumed without them:
+    /// recovery stops there, leaves the job `InProgress` and releases the
+    /// store.
+    #[tokio::test]
+    async fn a_job_whose_endpoint_ids_cannot_be_read_is_left_in_progress() {
+        const CUSTOMER_ID: u32 = 44;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let database = storage::Database::open(dir.path(), &storage::DbOptions::default())
+            .expect("open database");
+        let target = "piglet.recovery.example.test";
+        database
+            .customer_deletion_job_store()
+            .expect("job store")
+            .create(CUSTOMER_ID, &in_progress_job(target, 1))
+            .expect("seed the job");
+        database
+            .put_cf_for_test(
+                storage::endpoint::ENDPOINT_DELETION_JOBS_CF,
+                &CUSTOMER_ID.to_be_bytes(),
+                &[0; 17],
+            )
+            .expect("seed unreadable endpoint IDs");
+        let tracker = TaskTracker::new();
+        let coordination = Arc::new(CustomerDeletionCoordinator::new());
+        recover_with_state(
+            &database,
+            &tracker,
+            &coordination,
+            &recovery_state(&database),
+            None,
+        )
+        .await
+        .expect("recovery itself does not fail");
+
+        assert_eq!(tracker.pending_count(), 0, "nothing was started");
+        let job = database
+            .customer_deletion_job_store()
+            .expect("job store")
+            .get(CUSTOMER_ID)
+            .expect("read the job")
+            .expect("the job is kept");
+        assert_eq!(job.status, storage::CustomerDataDeletionStatus::InProgress);
+        drop(
+            coordination
+                .begin_retention()
+                .expect("recovery released store"),
+        );
     }
 
     /// Close the real tracker while the first recovered customer is parked in

@@ -16,6 +16,10 @@ use crate::web::GraphqlCallers;
 /// The service name in REview's certificate.
 pub(crate) const REVIEW_SERVICE: &str = "review";
 
+/// The service name in a Giganto node's certificate, which a peer's relayed
+/// request carries.
+pub(crate) const GIGANTO_SERVICE: &str = "giganto";
+
 /// Returns the service name of the request's caller, or `None` when the
 /// request carries no caller, the caller's connection is not recorded, or its
 /// certificate carries no service name.

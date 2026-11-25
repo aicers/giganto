@@ -64,6 +64,7 @@ use uuid::Uuid;
 
 pub(crate) use self::active_list::{ApplyFailure, ApplyRefusal, EndpointList, ListAck, ListState};
 use self::active_list::{CloseCommand, PendingConnection, store_duplicate_key};
+pub(crate) use self::convert::RECORD_COLUMN_FAMILIES as ENDPOINT_RECORD_COLUMN_FAMILIES;
 use self::receiver::{Delivered, Handled};
 pub(crate) use self::{receiver::EndpointFlows, sensors::EndpointSensors};
 use crate::{
@@ -514,7 +515,7 @@ fn server_config(
                 return allowed(&Standing::Active, ConnectionKind::Telemetry, t)
                     .to_standing_verdict();
             }
-            let admission = pending.admit();
+            let admission = pending.admit(&database);
             if let Some((at, duplicate_key)) = admission.duplicate_key {
                 store_duplicate_key(&database, at, duplicate_key);
             }
@@ -590,10 +591,12 @@ impl Session {
         };
         if let Some(received) = stored_at
             && self.sensor.is_none()
+            && self
+                .sensors
+                .add(endpoint_id, DateTime::from(received))
+                .await
         {
-            let sensor = endpoint_id.to_string();
-            self.sensors.add(&sensor, DateTime::from(received)).await;
-            self.sensor = Some(sensor);
+            self.sensor = Some(endpoint_id.to_string());
         }
         match output {
             ReceiverOutput::Disconnect => {

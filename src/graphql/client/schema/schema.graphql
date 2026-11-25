@@ -2909,7 +2909,7 @@ type Mutation {
 	"""
 	Starts asynchronous deletion of customer-owned data across the Giganto cluster.
 	"""
-	deleteCustomerData(serviceFqdnList: [String!]!, customerId: StringNumberU32!, requestFromPeer: Boolean, periodicTimeSeriesIds: [String!]): CustomerDataDeletionRequestStatus!
+	deleteCustomerData(serviceFqdnList: [String!]!, customerId: StringNumberU32!, requestFromPeer: Boolean, periodicTimeSeriesIds: [String!], endpointIds: [String!]): CustomerDataDeletionRequestStatus!
 	"""
 	Applies an endpoint active list update, the standard base64 (with
 	padding) of the update's CBOR, with `entryId` as the node's entry ID.

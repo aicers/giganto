@@ -20,14 +20,19 @@ use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 #[cfg(feature = "cluster")]
 use super::NodeName;
-use super::StringNumberU32;
+use super::{
+    StringNumberU32,
+    caller::{GIGANTO_SERVICE, REVIEW_SERVICE, caller_service},
+};
 use crate::{
     cancellation::{SpawnError, TaskTracker},
     comm::{
         IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannels,
+        endpoint::{ENDPOINT_RECORD_COLUMN_FAMILIES, EndpointFlows, EndpointList},
         stream_channel_key::StreamChannelKey,
     },
     datetime::DateTime,
@@ -52,6 +57,29 @@ const PEER_DELETE_CUSTOMER_DATA_MUTATION: &str = r"
             customerId: $customerId
             requestFromPeer: $requestFromPeer
             periodicTimeSeriesIds: $periodicTimeSeriesIds
+        )
+    }
+";
+
+/// The relayed mutation of a request naming endpoints. A request naming none
+/// is relayed as [`PEER_DELETE_CUSTOMER_DATA_MUTATION`], exactly as before
+/// `endpointIds` existed, so a peer that does not know the argument still
+/// takes it.
+#[cfg(feature = "cluster")]
+const PEER_DELETE_CUSTOMER_DATA_WITH_ENDPOINTS_MUTATION: &str = r"
+    mutation DeleteCustomerDataForPeer(
+        $serviceFqdnList: [String!]!
+        $customerId: StringNumberU32!
+        $requestFromPeer: Boolean
+        $periodicTimeSeriesIds: [String!]
+        $endpointIds: [String!]
+    ) {
+        deleteCustomerData(
+            serviceFqdnList: $serviceFqdnList
+            customerId: $customerId
+            requestFromPeer: $requestFromPeer
+            periodicTimeSeriesIds: $periodicTimeSeriesIds
+            endpointIds: $endpointIds
         )
     }
 ";
@@ -422,6 +450,8 @@ struct PeerDeletionMutationVariables {
     customer_id: String,
     request_from_peer: bool,
     periodic_time_series_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    endpoint_ids: Vec<String>,
 }
 
 #[cfg(feature = "cluster")]
@@ -482,16 +512,23 @@ async fn request_delete_customer_data_from_peer(
     endpoint: SocketAddr,
     service_fqdn_list: Vec<String>,
     periodic_time_series_ids: Vec<String>,
+    endpoint_ids: Vec<String>,
     customer_id: u32,
 ) -> Result<CustomerDataDeletionRequestStatus> {
+    let query = if endpoint_ids.is_empty() {
+        PEER_DELETE_CUSTOMER_DATA_MUTATION
+    } else {
+        PEER_DELETE_CUSTOMER_DATA_WITH_ENDPOINTS_MUTATION
+    };
     let body = graphql_client::QueryBody {
         variables: PeerDeletionMutationVariables {
             service_fqdn_list,
             customer_id: customer_id.to_string(),
             request_from_peer: true,
             periodic_time_series_ids,
+            endpoint_ids,
         },
-        query: PEER_DELETE_CUSTOMER_DATA_MUTATION,
+        query,
         operation_name: "DeleteCustomerDataForPeer",
     };
     let response = request_peer(ctx, endpoint, body, |data: Option<_>| data).await?;
@@ -674,6 +711,14 @@ impl CustomerDeletionMutation {
     // Generators that produce those IDs must have stopped producing them before
     // the request is made: a window written after the deletion is not deleted
     // by it, and is left for retention to remove.
+    //
+    // Endpoints (Clumit Endpoint) are named by their endpoint IDs in
+    // `endpointIds`, which only REview, or a peer Giganto relaying with
+    // `requestFromPeer: true`, may give. Each one is blocked for good before
+    // anything else is judged, even on a node that holds nothing of it and
+    // whatever the answer: REview removes the endpoints from its own tables
+    // once the nodes have answered, and an endpoint that moved here later
+    // must never write again.
     async fn delete_customer_data(
         &self,
         ctx: &Context<'_>,
@@ -681,28 +726,40 @@ impl CustomerDeletionMutation {
         customer_id: StringNumberU32,
         request_from_peer: Option<bool>,
         periodic_time_series_ids: Option<Vec<String>>,
+        endpoint_ids: Option<Vec<String>>,
     ) -> Result<CustomerDataDeletionRequestStatus> {
-        let (provided_targets, provided_series_ids) =
-            validate_deletion_targets(service_fqdn_list, periodic_time_series_ids)?;
-        #[cfg(not(feature = "cluster"))]
-        let _ = request_from_peer;
+        let (provided_targets, provided_series_ids, provided_endpoint_ids) =
+            validate_deletion_targets(service_fqdn_list, periodic_time_series_ids, endpoint_ids)?;
+        if !provided_endpoint_ids.is_empty() {
+            check_endpoint_caller(ctx, request_from_peer)?;
+        }
+        block_endpoints(ctx, &provided_endpoint_ids).await?;
 
         #[cfg(feature = "cluster")]
         if !request_from_peer.unwrap_or_default() {
             let endpoints = peer_graphql_endpoints(ctx).await?;
             let local_targets = provided_targets.clone();
             let local_series_ids = provided_series_ids.clone();
+            let relayed_endpoint_ids: Vec<String> =
+                provided_endpoint_ids.iter().map(Uuid::to_string).collect();
             let peer_requests = endpoints.iter().map(|(_, endpoint)| {
                 request_delete_customer_data_from_peer(
                     ctx,
                     *endpoint,
                     provided_targets.clone(),
                     provided_series_ids.clone(),
+                    relayed_endpoint_ids.clone(),
                     customer_id.0,
                 )
             });
             let (local_response, peer_responses) = futures_util::future::join(
-                delete_customer_data_locally(ctx, local_targets, local_series_ids, customer_id.0),
+                delete_customer_data_locally(
+                    ctx,
+                    local_targets,
+                    local_series_ids,
+                    provided_endpoint_ids,
+                    customer_id.0,
+                ),
                 join_all(peer_requests),
             )
             .await;
@@ -716,18 +773,67 @@ impl CustomerDeletionMutation {
             return aggregate_deletion_request_statuses(node_responses);
         }
 
-        delete_customer_data_locally(ctx, provided_targets, provided_series_ids, customer_id.0)
-            .await
+        delete_customer_data_locally(
+            ctx,
+            provided_targets,
+            provided_series_ids,
+            provided_endpoint_ids,
+            customer_id.0,
+        )
+        .await
     }
 }
 
+/// Refuses a request naming endpoints unless its caller is REview, or a peer
+/// Giganto relaying with `requestFromPeer: true`.
+///
+/// # Errors
+///
+/// Returns an error for any other caller.
+fn check_endpoint_caller(ctx: &Context<'_>, request_from_peer: Option<bool>) -> Result<()> {
+    match caller_service(ctx).as_deref() {
+        Some(REVIEW_SERVICE) => Ok(()),
+        Some(GIGANTO_SERVICE) if request_from_peer == Some(true) => Ok(()),
+        _ => Err(
+            "endpointIds may be given only by REview, or by a peer Giganto with \
+             requestFromPeer: true"
+                .into(),
+        ),
+    }
+}
+
+/// Blocks every endpoint of `endpoint_ids` for good, as
+/// [`EndpointList::block`] does: once this returns, none of them can write
+/// on this node again, and no batch write of theirs is in progress.
+///
+/// # Errors
+///
+/// Returns an error if the blocks cannot be stored.
+async fn block_endpoints(ctx: &Context<'_>, endpoint_ids: &[Uuid]) -> Result<()> {
+    if endpoint_ids.is_empty() {
+        return Ok(());
+    }
+    let db = ctx.data::<Database>()?;
+    let list = ctx.data::<Arc<EndpointList>>()?;
+    let flows = ctx.data::<Arc<EndpointFlows>>()?;
+    list.block(db, flows, endpoint_ids).await.map_err(|e| {
+        error!("Failed to block endpoints for customer data deletion: {e:#}");
+        async_graphql::Error::new(format!("Failed to block the endpoints: {e:#}"))
+    })
+}
+
+// One request's judgments in the order they are made, each with the reason
+// it is where it is.
+#[allow(clippy::too_many_lines)]
 async fn delete_customer_data_locally(
     ctx: &Context<'_>,
     provided_targets: Vec<String>,
     provided_series_ids: Vec<String>,
+    provided_endpoint_ids: Vec<Uuid>,
     customer_id: u32,
 ) -> Result<CustomerDataDeletionRequestStatus> {
     let db = ctx.data::<Database>()?;
+    let endpoint_flows = ctx.data::<Arc<EndpointFlows>>()?.clone();
     let ingest_sensors = ctx.data::<IngestSensors>()?.clone();
     let runtime_ingest_sensors = ctx.data::<RunTimeIngestSensors>()?.clone();
     let pcap_sensors = ctx.data::<PcapSensors>()?.clone();
@@ -746,6 +852,7 @@ async fn delete_customer_data_locally(
             .await
             .is_empty()
         && !holds_any_periodic_time_series(db, &provided_series_ids)?
+        && !holds_any_endpoint_data(db, &ingest_sensors, &provided_endpoint_ids).await?
     {
         return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
     }
@@ -787,7 +894,9 @@ async fn delete_customer_data_locally(
     // its decision off and what the job store is put back to if the
     // registration below loses a race with shutdown.
     let previous_job = store.get(customer_id)?;
-    let (local_targets, periodic_time_series_ids) = if let Some(job) = &previous_job {
+    // Read with the job, and put back with it if the registration is refused.
+    let previous_endpoint_ids = db.endpoint_deletion_job(customer_id)?;
+    let (local_targets, periodic_time_series_ids, endpoint_ids) = if let Some(job) = &previous_job {
         match job.status {
             // This is the persisted job's answer rather than the
             // coordinator's: an `InProgress` job can outlive the
@@ -801,17 +910,26 @@ async fn delete_customer_data_locally(
                 return Ok(CustomerDataDeletionRequestStatus::AlreadyCompleted);
             }
             CustomerDataDeletionStatus::Failed => {
-                retry_targets(job, &provided_targets, &provided_series_ids)?
+                let (targets, series_ids) =
+                    retry_targets(job, &provided_targets, &provided_series_ids)?;
+                let endpoint_ids = retry_endpoint_ids(
+                    previous_endpoint_ids.as_deref().unwrap_or_default(),
+                    &provided_endpoint_ids,
+                )?;
+                (targets, series_ids, endpoint_ids)
             }
         }
     } else {
         let targets = local_targets(&provided_targets, &ingest_sensors).await;
-        if targets.is_empty() && !holds_any_periodic_time_series(db, &provided_series_ids)? {
+        if targets.is_empty()
+            && !holds_any_periodic_time_series(db, &provided_series_ids)?
+            && !holds_any_endpoint_data(db, &ingest_sensors, &provided_endpoint_ids).await?
+        {
             return Ok(CustomerDataDeletionRequestStatus::NoLocalTargetOnThisNode);
         }
-        // Every given ID is stored, not only those with a window here:
-        // deleting the range of an ID with none is a no-op.
-        (targets, provided_series_ids)
+        // Every given ID is stored, not only those with a window or data
+        // here: deleting the data of an ID with none is a no-op.
+        (targets, provided_series_ids, provided_endpoint_ids)
     };
 
     let in_progress = CustomerDataDeletion {
@@ -822,10 +940,34 @@ async fn delete_customer_data_locally(
         error: None,
         periodic_time_series_ids,
     };
-    if previous_job.is_some() {
-        store.update(customer_id, &in_progress)?;
+    // Written before the job, so that a job recovered after a restart always
+    // finds its endpoint ids.
+    let endpoint_ids_changed =
+        previous_endpoint_ids.as_deref().unwrap_or_default() != endpoint_ids.as_slice();
+    if endpoint_ids_changed {
+        if endpoint_ids.is_empty() {
+            db.delete_endpoint_deletion_job(customer_id)?;
+        } else {
+            db.put_endpoint_deletion_job(customer_id, &endpoint_ids)?;
+        }
+    }
+    let written = if previous_job.is_some() {
+        store.update(customer_id, &in_progress)
     } else {
-        store.create(customer_id, &in_progress)?;
+        store.create(customer_id, &in_progress)
+    };
+    if let Err(e) = written {
+        if endpoint_ids_changed
+            && let Err(undo) =
+                restore_previous_endpoint_ids(db, customer_id, previous_endpoint_ids.as_deref())
+        {
+            error!(
+                customer_id,
+                "The endpoint IDs written for a customer data deletion job that could not be \
+                 written were not undone: {undo:#}"
+            );
+        }
+        return Err(e.into());
     }
 
     if let Err(e) = start_customer_deletion_worker(
@@ -835,6 +977,8 @@ async fn delete_customer_data_locally(
         customer_id,
         in_progress.service_fqdn_list,
         in_progress.periodic_time_series_ids,
+        endpoint_ids,
+        endpoint_flows,
         ingest_sensors,
         runtime_ingest_sensors,
         pcap_sensors,
@@ -842,10 +986,65 @@ async fn delete_customer_data_locally(
         peer_notify,
     ) {
         return refuse_registration(&e, customer_id, || {
-            restore_previous_job(&store, customer_id, previous_job.as_ref())
+            restore_previous_job(&store, customer_id, previous_job.as_ref())?;
+            if endpoint_ids_changed {
+                restore_previous_endpoint_ids(db, customer_id, previous_endpoint_ids.as_deref())?;
+            }
+            Ok(())
         });
     }
     Ok(CustomerDataDeletionRequestStatus::Accepted)
+}
+
+/// The endpoint IDs a `Failed` retry deletes: those stored with the failed
+/// job.
+///
+/// The retry must name every one of them. Whatever else it names has been
+/// blocked, as every endpoint a request names is, but is not added to the
+/// job.
+///
+/// # Errors
+///
+/// Returns an error if the request leaves out an endpoint ID of the failed
+/// job.
+fn retry_endpoint_ids(stored: &[Uuid], provided: &[Uuid]) -> Result<Vec<Uuid>> {
+    if !stored.iter().all(|id| provided.contains(id)) {
+        return Err("Retry request must include every endpoint ID from the failed job".into());
+    }
+    Ok(stored.to_vec())
+}
+
+/// Returns whether this node holds data of any endpoint of `endpoint_ids`:
+/// the endpoint is a sensor in `ingest_sensors`, or the endpoint entry's
+/// column families hold its last received time, a stream state, a loss
+/// record or an event.
+///
+/// # Errors
+///
+/// Returns an error if a column family cannot be read.
+async fn holds_any_endpoint_data(
+    db: &Database,
+    ingest_sensors: &IngestSensors,
+    endpoint_ids: &[Uuid],
+) -> AnyhowResult<bool> {
+    if endpoint_ids.is_empty() {
+        return Ok(false);
+    }
+    {
+        let sensors = ingest_sensors.read().await;
+        if endpoint_ids
+            .iter()
+            .any(|id| sensors.contains(&id.to_string()))
+        {
+            return Ok(true);
+        }
+    }
+    // The stream, loss and event column families are read whole.
+    let db = db.clone();
+    let endpoint_ids = endpoint_ids.to_vec();
+    tokio::task::spawn_blocking(move || db.holds_endpoint_data(&endpoint_ids))
+        .await
+        .context("reading the endpoint data was interrupted")?
 }
 
 /// The targets a `Failed` retry deletes: those stored with the failed job.
@@ -993,24 +1192,71 @@ fn restore_previous_job(
     }
 }
 
-/// Validates the two target lists of a deletion request, deduplicating each.
+/// Puts the endpoint IDs of customer `customer_id`'s job back the way a
+/// refused request found them, as [`restore_previous_job`] does the job.
 ///
-/// `serviceFqdnList` may be empty only when `periodicTimeSeriesIds` is not: a
-/// customer with time-series generation policies but no Sensor has no event
-/// service name.
+/// # Errors
+///
+/// Returns an error if the endpoint IDs cannot be written.
+fn restore_previous_endpoint_ids(
+    db: &Database,
+    customer_id: u32,
+    previous: Option<&[Uuid]>,
+) -> AnyhowResult<()> {
+    match previous {
+        Some(ids) => db.put_endpoint_deletion_job(customer_id, ids),
+        None => db.delete_endpoint_deletion_job(customer_id),
+    }
+}
+
+/// The validated targets of a deletion request: service FQDNs, periodic time
+/// series IDs and endpoint IDs.
+type DeletionTargets = (Vec<String>, Vec<String>, Vec<Uuid>);
+
+/// Validates the three target lists of a deletion request, deduplicating
+/// each.
+///
+/// `serviceFqdnList` may be empty only when `periodicTimeSeriesIds` or
+/// `endpointIds` is not: a customer with time-series generation policies or
+/// endpoints but no Sensor has no event service name.
 fn validate_deletion_targets(
     service_fqdn_list: Vec<String>,
     periodic_time_series_ids: Option<Vec<String>>,
-) -> Result<(Vec<String>, Vec<String>)> {
+    endpoint_ids: Option<Vec<String>>,
+) -> Result<DeletionTargets> {
     let periodic_time_series_ids =
         validate_periodic_time_series_ids(periodic_time_series_ids.unwrap_or_default())?;
-    if service_fqdn_list.is_empty() && periodic_time_series_ids.is_empty() {
+    let endpoint_ids = validate_endpoint_ids(endpoint_ids.unwrap_or_default())?;
+    if service_fqdn_list.is_empty()
+        && periodic_time_series_ids.is_empty()
+        && endpoint_ids.is_empty()
+    {
         return Err(
-            "serviceFqdnList must not be empty unless periodicTimeSeriesIds is given".into(),
+            "serviceFqdnList must not be empty unless periodicTimeSeriesIds or endpointIds is \
+             given"
+                .into(),
         );
     }
     let service_fqdn_list = validate_service_fqdn_list(service_fqdn_list)?;
-    Ok((service_fqdn_list, periodic_time_series_ids))
+    Ok((service_fqdn_list, periodic_time_series_ids, endpoint_ids))
+}
+
+/// Validates the endpoint IDs of a request, keeping the first of each
+/// duplicate.
+///
+/// Each must be a UUID, in any form [`Uuid::parse_str`] reads; it is taken in
+/// the lowercase hyphenated form the endpoint's records are stored under, so
+/// two spellings of one ID are duplicates.
+fn validate_endpoint_ids(ids: Vec<String>) -> Result<Vec<Uuid>> {
+    let mut validated = Vec::with_capacity(ids.len());
+    for id in ids {
+        let parsed = Uuid::parse_str(&id)
+            .map_err(|e| format!("Invalid endpoint ID {id:?}: must be a UUID: {e}"))?;
+        if !validated.contains(&parsed) {
+            validated.push(parsed);
+        }
+    }
+    Ok(validated)
 }
 
 /// Validates the Central Manager's time-series-generation-policy IDs, keeping
@@ -1061,32 +1307,62 @@ fn validate_service_fqdn_list(service_fqdn_list: Vec<String>) -> Result<Vec<Stri
     Ok(validated)
 }
 
+/// Deletes a job's data from the database. It blocks, taking the
+/// `ReceiverStream` lock of `endpoint_flows` to delete the endpoints' stream
+/// states, so it runs on a blocking thread.
 fn delete_customer_data_from_db(
     db: &Database,
+    endpoint_flows: &EndpointFlows,
     service_fqdn_list: &[String],
     periodic_time_series_ids: &[String],
+    endpoint_ids: &[Uuid],
 ) -> AnyhowResult<()> {
     delete_customer_data_with(
         service_fqdn_list,
         periodic_time_series_ids,
+        endpoint_ids,
         |key_prefix, cf_names| db.delete_customer_event_ranges(key_prefix, cf_names),
         |id| db.delete_periodic_time_series(id),
-        |service_fqdn| db.sensors_store()?.delete(service_fqdn),
+        |endpoint_ids| {
+            for endpoint_id in endpoint_ids {
+                db.delete_customer_event_ranges(
+                    &endpoint_id.to_string(),
+                    &ENDPOINT_RECORD_COLUMN_FAMILIES,
+                )
+                .with_context(|| format!("cannot delete the records of endpoint {endpoint_id}"))?;
+            }
+            db.delete_endpoint_history(endpoint_ids)
+        },
+        |endpoint_ids| endpoint_flows.lock().delete_endpoint_streams(endpoint_ids),
+        |sensor| db.sensors_store()?.delete(sensor),
     )
 }
 
-/// Deletes the event ranges of every service FQDN and the periodic time series
-/// of every time-series-generation-policy ID, then the sensors.
+/// Deletes the event ranges of every service FQDN, the data of every endpoint
+/// ID and the periodic time series of every time-series-generation-policy ID,
+/// then the endpoints' stream states, then the sensors.
 ///
 /// A series is keyed by its series ID, `P` or `P/<IP>` for a policy `P`, so
 /// `delete_periodic_time_series` removes every key that starts with `P 0x00`
 /// or with `P /` from the periodic time series column family, and nothing of
 /// another policy.
+///
+/// An endpoint is a sensor named by its endpoint ID: `delete_endpoint_data`
+/// deletes the endpoints' records from the column families of the endpoint
+/// record kinds, their loss records under every `entry_id`, their events and
+/// their last received times, none of which a blocked endpoint can write
+/// again. Their stream states are deleted by `delete_endpoint_streams`, under
+/// the `ReceiverStream` lock, which keeps the stream held, so that other
+/// endpoints' open streams go on.
+#[allow(clippy::too_many_arguments)]
 fn delete_customer_data_with(
     service_fqdn_list: &[String],
     periodic_time_series_ids: &[String],
+    endpoint_ids: &[Uuid],
     mut delete_event_ranges: impl FnMut(&str, &[&str]) -> AnyhowResult<()>,
     mut delete_periodic_time_series: impl FnMut(&str) -> AnyhowResult<()>,
+    delete_endpoint_data: impl FnOnce(&[Uuid]) -> AnyhowResult<()>,
+    delete_endpoint_streams: impl FnOnce(&[Uuid]) -> AnyhowResult<()>,
     mut delete_sensor: impl FnMut(&str) -> AnyhowResult<()>,
 ) -> AnyhowResult<()> {
     for service_fqdn in service_fqdn_list {
@@ -1099,14 +1375,27 @@ fn delete_customer_data_with(
             .with_context(|| format!("cannot delete customer event ranges for {service_fqdn}"))?;
     }
 
+    if !endpoint_ids.is_empty() {
+        delete_endpoint_data(endpoint_ids).context("cannot delete the data of the endpoints")?;
+    }
+
     for id in periodic_time_series_ids {
         delete_periodic_time_series(id)
             .with_context(|| format!("cannot delete periodic time series of policy {id}"))?;
     }
 
+    if !endpoint_ids.is_empty() {
+        delete_endpoint_streams(endpoint_ids)
+            .context("cannot delete the stream states of the endpoints")?;
+    }
+
     for service_fqdn in service_fqdn_list {
         delete_sensor(service_fqdn)
             .with_context(|| format!("cannot delete exact sensors key for {service_fqdn}"))?;
+    }
+    for endpoint_id in endpoint_ids {
+        delete_sensor(&endpoint_id.to_string())
+            .with_context(|| format!("cannot delete exact sensors key for {endpoint_id}"))?;
     }
     Ok(())
 }
@@ -1141,6 +1430,8 @@ fn start_customer_deletion_worker(
     customer_id: u32,
     service_fqdn_list: Vec<String>,
     periodic_time_series_ids: Vec<String>,
+    endpoint_ids: Vec<Uuid>,
+    endpoint_flows: Arc<EndpointFlows>,
     ingest_sensors: IngestSensors,
     runtime_ingest_sensors: RunTimeIngestSensors,
     pcap_sensors: PcapSensors,
@@ -1154,6 +1445,8 @@ fn start_customer_deletion_worker(
         customer_id,
         service_fqdn_list,
         periodic_time_series_ids,
+        endpoint_ids,
+        endpoint_flows,
         ingest_sensors,
         runtime_ingest_sensors,
         pcap_sensors,
@@ -1165,11 +1458,14 @@ fn start_customer_deletion_worker(
 
 /// Restarts a deletion from its already-persisted job without rewriting it.
 ///
-/// Recovery uses the stored targets and does not relay the deletion request to
-/// peers. After successful local cleanup, the optional notifier propagates the
-/// updated local sensor list. The returned tracked handle lets the recovery
-/// loop await this customer's terminal outcome before starting the next
-/// recovered customer under the batch's exclusive claim.
+/// Recovery uses the stored targets, the endpoint IDs stored with the job
+/// among them, and does not relay the deletion request to peers. Those
+/// endpoints were blocked before the job was written, and the blocks are
+/// stored, so none of them can write again. After successful local cleanup,
+/// the optional notifier propagates the updated local sensor list. The
+/// returned tracked handle lets the recovery loop await this customer's
+/// terminal outcome before starting the next recovered customer under the
+/// batch's exclusive claim.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_customer_deletion_worker_from_stored_job(
     tracker: &TaskTracker,
@@ -1177,6 +1473,8 @@ pub(crate) fn start_customer_deletion_worker_from_stored_job(
     db: Database,
     customer_id: u32,
     job: CustomerDataDeletion,
+    endpoint_ids: Vec<Uuid>,
+    endpoint_flows: Arc<EndpointFlows>,
     ingest_sensors: IngestSensors,
     runtime_ingest_sensors: RunTimeIngestSensors,
     pcap_sensors: PcapSensors,
@@ -1190,6 +1488,8 @@ pub(crate) fn start_customer_deletion_worker_from_stored_job(
         customer_id,
         job.service_fqdn_list,
         job.periodic_time_series_ids,
+        endpoint_ids,
+        endpoint_flows,
         ingest_sensors,
         runtime_ingest_sensors,
         pcap_sensors,
@@ -1206,6 +1506,8 @@ fn register_customer_deletion_worker(
     customer_id: u32,
     service_fqdn_list: Vec<String>,
     periodic_time_series_ids: Vec<String>,
+    endpoint_ids: Vec<Uuid>,
+    endpoint_flows: Arc<EndpointFlows>,
     ingest_sensors: IngestSensors,
     runtime_ingest_sensors: RunTimeIngestSensors,
     pcap_sensors: PcapSensors,
@@ -1218,17 +1520,39 @@ fn register_customer_deletion_worker(
         // registration that was refused — releases this customer's claim.
         // A recovery guard keeps the batch exclusive between customers.
         let _deletion_guard = deletion_guard;
+        let endpoint_sensors: Vec<String> = endpoint_ids.iter().map(Uuid::to_string).collect();
+        // First, under the lock `EndpointSensors::add` reads the block under,
+        // so that neither a blocked endpoint's closing connection nor module
+        // ingest's periodic refresh writes its `sensors` row back once it is
+        // deleted, and a batch stored just before the block adds it to
+        // neither sensor set again.
+        if !endpoint_sensors.is_empty() {
+            let mut runtime = runtime_ingest_sensors.write().await;
+            for sensor in &endpoint_sensors {
+                runtime.remove(sensor);
+            }
+        }
         let worker = tokio::task::spawn_blocking({
             let db = db.clone();
             let targets = service_fqdn_list.clone();
-            move || delete_customer_data_from_db(&db, &targets, &periodic_time_series_ids)
+            move || {
+                delete_customer_data_from_db(
+                    &db,
+                    &endpoint_flows,
+                    &targets,
+                    &periodic_time_series_ids,
+                    &endpoint_ids,
+                )
+            }
         });
 
+        let mut runtime_targets = service_fqdn_list;
+        runtime_targets.extend(endpoint_sensors);
         supervise_worker(
             worker,
             db,
             customer_id,
-            service_fqdn_list,
+            runtime_targets,
             ingest_sensors,
             runtime_ingest_sensors,
             pcap_sensors,
@@ -1504,6 +1828,13 @@ mod tests {
         )
     }
 
+    /// Deletes `fqdns` and `series` from `db`, as a job naming no endpoint
+    /// does.
+    fn delete_from_db(db: &Database, fqdns: &[String], series: &[String]) -> anyhow::Result<()> {
+        let flows = crate::comm::endpoint::EndpointFlows::new(db.clone());
+        delete_customer_data_from_db(db, &flows, fqdns, series, &[])
+    }
+
     fn series_key(id: &str) -> Vec<u8> {
         event_key(id, &1_i64.to_be_bytes())
     }
@@ -1695,20 +2026,23 @@ mod tests {
     #[test]
     fn validates_and_deduplicates_periodic_time_series_ids() {
         let ids = |ids: &[&str]| Some(ids.iter().map(ToString::to_string).collect::<Vec<_>>());
-        let (fqdns, series_ids) = validate_deletion_targets(
+        let (fqdns, series_ids, _) = validate_deletion_targets(
             vec!["piglet.node1.example.test".to_string()],
             ids(&["3", "10", "3", "03", "0"]),
+            None,
         )
         .unwrap();
         assert_eq!(fqdns, ["piglet.node1.example.test"]);
         assert_eq!(series_ids, ["3", "10", "03", "0"]);
 
-        let (fqdns, series_ids) = validate_deletion_targets(Vec::new(), ids(&["7"])).unwrap();
+        let (fqdns, series_ids, _) =
+            validate_deletion_targets(Vec::new(), ids(&["7"]), None).unwrap();
         assert_eq!(fqdns, Vec::<String>::new());
         assert_eq!(series_ids, ["7"]);
 
-        let (_, series_ids) =
-            validate_deletion_targets(vec!["piglet.node1.example.test".to_string()], None).unwrap();
+        let (_, series_ids, _) =
+            validate_deletion_targets(vec!["piglet.node1.example.test".to_string()], None, None)
+                .unwrap();
         assert_eq!(series_ids, Vec::<String>::new());
     }
 
@@ -1718,6 +2052,7 @@ mod tests {
             let message = validate_deletion_targets(
                 vec!["piglet.node1.example.test".to_string()],
                 Some(vec!["1".to_string(), invalid.to_string()]),
+                None,
             )
             .unwrap_err()
             .message;
@@ -1727,12 +2062,13 @@ mod tests {
             );
         }
 
-        assert!(validate_deletion_targets(Vec::new(), None).is_err());
-        assert!(validate_deletion_targets(Vec::new(), Some(Vec::new())).is_err());
+        assert!(validate_deletion_targets(Vec::new(), None, None).is_err());
+        assert!(validate_deletion_targets(Vec::new(), Some(Vec::new()), Some(Vec::new())).is_err());
         assert!(
             validate_deletion_targets(
                 vec!["piglet.node1".to_string()],
-                Some(vec!["7".to_string()])
+                Some(vec!["7".to_string()]),
+                None,
             )
             .is_err()
         );
@@ -3241,7 +3577,7 @@ mod tests {
             sensors.insert(sensor, now).unwrap();
         }
 
-        delete_customer_data_from_db(
+        delete_from_db(
             &db,
             &[piglet.to_string(), reproduce.to_string()],
             &["3".to_string(), "10".to_string()],
@@ -3309,7 +3645,7 @@ mod tests {
                 .unwrap();
         }
 
-        delete_customer_data_from_db(&db, &[], &["42".to_string()]).unwrap();
+        delete_from_db(&db, &[], &["42".to_string()]).unwrap();
 
         for key in &owned {
             assert!(
@@ -3336,7 +3672,7 @@ mod tests {
     fn missing_target_data_is_a_successful_no_op() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
-        delete_customer_data_from_db(
+        delete_from_db(
             &db,
             &[
                 "piglet.missing.example.test".to_string(),
@@ -3358,12 +3694,15 @@ mod tests {
         let result = delete_customer_data_with(
             &["piglet.node1.example.test".to_string()],
             &["3".to_string()],
+            &[],
             |service_fqdn, cf_names| {
                 assert_eq!(service_fqdn, "piglet.node1.example.test");
                 assert_eq!(cf_names, PIGLET_COLUMN_FAMILIES);
                 anyhow::bail!("injected event deletion failure");
             },
             delete_series,
+            NO_ENDPOINT_STEP,
+            NO_ENDPOINT_STEP,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
                 Ok(())
@@ -3376,6 +3715,7 @@ mod tests {
         let result = delete_customer_data_with(
             &["piglet.node1.example.test".to_string()],
             &["3".to_string()],
+            &[],
             |key_prefix, _| {
                 assert_ne!(key_prefix, "3", "a series is not deleted as an event range");
                 Ok(())
@@ -3384,6 +3724,8 @@ mod tests {
                 assert_eq!(id, "3");
                 anyhow::bail!("injected series deletion failure");
             },
+            NO_ENDPOINT_STEP,
+            NO_ENDPOINT_STEP,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
                 Ok(())
@@ -3397,8 +3739,11 @@ mod tests {
         delete_customer_data_with(
             &["piglet.node1.example.test".to_string()],
             &["3".to_string()],
+            &[],
             |_, _| Ok(()),
             delete_series,
+            NO_ENDPOINT_STEP,
+            NO_ENDPOINT_STEP,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
                 Ok(())
@@ -3406,6 +3751,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sensor_delete_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// An endpoint step the call under test never reaches, or one that has
+    /// nothing to do.
+    const NO_ENDPOINT_STEP: fn(&[uuid::Uuid]) -> anyhow::Result<()> = |_| Ok(());
+
+    /// Endpoint data goes with the event ranges, endpoint streams after the
+    /// series, and the endpoints' sensors last; a sensor that cannot be
+    /// deleted is an error naming the endpoint.
+    #[test]
+    fn endpoint_sensors_are_deleted_after_their_data_and_streams() {
+        let target = "piglet.node1.example.test";
+        let endpoint = EP1.to_string();
+        for fail_endpoint_sensor in [false, true] {
+            let steps = std::cell::RefCell::new(Vec::<String>::new());
+            let record = |step: String| steps.borrow_mut().push(step);
+            let result = delete_customer_data_with(
+                &[target.to_string()],
+                &["3".to_string()],
+                &[EP1],
+                |fqdn, _| {
+                    record(format!("events {fqdn}"));
+                    Ok(())
+                },
+                |id| {
+                    record(format!("series {id}"));
+                    Ok(())
+                },
+                |ids| {
+                    assert_eq!(ids, [EP1]);
+                    record("endpoint data".to_string());
+                    Ok(())
+                },
+                |ids| {
+                    record("endpoint streams".to_string());
+                    NO_ENDPOINT_STEP(ids)
+                },
+                |sensor| {
+                    record(format!("sensor {sensor}"));
+                    if fail_endpoint_sensor && sensor == endpoint {
+                        anyhow::bail!("injected sensor deletion failure");
+                    }
+                    Ok(())
+                },
+            );
+            assert_eq!(
+                steps.into_inner(),
+                [
+                    format!("events {target}"),
+                    "endpoint data".to_string(),
+                    "series 3".to_string(),
+                    "endpoint streams".to_string(),
+                    format!("sensor {target}"),
+                    format!("sensor {endpoint}"),
+                ]
+            );
+            if fail_endpoint_sensor {
+                let error = format!("{:#}", result.unwrap_err());
+                assert!(
+                    error.contains(&format!("cannot delete exact sensors key for {endpoint}")),
+                    "{error}"
+                );
+            } else {
+                result.unwrap();
+            }
+        }
     }
 
     #[tokio::test]
@@ -3751,6 +4162,8 @@ mod tests {
             305,
             vec!["piglet.node1.example.test".to_string()],
             Vec::new(),
+            Vec::new(),
+            Arc::clone(&schema.endpoint_flows),
             schema.ingest_sensors.clone(),
             schema.runtime_ingest_sensors.clone(),
             schema.pcap_sensors.clone(),
@@ -3877,6 +4290,8 @@ mod tests {
             500,
             vec![target.to_string()],
             Vec::new(),
+            Vec::new(),
+            Arc::new(crate::comm::endpoint::EndpointFlows::new(db.clone())),
             runtime_state.0.clone(),
             runtime_state.1.clone(),
             runtime_state.2.clone(),
@@ -3933,6 +4348,8 @@ mod tests {
             FAILING,
             vec![target.to_string()],
             Vec::new(),
+            Vec::new(),
+            Arc::new(crate::comm::endpoint::EndpointFlows::new(db.clone())),
             runtime_state.0.clone(),
             runtime_state.1.clone(),
             runtime_state.2.clone(),
@@ -4036,6 +4453,7 @@ mod tests {
     async fn a_registration_the_tracker_refuses_undoes_the_job_it_wrote() {
         const REQUESTING: u32 = 700;
         const RETRYING: u32 = 701;
+        const NAMING_ENDPOINTS: u32 = 703;
         let target = "piglet.node1.example.test";
         let schema = TestSchema::new_with_ingest_sensors(&[target]);
         let failed = CustomerDataDeletion {
@@ -4091,6 +4509,31 @@ mod tests {
                 "a poisoned lock is not the shutdown the caller could retry past"
             );
         }
+
+        let refused = as_review(
+            &schema,
+            &delete_endpoints_mutation(
+                &[target],
+                &[&EP1.to_string()],
+                NAMING_ENDPOINTS,
+                Some(true),
+            ),
+        )
+        .await;
+        assert!(
+            refused.errors.iter().any(|e| e
+                .message
+                .contains("Failed to register customer data deletion supervisor")),
+            "{:?}",
+            refused.errors
+        );
+        assert!(blocked(&schema.db, EP1), "blocked before registering");
+        assert_eq!(job_status(&schema.db, NAMING_ENDPOINTS), None);
+        assert_eq!(
+            schema.db.endpoint_deletion_job(NAMING_ENDPOINTS).unwrap(),
+            None,
+            "the endpoint IDs the refused request wrote must be undone"
+        );
 
         assert_eq!(
             job_status(&schema.db, REQUESTING),
@@ -4229,5 +4672,532 @@ mod tests {
             Some(failed),
             "a retry that was refused leaves the failed job it would have replaced"
         );
+    }
+
+    const EP1: uuid::Uuid = uuid::Uuid::from_u128(0x0b1c_2d3e_4f50_6172_8394_a5b6_c7d8_e9f1);
+    const EP2: uuid::Uuid = uuid::Uuid::from_u128(0x0b1c_2d3e_4f50_6172_8394_a5b6_c7d8_e9f2);
+
+    /// A deletion naming `targets`, `endpoint_ids` and no series, with
+    /// `requestFromPeer` as given.
+    fn delete_endpoints_mutation(
+        targets: &[&str],
+        endpoint_ids: &[&str],
+        customer_id: u32,
+        request_from_peer: Option<bool>,
+    ) -> String {
+        let quoted = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| serde_json::to_string(value).unwrap())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let from_peer =
+            request_from_peer.map_or_default(|from_peer| format!("requestFromPeer: {from_peer}"));
+        format!(
+            r#"mutation {{
+                deleteCustomerData(
+                    serviceFqdnList: [{}]
+                    customerId: "{customer_id}"
+                    endpointIds: [{}]
+                    {from_peer}
+                )
+            }}"#,
+            quoted(targets),
+            quoted(endpoint_ids),
+        )
+    }
+
+    async fn as_review(schema: &TestSchema, query: &str) -> async_graphql::Response {
+        schema
+            .execute_as(Some(crate::graphql::caller::REVIEW_SERVICE), query)
+            .await
+    }
+
+    fn blocked(db: &Database, id: uuid::Uuid) -> bool {
+        db.is_endpoint_blocked(id).unwrap()
+    }
+
+    /// Stores a record of endpoint `id` in the process create column family,
+    /// at time 1, and its `sensors` row.
+    fn put_endpoint_record(db: &Database, id: uuid::Uuid) -> Vec<u8> {
+        let key = event_key(&id.to_string(), &1_i64.to_be_bytes());
+        db.put_cf_for_test("process create", &key, b"record")
+            .unwrap();
+        db.sensors_store()
+            .unwrap()
+            .insert(&id.to_string(), DateTime::now())
+            .unwrap();
+        key
+    }
+
+    #[test]
+    fn endpoint_ids_are_normalized_and_deduplicated() {
+        let ids = super::validate_endpoint_ids(
+            [
+                "0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F1",
+                "0b1c2d3e4f5061728394a5b6c7d8e9f1",
+                "{0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f2}",
+                "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f2",
+            ]
+            .map(ToString::to_string)
+            .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(ids, [EP1, EP2]);
+        assert_eq!(
+            EP1.to_string(),
+            "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f1",
+            "the sensor form records use"
+        );
+        for invalid in ["", "not-a-uuid", "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f", " "] {
+            let message = super::validate_endpoint_ids(vec![invalid.to_string()])
+                .unwrap_err()
+                .message;
+            assert!(message.contains(&format!("{invalid:?}")), "{message}");
+        }
+
+        let (fqdns, series, endpoint_ids) =
+            validate_deletion_targets(Vec::new(), None, Some(vec![EP1.to_string()])).unwrap();
+        assert!(fqdns.is_empty() && series.is_empty());
+        assert_eq!(endpoint_ids, [EP1]);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_endpoint_id_is_refused_with_no_effect() {
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        let response = as_review(
+            &schema,
+            &delete_endpoints_mutation(&[], &[&EP1.to_string(), "not-a-uuid"], 900, Some(true)),
+        )
+        .await;
+        assert!(!response.errors.is_empty(), "an invalid ID is refused");
+        assert!(!blocked(&schema.db, EP1), "nothing is blocked");
+        assert_eq!(job_status(&schema.db, 900), None);
+    }
+
+    #[tokio::test]
+    async fn only_review_or_a_relaying_peer_may_name_endpoints() {
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        let ep = EP1.to_string();
+        for (service, from_peer) in [
+            (Some("piglet"), Some(true)),
+            (Some("piglet"), None),
+            (None, Some(true)),
+            (Some("giganto"), None),
+            (Some("giganto"), Some(false)),
+        ] {
+            let response = schema
+                .execute_as(
+                    service,
+                    &delete_endpoints_mutation(&[], &[&ep], 901, from_peer),
+                )
+                .await;
+            assert!(
+                !response.errors.is_empty(),
+                "{service:?} with requestFromPeer {from_peer:?} is refused"
+            );
+            assert!(!blocked(&schema.db, EP1), "nothing is blocked");
+        }
+        // Not even with the request otherwise valid.
+        let response = schema
+            .execute(&delete_endpoints_mutation(&[], &[&ep], 901, Some(true)))
+            .await;
+        assert!(!response.errors.is_empty(), "a caller naming no service");
+        assert!(!blocked(&schema.db, EP1));
+
+        let response = schema
+            .execute_as(
+                Some("giganto"),
+                &delete_endpoints_mutation(&[], &[&ep], 901, Some(true)),
+            )
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert!(blocked(&schema.db, EP1), "a relaying peer is accepted");
+
+        let response = as_review(
+            &schema,
+            &delete_endpoints_mutation(&[], &[&EP2.to_string()], 901, None),
+        )
+        .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert!(blocked(&schema.db, EP2), "REview is accepted");
+
+        // A request naming no endpoint is checked as before.
+        let response = schema
+            .execute_as(
+                Some("piglet"),
+                &delete_customer_data_mutation(&["piglet.node1.example.test"], 902),
+            )
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+    }
+
+    #[tokio::test]
+    async fn a_node_holding_nothing_of_an_endpoint_blocks_it_and_has_no_local_target() {
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        let response = as_review(
+            &schema,
+            &delete_endpoints_mutation(&[], &[&EP1.to_string()], 903, Some(true)),
+        )
+        .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.to_string(),
+            "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
+        );
+        assert!(blocked(&schema.db, EP1));
+        assert_eq!(job_status(&schema.db, 903), None);
+        assert_eq!(schema.db.endpoint_deletion_job(903).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_only_request_is_accepted_and_deletes() {
+        let ep = EP1.to_string();
+        let schema = TestSchema::new_with_ingest_sensors(&[&ep]);
+        schema
+            .runtime_ingest_sensors
+            .write()
+            .await
+            .insert(ep.clone(), DateTime::now());
+        let key = put_endpoint_record(&schema.db, EP1);
+        let other = put_endpoint_record(&schema.db, EP2);
+
+        let response = as_review(
+            &schema,
+            &delete_endpoints_mutation(&[], &[&ep], 904, Some(true)),
+        )
+        .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        let completed = wait_for_terminal_job(&schema.db, 904).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert!(completed.service_fqdn_list.is_empty(), "no service FQDN");
+        assert_eq!(
+            schema.db.endpoint_deletion_job(904).unwrap(),
+            Some(vec![EP1])
+        );
+        assert!(
+            schema
+                .db
+                .get_cf_for_test("process create", &key)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            schema
+                .db
+                .get_cf_for_test("process create", &other)
+                .unwrap()
+                .is_some()
+        );
+        let sensors = schema.db.sensors_store().unwrap().sensor_list();
+        assert!(!sensors.contains(&ep));
+        assert!(sensors.contains(&EP2.to_string()));
+        assert!(!schema.ingest_sensors.read().await.contains(&ep));
+        assert!(!schema.runtime_ingest_sensors.read().await.contains_key(&ep));
+    }
+
+    /// Every endpoint named is blocked before any other judgment, whatever
+    /// the request is then answered.
+    #[tokio::test]
+    async fn endpoints_are_blocked_before_every_other_answer() {
+        let target = "piglet.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[target]);
+        let store = schema.db.customer_deletion_job_store().unwrap();
+        let job = |status| CustomerDataDeletion {
+            service_fqdn_list: vec![target.to_string()],
+            requested_at: 1,
+            status,
+            completed_at: None,
+            error: None,
+            periodic_time_series_ids: Vec::new(),
+        };
+        store
+            .create(910, &job(CustomerDataDeletionStatus::Succeeded))
+            .unwrap();
+        store
+            .create(911, &job(CustomerDataDeletionStatus::InProgress))
+            .unwrap();
+        let mut next = 0x100_u128;
+        let mut request = |customer_id: u32| {
+            next += 1;
+            let id = uuid::Uuid::from_u128(next);
+            let query =
+                delete_endpoints_mutation(&[target], &[&id.to_string()], customer_id, Some(true));
+            (id, query)
+        };
+
+        let mut answers = Vec::new();
+        for (customer_id, expected) in [(910, "ALREADY_COMPLETED"), (911, "DELETION_IN_PROGRESS")] {
+            let (id, query) = request(customer_id);
+            answers.push((id, as_review(&schema, &query).await, expected));
+        }
+
+        let other_customer = schema
+            .deletion_coordination
+            .begin_deletion(999)
+            .expect("nothing has claimed the store yet");
+        let (id, query) = request(912);
+        answers.push((
+            id,
+            as_review(&schema, &query).await,
+            "BLOCKED_BY_ANOTHER_DELETION",
+        ));
+        drop(other_customer);
+
+        let retention = schema
+            .deletion_coordination
+            .begin_retention()
+            .expect("the other customer released the store");
+        let (id, query) = request(913);
+        answers.push((id, as_review(&schema, &query).await, "BLOCKED_BY_RETENTION"));
+        drop(retention);
+
+        schema
+            .top_level_tracker
+            .close()
+            .expect("a fresh tracker closes");
+        let (id, query) = request(914);
+        answers.push((id, as_review(&schema, &query).await, "BLOCKED_BY_SHUTDOWN"));
+
+        for (id, response, expected) in answers {
+            assert!(response.errors.is_empty(), "{:?}", response.errors);
+            assert_eq!(
+                response.data.to_string(),
+                format!("{{deleteCustomerData: {expected}}}")
+            );
+            assert!(blocked(&schema.db, id), "blocked though {expected}");
+        }
+        for customer_id in [912, 913, 914] {
+            assert_eq!(job_status(&schema.db, customer_id), None);
+            assert_eq!(schema.db.endpoint_deletion_job(customer_id).unwrap(), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_retry_must_name_every_stored_endpoint_id() {
+        let schema = TestSchema::new_with_ingest_sensors(&[]);
+        let failed = CustomerDataDeletion {
+            service_fqdn_list: Vec::new(),
+            requested_at: 1,
+            status: CustomerDataDeletionStatus::Failed,
+            completed_at: Some(2),
+            error: Some("old failure".to_string()),
+            periodic_time_series_ids: Vec::new(),
+        };
+        schema
+            .db
+            .customer_deletion_job_store()
+            .unwrap()
+            .create(920, &failed)
+            .unwrap();
+        schema.db.put_endpoint_deletion_job(920, &[EP1]).unwrap();
+        let key1 = put_endpoint_record(&schema.db, EP1);
+        let key2 = put_endpoint_record(&schema.db, EP2);
+
+        let response = as_review(
+            &schema,
+            &delete_endpoints_mutation(&[], &[&EP2.to_string()], 920, Some(true)),
+        )
+        .await;
+        assert!(
+            response.errors[0]
+                .message
+                .contains("every endpoint ID from the failed job"),
+            "{:?}",
+            response.errors
+        );
+        assert!(blocked(&schema.db, EP2), "blocked though refused");
+        assert_eq!(
+            job_status(&schema.db, 920),
+            Some(CustomerDataDeletionStatus::Failed)
+        );
+
+        let response = as_review(
+            &schema,
+            &delete_endpoints_mutation(&[], &[&EP2.to_string(), &EP1.to_string()], 920, Some(true)),
+        )
+        .await;
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        let completed = wait_for_terminal_job(&schema.db, 920).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert_eq!(
+            schema.db.endpoint_deletion_job(920).unwrap(),
+            Some(vec![EP1]),
+            "the other ID is not added to the job"
+        );
+        assert!(blocked(&schema.db, EP1) && blocked(&schema.db, EP2));
+        assert!(
+            schema
+                .db
+                .get_cf_for_test("process create", &key1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            schema
+                .db
+                .get_cf_for_test("process create", &key2)
+                .unwrap()
+                .is_some(),
+            "the stored list is what the retry deletes"
+        );
+    }
+
+    /// Endpoint IDs left without a job, as an undo that failed leaves them,
+    /// are not taken up by the next request naming no endpoint: it clears
+    /// them.
+    #[tokio::test]
+    async fn a_request_naming_no_endpoint_clears_endpoint_ids_left_without_a_job() {
+        let target = "piglet.node1.example.test";
+        let schema = TestSchema::new_with_ingest_sensors(&[target]);
+        schema.db.put_endpoint_deletion_job(932, &[EP1]).unwrap();
+
+        let response = schema
+            .execute(&delete_customer_data_mutation(&[target], 932))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(response.data.to_string(), "{deleteCustomerData: ACCEPTED}");
+        assert_eq!(schema.db.endpoint_deletion_job(932).unwrap(), None);
+        let completed = wait_for_terminal_job(&schema.db, 932).await;
+        assert_eq!(completed.status, CustomerDataDeletionStatus::Succeeded);
+        assert!(
+            !blocked(&schema.db, EP1),
+            "an endpoint not named is not blocked"
+        );
+    }
+
+    #[test]
+    fn undoing_a_refused_request_restores_the_endpoint_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        db.put_endpoint_deletion_job(930, &[EP1]).unwrap();
+        super::restore_previous_endpoint_ids(&db, 930, None).unwrap();
+        assert_eq!(db.endpoint_deletion_job(930).unwrap(), None);
+
+        db.put_endpoint_deletion_job(931, &[EP2]).unwrap();
+        super::restore_previous_endpoint_ids(&db, 931, Some(&[EP1])).unwrap();
+        assert_eq!(db.endpoint_deletion_job(931).unwrap(), Some(vec![EP1]));
+    }
+
+    #[test]
+    fn deleting_an_endpoints_data_again_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path(), &DbOptions::default()).unwrap();
+        let flows = crate::comm::endpoint::EndpointFlows::new(db.clone());
+        let key = put_endpoint_record(&db, EP1);
+        for _ in 0..2 {
+            delete_customer_data_from_db(&db, &flows, &[], &[], &[EP1, EP2]).unwrap();
+            assert!(
+                db.get_cf_for_test("process create", &key)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                !db.sensors_store()
+                    .unwrap()
+                    .sensor_list()
+                    .contains(&EP1.to_string())
+            );
+        }
+    }
+
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn mutation_relays_endpoint_ids_to_peers() {
+        let customer_id = 940;
+        let mut server = Server::new_async().await;
+        let expected_body = serde_json::json!({
+            "variables": {
+                "serviceFqdnList": [],
+                "customerId": customer_id.to_string(),
+                "requestFromPeer": true,
+                "periodicTimeSeriesIds": [],
+                "endpointIds": [EP1.to_string()],
+            },
+            "query": super::PEER_DELETE_CUSTOMER_DATA_WITH_ENDPOINTS_MUTATION,
+            "operationName": "DeleteCustomerDataForPeer",
+        });
+        let peer = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Json(expected_body))
+            .with_status(200)
+            .with_body(r#"{"data":{"deleteCustomerData":"NO_LOCAL_TARGET_ON_THIS_NODE"}}"#)
+            .create_async()
+            .await;
+        let schema = TestSchema::new_with_graphql_peer(server.socket_address().port());
+
+        let response = as_review(
+            &schema,
+            &delete_endpoints_mutation(
+                &[],
+                &["0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F1", &EP1.to_string()],
+                customer_id,
+                None,
+            ),
+        )
+        .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.to_string(),
+            "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
+        );
+        assert!(blocked(&schema.db, EP1), "the relaying node blocks too");
+        peer.assert_async().await;
+    }
+
+    /// A peer reached through a real GraphQL endpoint, which sees the relay
+    /// as coming from a Giganto, blocks the relayed endpoints before it
+    /// answers, though it holds nothing of them.
+    #[cfg(feature = "cluster")]
+    #[tokio::test]
+    async fn peer_blocks_the_relayed_endpoint_ids_first() {
+        use async_graphql_poem::{GraphQLRequest, GraphQLResponse};
+        use poem::{FromRequest, IntoResponse};
+
+        let customer_id = 941;
+        let peer = TestSchema::new_with_ingest_sensors(&[]);
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let acceptor = TcpAcceptor::from_std(listener).unwrap();
+        let schema = peer.schema.clone();
+        // As the GraphQL endpoint does, with every caller recorded as a
+        // Giganto, the service a peer's certificate names.
+        let endpoint = poem::endpoint::make(move |req: poem::Request| {
+            let schema = schema.clone();
+            async move {
+                let remote = req.remote_addr().clone();
+                let callers = Arc::new(crate::web::GraphqlCallers::default());
+                let addr = remote
+                    .as_socket_addr()
+                    .expect("a request over TCP comes from a socket address");
+                callers.record_for_test(*addr, Some(crate::graphql::caller::GIGANTO_SERVICE));
+                let (req, mut body) = req.split();
+                let request = GraphQLRequest::from_request(&req, &mut body).await?.0;
+                let request = request.data(remote).data(callers);
+                Ok::<_, poem::Error>(GraphQLResponse(schema.execute(request).await).into_response())
+            }
+        });
+        let app = Route::new().at("/graphql", endpoint);
+        let server = tokio::spawn(PoemServer::new_with_acceptor(acceptor).run(app));
+        let initiating_node = TestSchema::new_with_graphql_peer(port);
+
+        let response = as_review(
+            &initiating_node,
+            &delete_endpoints_mutation(&[], &[&EP1.to_string()], customer_id, None),
+        )
+        .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.to_string(),
+            "{deleteCustomerData: NO_LOCAL_TARGET_ON_THIS_NODE}"
+        );
+        assert!(blocked(&peer.db, EP1), "the peer blocked it");
+        assert!(blocked(&initiating_node.db, EP1));
+
+        server.abort();
+        let _ = server.await;
     }
 }
