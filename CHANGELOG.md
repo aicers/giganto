@@ -4,6 +4,27 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.0](https://github.com/aicers/giganto/compare/0.37.0...0.38.0) - 2026-11-25
+
+### Added
+
+- block endpoints for good and delete their data when deleteCustomerData is given endpointIds ([#2055](https://github.com/aicers/giganto/pull/2055))
+- expose endpoint losses, events and last-received times to REview and delete losses and events after 30 days ([#2054](https://github.com/aicers/giganto/pull/2054))
+- store Clumit Endpoint telemetry batches and acknowledge each once it is on disk ([#2053](https://github.com/aicers/giganto/pull/2053))
+- admit endpoint telemetry by REview's active list and lease, set through REview-only GraphQL ([#2052](https://github.com/aicers/giganto/pull/2052))
+- convert Clumit Endpoint records and announce the 22 accepted kinds ([#2051](https://github.com/aicers/giganto/pull/2051))
+- add the endpoint telemetry port for Clumit Endpoint ([#2046](https://github.com/aicers/giganto/pull/2046))
+- [**breaking**] store and expose endpoint Sysmon headers and endpoint log kinds ([#2047](https://github.com/aicers/giganto/pull/2047))
+
+### Fixed
+
+- accept 0.38 in the protocol and data version ranges ([#2057](https://github.com/aicers/giganto/pull/2057))
+
+### Other
+
+- *(deps)* update Cargo.lock before the 0.38.0 release ([#2059](https://github.com/aicers/giganto/pull/2059))
+- cover sparse endpoint headers in merged Sysmon event queries ([#2050](https://github.com/aicers/giganto/pull/2050))
+
 ## [0.37.0](https://github.com/aicers/giganto/compare/0.36.0...0.37.0) - 2026-11-24
 
 ### Added
