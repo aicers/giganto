@@ -173,6 +173,15 @@ log queries and export, with that endpoint ID as the sensor.
   the node received them, once a day, whether or not the endpoint entry is
   open. The period is fixed, not a configuration key, and each endpoint's
   last-received time is kept.
+- `deleteCustomerData` with `endpointIds`, given by REview or by a peer
+  Giganto relaying the request, blocks those endpoints for good before it
+  deletes their data. The node blocks them even when it holds no data of
+  them, and whatever it answers. A blocked endpoint's open connections are
+  closed, and at its `hello` it gets `not_listed`, whatever its standing in
+  the active list; the block survives a restart and is never lifted. The
+  deletion also removes those endpoints' loss records under every entry ID,
+  their duplicate-key events and their last-received time, without waiting
+  for the 30 days.
 - An endpoint that moves to another node leaves its records split between
   the old node and the new one. A query for that single sensor, such as a
   Sysmon query or a consumer's publish range request, returns only the

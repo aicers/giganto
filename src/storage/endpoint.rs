@@ -2,7 +2,9 @@
 //! endpoints that connect to it: the `entry_id` REview assigned the node, the
 //! events the entry records, such as a key held by two hosts, the state of
 //! every telemetry stream, the records an endpoint reported lost or the entry
-//! could not convert, and when each endpoint last sent records.
+//! could not convert, when each endpoint last sent records, the endpoints
+//! customer data deletion has blocked for good, and the endpoint ids of each
+//! customer data deletion job.
 //!
 //! None of these column families is a raw-data one: retention there deletes
 //! by sensor prefix, which none of their keys has. The records themselves go
@@ -14,6 +16,7 @@ use std::{collections::HashSet, net::IpAddr, sync::Mutex};
 use anyhow::{Context, Result, anyhow, bail};
 use rocksdb::{ColumnFamily, Direction, IteratorMode, WriteBatch, WriteOptions};
 use serde::{Deserialize, Serialize};
+use tracing::error;
 use uuid::Uuid;
 
 use super::{APPEND_UNIQUE_LOCKS, Database, SENSORS_CF, StorageKey, append_unique_lock_index};
@@ -36,6 +39,15 @@ pub(crate) const ENDPOINT_LOSSES_CF: &str = "endpoint_losses";
 /// The column family holding, per endpoint id, the received time of the
 /// endpoint's last write carrying records.
 pub(crate) const ENDPOINT_LAST_RECEIVED_CF: &str = "endpoint_last_received";
+
+/// The column family holding, per endpoint id, when customer data deletion
+/// blocked the endpoint, in nanoseconds since the Unix epoch. A block is
+/// never lifted.
+pub(crate) const ENDPOINT_BLOCKED_CF: &str = "endpoint_blocked";
+
+/// The column family holding, per customer id, the endpoint ids of that
+/// customer's data deletion job: the ids' 16 bytes, one after another.
+pub(crate) const ENDPOINT_DELETION_JOBS_CF: &str = "endpoint_deletion_jobs";
 
 /// How long loss records and endpoint events are kept after they were
 /// received: 30 days, in nanoseconds.
@@ -61,8 +73,15 @@ const LOSS_KEY_LEN: usize = STREAM_KEY_LEN + 8 + 8 + 1 + 8;
 
 /// Serializes the sequence number lookup and the write that follows it, so
 /// that two events of one endpoint in the same nanosecond never take the same
-/// sequence number.
+/// sequence number. It also serializes each append, which reads the block of
+/// its endpoint under it, with [`Database::block_endpoints`], which holds it
+/// while it stores the blocks: an append either ends before a block is
+/// stored or reads it, so none is stored after the block.
 static EVENT_APPEND: Mutex<()> = Mutex::new(());
+
+/// Serializes the lookup of a block and the write that follows it, so that
+/// an endpoint blocked twice at once keeps the first blocked time.
+static BLOCK_WRITE: Mutex<()> = Mutex::new(());
 
 /// One key's connections replaced each other too often, from more than one
 /// address: two hosts may hold the same key.
@@ -741,7 +760,14 @@ impl Database {
 
     /// Stores `event` about `endpoint_id`, received at `received_ns`
     /// nanoseconds since the Unix epoch, under the lowest sequence number
-    /// not yet used for that time and endpoint, and returns that number.
+    /// not yet used for that time and endpoint, and returns that number; or
+    /// stores nothing and returns `None` when `endpoint_id` is blocked, or
+    /// its block cannot be read.
+    ///
+    /// The block is read under the same lock [`Self::block_endpoints`]
+    /// stores blocks under, so once a block is stored, no event of its
+    /// endpoint is stored after it: customer data deletion, which deletes
+    /// the events once the block is stored, never leaves one behind.
     ///
     /// # Errors
     ///
@@ -752,12 +778,17 @@ impl Database {
         received_ns: i64,
         endpoint_id: Uuid,
         event: &DuplicateKeyEvent,
-    ) -> Result<u32> {
+    ) -> Result<Option<u32>> {
         let cf = self.get_cf_handle(ENDPOINT_EVENTS_CF)?;
         let value = bincode::serialize(event).context("cannot serialize an endpoint event")?;
         let _append = EVENT_APPEND
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Refused rather than stored when the block cannot be read: an event
+        // stored after the deletion it should have stopped stays.
+        if self.is_endpoint_blocked_or_unreadable(endpoint_id, "not storing its event") {
+            return Ok(None);
+        }
         let mut sequence = 0_u32;
         loop {
             let key = endpoint_event_key(received_ns, endpoint_id, sequence);
@@ -770,7 +801,7 @@ impl Database {
                 self.db
                     .put_cf(cf, key, &value)
                     .context("cannot write an endpoint event")?;
-                return Ok(sequence);
+                return Ok(Some(sequence));
             }
             let Some(next) = sequence.checked_add(1) else {
                 bail!("every sequence number of an endpoint event time is taken");
@@ -933,6 +964,332 @@ impl Database {
         write(&mut batch, 1)?;
         Ok(expired)
     }
+
+    /// Blocks every endpoint of `endpoint_ids` at `now_ns`, nanoseconds since
+    /// the Unix epoch, in one synced write; returns once the write is on disk.
+    /// An endpoint already blocked keeps the time it was first blocked at.
+    ///
+    /// It waits for an event append in progress, and holds off new ones,
+    /// until the blocks are stored: once it returns, every event of those
+    /// endpoints stored before is on disk, and none is stored after.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be read or written; then
+    /// nothing was written.
+    pub(crate) fn block_endpoints(&self, endpoint_ids: &[Uuid], now_ns: i64) -> Result<()> {
+        let cf = self.get_cf_handle(ENDPOINT_BLOCKED_CF)?;
+        let _write = BLOCK_WRITE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Taken after `BLOCK_WRITE`, which an append never takes.
+        let _appends = EVENT_APPEND
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut batch = WriteBatch::default();
+        for endpoint_id in endpoint_ids {
+            if self.endpoint_blocked_at(*endpoint_id)?.is_none() {
+                batch.put_cf(cf, endpoint_id.as_bytes(), now_ns.to_be_bytes());
+            }
+        }
+        if batch.is_empty() {
+            return Ok(());
+        }
+        // The deletion that follows the block, and REview's removal of the
+        // endpoint from its own tables, rely on it holding after a crash. The
+        // database flushes its WAL only when asked (`manual_wal_flush`), so
+        // only a synced write is on disk by the time the request is answered.
+        // The cost is one disk round trip per customer data deletion request
+        // naming endpoints.
+        self.db
+            .write_opt(batch, &synced())
+            .context("cannot write the endpoint blocks")
+    }
+
+    /// Returns when `endpoint_id` was blocked, in nanoseconds since the Unix
+    /// epoch, or `None` when it is not blocked.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be read or the value
+    /// stored is not 8 bytes long.
+    pub(crate) fn endpoint_blocked_at(&self, endpoint_id: Uuid) -> Result<Option<i64>> {
+        let cf = self.get_cf_handle(ENDPOINT_BLOCKED_CF)?;
+        let Some(value) = self
+            .db
+            .get_pinned_cf(cf, endpoint_id.as_bytes())
+            .context("cannot read the endpoint blocks")?
+        else {
+            return Ok(None);
+        };
+        let bytes: [u8; 8] = value.as_ref().try_into().map_err(|_| {
+            anyhow!(
+                "the blocked time of endpoint {endpoint_id} is {} bytes long, not 8",
+                value.len()
+            )
+        })?;
+        Ok(Some(i64::from_be_bytes(bytes)))
+    }
+
+    /// Returns whether `endpoint_id` is blocked.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be read. A value of the
+    /// wrong length still means blocked.
+    pub(crate) fn is_endpoint_blocked(&self, endpoint_id: Uuid) -> Result<bool> {
+        let cf = self.get_cf_handle(ENDPOINT_BLOCKED_CF)?;
+        Ok(self
+            .db
+            .get_pinned_cf(cf, endpoint_id.as_bytes())
+            .context("cannot read the endpoint blocks")?
+            .is_some())
+    }
+
+    /// Returns whether `endpoint_id` is blocked, taking it as blocked when
+    /// that cannot be read: a block cannot be lifted, and one that cannot be
+    /// read may be there. `refusal` says, for the log, what is refused then.
+    pub(crate) fn is_endpoint_blocked_or_unreadable(
+        &self,
+        endpoint_id: Uuid,
+        refusal: &str,
+    ) -> bool {
+        blocked_unless_read(endpoint_id, self.is_endpoint_blocked(endpoint_id), refusal)
+    }
+
+    /// Returns whether the endpoint entry's own column families hold anything
+    /// of any endpoint of `endpoint_ids`: its last received time, a stream
+    /// state, a loss record under any `entry_id`, or an event.
+    ///
+    /// Neither the stream, the loss nor the event keys start with the
+    /// endpoint id, so those column families are read whole, once each for
+    /// all of `endpoint_ids`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a column family cannot be read, or a loss or event
+    /// entry in it is malformed.
+    pub(crate) fn holds_endpoint_data(&self, endpoint_ids: &[Uuid]) -> Result<bool> {
+        if endpoint_ids.is_empty() {
+            return Ok(false);
+        }
+        let last_received_cf = self.get_cf_handle(ENDPOINT_LAST_RECEIVED_CF)?;
+        for endpoint_id in endpoint_ids {
+            if self
+                .db
+                .get_pinned_cf(last_received_cf, endpoint_id.as_bytes())
+                .context("cannot read the endpoint last received times")?
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+        let endpoint_ids: HashSet<Uuid> = endpoint_ids.iter().copied().collect();
+        Ok(!self
+            .endpoint_stream_keys_of(&endpoint_ids, Some(1))?
+            .is_empty()
+            || !self
+                .endpoint_loss_keys_of(&endpoint_ids, Some(1))?
+                .is_empty()
+            || !self
+                .endpoint_event_keys_of(&endpoint_ids, Some(1))?
+                .is_empty())
+    }
+
+    /// Deletes every loss record of every endpoint of `endpoint_ids` under
+    /// every `entry_id`, every event about them and their last received
+    /// times, in one write. Deleting what is already gone succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a column family cannot be read or written, or a
+    /// loss or event entry in it is malformed; then nothing was deleted.
+    pub(crate) fn delete_endpoint_history(&self, endpoint_ids: &[Uuid]) -> Result<()> {
+        if endpoint_ids.is_empty() {
+            return Ok(());
+        }
+        let losses_cf = self.get_cf_handle(ENDPOINT_LOSSES_CF)?;
+        let events_cf = self.get_cf_handle(ENDPOINT_EVENTS_CF)?;
+        let last_received_cf = self.get_cf_handle(ENDPOINT_LAST_RECEIVED_CF)?;
+        let ids: HashSet<Uuid> = endpoint_ids.iter().copied().collect();
+        let mut batch = WriteBatch::default();
+        for key in self.endpoint_loss_keys_of(&ids, None)? {
+            batch.delete_cf(losses_cf, key);
+        }
+        for key in self.endpoint_event_keys_of(&ids, None)? {
+            batch.delete_cf(events_cf, key);
+        }
+        for endpoint_id in endpoint_ids {
+            batch.delete_cf(last_received_cf, endpoint_id.as_bytes());
+        }
+        self.db
+            .write(batch)
+            .context("cannot delete the endpoint losses, events and last received times")
+    }
+
+    /// Deletes the state of every stream of every endpoint of `endpoint_ids`,
+    /// under every `entry_id`, in one write. Deleting what is already gone
+    /// succeeds.
+    ///
+    /// It must be called holding the `ReceiverStream` lock, so that no batch
+    /// write interleaves with it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be read or written; then
+    /// nothing was deleted.
+    pub(crate) fn delete_endpoint_streams(&self, endpoint_ids: &[Uuid]) -> Result<()> {
+        if endpoint_ids.is_empty() {
+            return Ok(());
+        }
+        let cf = self.get_cf_handle(ENDPOINT_STREAMS_CF)?;
+        let ids: HashSet<Uuid> = endpoint_ids.iter().copied().collect();
+        let mut batch = WriteBatch::default();
+        for key in self.endpoint_stream_keys_of(&ids, None)? {
+            batch.delete_cf(cf, key);
+        }
+        self.db
+            .write(batch)
+            .context("cannot delete the endpoint stream states")
+    }
+
+    /// Returns the keys of the stream states of the endpoints of
+    /// `endpoint_ids` under every `entry_id`, at most `limit` of them when
+    /// one is given. A key of another length is no stream state.
+    fn endpoint_stream_keys_of(
+        &self,
+        endpoint_ids: &HashSet<Uuid>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Box<[u8]>>> {
+        let cf = self.get_cf_handle(ENDPOINT_STREAMS_CF)?;
+        let mut keys = Vec::new();
+        for item in self.db.iterator_cf(cf, IteratorMode::Start) {
+            if limit.is_some_and(|limit| keys.len() >= limit) {
+                break;
+            }
+            let (key, _) = item.context("cannot read the endpoint streams")?;
+            let endpoint_id = (key.len() == STREAM_KEY_LEN)
+                .then(|| key.get(16..32))
+                .flatten()
+                .and_then(|bytes| Uuid::from_slice(bytes).ok());
+            if endpoint_id.is_some_and(|id| endpoint_ids.contains(&id)) {
+                keys.push(key);
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Returns the keys of the loss records of the endpoints of
+    /// `endpoint_ids` under every `entry_id`, at most `limit` of them when
+    /// one is given.
+    fn endpoint_loss_keys_of(
+        &self,
+        endpoint_ids: &HashSet<Uuid>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Box<[u8]>>> {
+        let cf = self.get_cf_handle(ENDPOINT_LOSSES_CF)?;
+        let mut keys = Vec::new();
+        for item in self.db.iterator_cf(cf, IteratorMode::Start) {
+            if limit.is_some_and(|limit| keys.len() >= limit) {
+                break;
+            }
+            let (key, value) = item.context("cannot read the endpoint losses")?;
+            if endpoint_ids.contains(&decode_loss(&key, &value)?.endpoint_id) {
+                keys.push(key);
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Returns the keys of the events about the endpoints of `endpoint_ids`,
+    /// at most `limit` of them when one is given.
+    fn endpoint_event_keys_of(
+        &self,
+        endpoint_ids: &HashSet<Uuid>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Box<[u8]>>> {
+        let cf = self.get_cf_handle(ENDPOINT_EVENTS_CF)?;
+        let mut keys = Vec::new();
+        for item in self.db.iterator_cf(cf, IteratorMode::Start) {
+            if limit.is_some_and(|limit| keys.len() >= limit) {
+                break;
+            }
+            let (key, value) = item.context("cannot read the endpoint events")?;
+            if endpoint_ids.contains(&decode_event(&key, &value)?.endpoint_id) {
+                keys.push(key);
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Returns the endpoint ids stored with customer `customer_id`'s data
+    /// deletion job, or `None` when none are stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be read or the value is
+    /// not a whole number of endpoint ids.
+    pub(crate) fn endpoint_deletion_job(&self, customer_id: u32) -> Result<Option<Vec<Uuid>>> {
+        let cf = self.get_cf_handle(ENDPOINT_DELETION_JOBS_CF)?;
+        let Some(value) = self
+            .db
+            .get_pinned_cf(cf, customer_id.to_be_bytes())
+            .context("cannot read the endpoint ids of the customer deletion jobs")?
+        else {
+            return Ok(None);
+        };
+        let (ids, rest) = value.as_chunks::<16>();
+        if !rest.is_empty() {
+            bail!(
+                "the endpoint ids of customer {customer_id}'s deletion job are {} bytes long, \
+                 not a multiple of 16",
+                value.len()
+            );
+        }
+        Ok(Some(ids.iter().copied().map(Uuid::from_bytes).collect()))
+    }
+
+    /// Stores `endpoint_ids` as the endpoint ids of customer `customer_id`'s
+    /// data deletion job, replacing any stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be written.
+    pub(crate) fn put_endpoint_deletion_job(
+        &self,
+        customer_id: u32,
+        endpoint_ids: &[Uuid],
+    ) -> Result<()> {
+        let cf = self.get_cf_handle(ENDPOINT_DELETION_JOBS_CF)?;
+        let value: Vec<u8> = endpoint_ids
+            .iter()
+            .flat_map(|id| id.as_bytes().iter().copied())
+            .collect();
+        self.db
+            .put_cf(cf, customer_id.to_be_bytes(), value)
+            .context("cannot write the endpoint ids of a customer deletion job")
+    }
+
+    /// Forgets the endpoint ids of customer `customer_id`'s data deletion job.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be written.
+    pub(crate) fn delete_endpoint_deletion_job(&self, customer_id: u32) -> Result<()> {
+        let cf = self.get_cf_handle(ENDPOINT_DELETION_JOBS_CF)?;
+        self.db
+            .delete_cf(cf, customer_id.to_be_bytes())
+            .context("cannot delete the endpoint ids of a customer deletion job")
+    }
+}
+
+/// Returns what `read` says of whether `endpoint_id` is blocked, or `true`
+/// when it could not be read, logging why and that `refusal` follows.
+fn blocked_unless_read(endpoint_id: Uuid, read: Result<bool>, refusal: &str) -> bool {
+    read.unwrap_or_else(|e| {
+        error!("Endpoint {endpoint_id}: {e:#}; {refusal}");
+        true
+    })
 }
 
 #[cfg(test)]
@@ -1026,21 +1383,21 @@ mod tests {
         assert_eq!(
             db.append_endpoint_duplicate_key(at, endpoint_id, &event)
                 .unwrap(),
-            0
+            Some(0)
         );
         assert_eq!(
             db.append_endpoint_duplicate_key(at, endpoint_id, &event)
                 .unwrap(),
-            1
+            Some(1)
         );
         assert_eq!(
             db.append_endpoint_duplicate_key(at, other, &event).unwrap(),
-            0
+            Some(0)
         );
         assert_eq!(
             db.append_endpoint_duplicate_key(at + 1, endpoint_id, &event)
                 .unwrap(),
-            0
+            Some(0)
         );
 
         let mut expected_key = Vec::new();
@@ -1433,7 +1790,318 @@ mod tests {
 
     #[test]
     fn the_endpoint_families_are_not_raw_data_families() {
-        assert!(!crate::storage::RAW_DATA_COLUMN_FAMILY_NAMES.contains(&ENDPOINT_ENTRY_CF));
-        assert!(!crate::storage::RAW_DATA_COLUMN_FAMILY_NAMES.contains(&ENDPOINT_EVENTS_CF));
+        for cf in [
+            ENDPOINT_ENTRY_CF,
+            ENDPOINT_EVENTS_CF,
+            ENDPOINT_STREAMS_CF,
+            ENDPOINT_LOSSES_CF,
+            ENDPOINT_LAST_RECEIVED_CF,
+            ENDPOINT_BLOCKED_CF,
+            ENDPOINT_DELETION_JOBS_CF,
+        ] {
+            assert!(
+                !crate::storage::RAW_DATA_COLUMN_FAMILY_NAMES.contains(&cf),
+                "{cf}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_block_keeps_its_first_time_and_survives_reopening() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocked = Uuid::from_u128(0xb1);
+        let other = Uuid::from_u128(0xb2);
+        {
+            let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+            assert!(!db.is_endpoint_blocked(blocked).unwrap());
+            db.block_endpoints(&[blocked], 10).expect("block");
+            db.block_endpoints(&[blocked, other], 20)
+                .expect("block again");
+            assert_eq!(db.endpoint_blocked_at(blocked).unwrap(), Some(10));
+            assert_eq!(db.endpoint_blocked_at(other).unwrap(), Some(20));
+            db.block_endpoints(&[], 30).expect("block nothing");
+            db.shutdown().expect("shut down");
+        }
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("reopen");
+        assert!(db.is_endpoint_blocked(blocked).unwrap());
+        assert_eq!(db.endpoint_blocked_at(blocked).unwrap(), Some(10));
+        assert!(!db.is_endpoint_blocked(Uuid::from_u128(0xb3)).unwrap());
+    }
+
+    /// An event of a blocked endpoint, or of one whose block cannot be read,
+    /// is not stored; another endpoint's still is.
+    #[test]
+    fn an_event_of_a_blocked_endpoint_is_not_stored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let (blocked, unreadable, other) = (
+            Uuid::from_u128(0xe1),
+            Uuid::from_u128(0xe2),
+            Uuid::from_u128(0xe3),
+        );
+        let event = DuplicateKeyEvent {
+            spki_sha256: [7; 32],
+            addresses: vec!["192.0.2.1".parse().unwrap()],
+            replacements: 3,
+        };
+        db.block_endpoints(&[blocked], 10).expect("block");
+        db.put_cf_for_test(ENDPOINT_BLOCKED_CF, unreadable.as_bytes(), &[0; 3])
+            .expect("raw write");
+        let at = 1_700_000_000_000_000_000_i64;
+        for endpoint_id in [blocked, unreadable] {
+            assert_eq!(
+                db.append_endpoint_duplicate_key(at, endpoint_id, &event)
+                    .unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            db.append_endpoint_duplicate_key(at, other, &event).unwrap(),
+            Some(0)
+        );
+        let events = db.endpoint_events_since(-1).expect("read");
+        assert_eq!(
+            events.iter().map(|e| e.endpoint_id).collect::<Vec<_>>(),
+            [other]
+        );
+    }
+
+    #[test]
+    fn a_block_of_the_wrong_length_is_an_error_and_still_blocks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let blocked = Uuid::from_u128(0xb5);
+        db.put_cf_for_test(ENDPOINT_BLOCKED_CF, blocked.as_bytes(), &[0; 3])
+            .expect("raw write");
+        assert!(db.endpoint_blocked_at(blocked).is_err());
+        assert!(db.is_endpoint_blocked(blocked).unwrap());
+        assert!(db.is_endpoint_blocked_or_unreadable(blocked, "refusing"));
+        assert!(!db.is_endpoint_blocked_or_unreadable(Uuid::from_u128(0xb6), "refusing"));
+    }
+
+    #[test]
+    fn a_block_that_cannot_be_read_is_taken_as_a_block() {
+        let endpoint_id = Uuid::from_u128(0xb7);
+        assert!(blocked_unless_read(
+            endpoint_id,
+            Err(anyhow!("injected read failure")),
+            "refusing"
+        ));
+        assert!(blocked_unless_read(endpoint_id, Ok(true), "refusing"));
+        assert!(!blocked_unless_read(endpoint_id, Ok(false), "refusing"));
+    }
+
+    /// What a crash leaves is what is in the files: a block is on disk once
+    /// its write returns.
+    #[test]
+    fn a_block_is_on_disk_once_its_write_returns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let crashed = tempfile::tempdir().expect("tempdir");
+        let blocked = Uuid::from_u128(0xb4);
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        db.block_endpoints(&[blocked], 1).expect("block");
+        for file in std::fs::read_dir(dir.path()).expect("list the database files") {
+            let file = file.expect("a database file");
+            if file.file_type().expect("its type").is_file() {
+                std::fs::copy(file.path(), crashed.path().join(file.file_name()))
+                    .expect("copy a database file");
+            }
+        }
+        let recovered = Database::open(crashed.path(), &DbOptions::default()).expect("recover");
+        assert!(recovered.is_endpoint_blocked(blocked).unwrap());
+        drop(db);
+    }
+
+    /// Writes one entry of each endpoint family of `endpoint_id`: a stream
+    /// state and a loss under `entry_id`, an event and its last received
+    /// time.
+    fn write_history(db: &Database, entry_id: Uuid, endpoint_id: Uuid, at: i64) {
+        let stream = Uuid::from_u128(0x5);
+        db.write_endpoint_batch(EndpointBatch {
+            entry_id,
+            received_ns: at,
+            changes: vec![
+                EndpointChange::SetStream {
+                    endpoint_id,
+                    stream,
+                    state: StoredStream {
+                        a: 1,
+                        last_stored: None,
+                        closed_at_ns: None,
+                    },
+                },
+                EndpointChange::Loss {
+                    endpoint_id,
+                    stream,
+                    from: 1,
+                    to: 1,
+                    reason: LossReason::Dropped,
+                    detail: "full".to_owned(),
+                },
+            ],
+            received_from: vec![endpoint_id],
+        })
+        .expect("write a batch");
+        db.append_endpoint_duplicate_key(at, endpoint_id, &duplicate_key(4))
+            .expect("write an event");
+    }
+
+    #[test]
+    fn an_endpoints_history_and_streams_are_deleted_under_every_entry_id_and_no_other() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let (deleted, kept) = (Uuid::from_u128(0xd1), Uuid::from_u128(0xd2));
+        let (old_entry, entry) = (Uuid::from_u128(0xe1), Uuid::from_u128(0xe2));
+        assert!(!db.holds_endpoint_data(&[deleted]).unwrap());
+        write_history(&db, old_entry, deleted, 1);
+        write_history(&db, entry, deleted, 2);
+        write_history(&db, entry, kept, 3);
+        assert!(db.holds_endpoint_data(&[deleted]).unwrap());
+
+        for _ in 0..2 {
+            db.delete_endpoint_history(&[deleted])
+                .expect("delete the history");
+            db.delete_endpoint_streams(&[deleted])
+                .expect("delete the streams");
+            assert!(!db.holds_endpoint_data(&[deleted]).unwrap());
+            let losses = db.endpoint_losses_since(-1).unwrap();
+            assert_eq!(losses.len(), 1);
+            assert!(losses.iter().all(|loss| loss.endpoint_id == kept));
+            let events = db.endpoint_events_since(-1).unwrap();
+            assert_eq!(events.len(), 1);
+            assert!(events.iter().all(|event| event.endpoint_id == kept));
+            assert_eq!(db.endpoint_last_received(None, 10).unwrap().0, [(kept, 3)]);
+            assert!(
+                db.endpoint_streams(old_entry).unwrap().is_empty(),
+                "under the earlier entry_id too"
+            );
+            let streams = db.endpoint_streams(entry).unwrap();
+            assert_eq!(streams.len(), 1);
+            assert_eq!(streams[0].0.0, kept);
+            assert!(db.holds_endpoint_data(&[kept]).unwrap());
+        }
+    }
+
+    #[test]
+    fn each_endpoint_family_alone_is_data_of_the_endpoint() {
+        let endpoint_id = Uuid::from_u128(0xf1);
+        let entry_id = Uuid::from_u128(0xe1);
+        let stream = Uuid::from_u128(0x5);
+        let writes: [(&str, Vec<u8>, Vec<u8>); 4] = [
+            (
+                ENDPOINT_LAST_RECEIVED_CF,
+                endpoint_id.as_bytes().to_vec(),
+                1_i64.to_be_bytes().to_vec(),
+            ),
+            (
+                ENDPOINT_STREAMS_CF,
+                endpoint_stream_key(entry_id, endpoint_id, stream).to_vec(),
+                b"state".to_vec(),
+            ),
+            (
+                ENDPOINT_LOSSES_CF,
+                endpoint_loss_key(entry_id, endpoint_id, stream, 1, 1, LossReason::Dropped, 1)
+                    .to_vec(),
+                Vec::new(),
+            ),
+            (
+                ENDPOINT_EVENTS_CF,
+                endpoint_event_key(1, endpoint_id, 0).to_vec(),
+                bincode::serialize(&duplicate_key(4)).unwrap(),
+            ),
+        ];
+        for (cf, key, value) in writes {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+            db.put_cf_for_test(cf, &key, &value).expect("raw write");
+            assert!(db.holds_endpoint_data(&[endpoint_id]).unwrap(), "{cf}");
+            assert!(
+                !db.holds_endpoint_data(&[Uuid::from_u128(0xf2)]).unwrap(),
+                "{cf}"
+            );
+        }
+    }
+
+    /// A column family holding more than one entry of the endpoint is data
+    /// of it as well, and nothing is data of no endpoint.
+    #[test]
+    fn several_entries_of_one_family_are_data_of_the_endpoint() {
+        type TwoEntries = [(Vec<u8>, Vec<u8>); 2];
+        let endpoint_id = Uuid::from_u128(0xf3);
+        let (entry_id, stream) = (Uuid::from_u128(0xe1), Uuid::from_u128(0x5));
+        let event = bincode::serialize(&duplicate_key(4)).unwrap();
+        let writes: [(&str, TwoEntries); 3] = [
+            (
+                ENDPOINT_STREAMS_CF,
+                [
+                    (
+                        endpoint_stream_key(entry_id, endpoint_id, stream).to_vec(),
+                        b"state".to_vec(),
+                    ),
+                    (
+                        endpoint_stream_key(Uuid::from_u128(0xe2), endpoint_id, stream).to_vec(),
+                        b"state".to_vec(),
+                    ),
+                ],
+            ),
+            (
+                ENDPOINT_LOSSES_CF,
+                [1, 2].map(|from| {
+                    let key = endpoint_loss_key(
+                        entry_id,
+                        endpoint_id,
+                        stream,
+                        from,
+                        from,
+                        LossReason::Dropped,
+                        1,
+                    );
+                    (key.to_vec(), Vec::new())
+                }),
+            ),
+            (
+                ENDPOINT_EVENTS_CF,
+                [1, 2].map(|at| {
+                    (
+                        endpoint_event_key(at, endpoint_id, 0).to_vec(),
+                        event.clone(),
+                    )
+                }),
+            ),
+        ];
+        for (cf, entries) in writes {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+            for (key, value) in entries {
+                db.put_cf_for_test(cf, &key, &value).expect("raw write");
+            }
+            assert!(db.holds_endpoint_data(&[endpoint_id]).unwrap(), "{cf}");
+            assert!(!db.holds_endpoint_data(&[]).unwrap(), "{cf}");
+            db.delete_endpoint_history(&[]).expect("delete no history");
+            db.delete_endpoint_streams(&[]).expect("delete no streams");
+            assert!(db.holds_endpoint_data(&[endpoint_id]).unwrap(), "{cf}");
+        }
+    }
+
+    #[test]
+    fn a_jobs_endpoint_ids_are_stored_replaced_and_forgotten() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let ids = [Uuid::from_u128(1), Uuid::from_u128(2)];
+        assert_eq!(db.endpoint_deletion_job(7).unwrap(), None);
+        db.put_endpoint_deletion_job(7, &ids).expect("store");
+        assert_eq!(db.endpoint_deletion_job(7).unwrap(), Some(ids.to_vec()));
+        assert_eq!(db.endpoint_deletion_job(8).unwrap(), None);
+        db.put_endpoint_deletion_job(7, &ids[1..]).expect("replace");
+        assert_eq!(
+            db.endpoint_deletion_job(7).unwrap(),
+            Some(ids[1..].to_vec())
+        );
+        db.delete_endpoint_deletion_job(7).expect("forget");
+        assert_eq!(db.endpoint_deletion_job(7).unwrap(), None);
+
+        db.put_cf_for_test(ENDPOINT_DELETION_JOBS_CF, &9_u32.to_be_bytes(), &[0; 17])
+            .expect("raw write");
+        assert!(db.endpoint_deletion_job(9).is_err());
     }
 }

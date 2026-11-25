@@ -13,6 +13,15 @@
 //! `hello` take it. So an admission that races an update is either judged
 //! against the updated list and the newly stored `entry_id`, or registered
 //! before the update and among the connections the update closes.
+//!
+//! Customer data deletion blocks endpoints for good. The block is stored
+//! first, then the lock is taken to close the blocked endpoints' connections,
+//! and an admission reads the blocks under the same lock. So an admission
+//! that races a block either reads it and refuses the endpoint, or is
+//! registered before the block takes the lock and among the connections it
+//! closes. A duplicate key such an admission reveals is stored outside the
+//! lock, so the database reads the block again under the lock it stores
+//! blocks under, and stores no event of a blocked endpoint.
 
 use std::{
     collections::HashMap,
@@ -24,6 +33,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use jiff::Timestamp;
 use senta_protocol::{
@@ -158,13 +168,20 @@ impl Closing {
     }
 }
 
+/// A connection admitted and not yet closed.
+struct Admitted {
+    /// The endpoint id the connection was admitted as.
+    endpoint_id: Uuid,
+    closing: Arc<Closing>,
+}
+
 /// What the lock covers.
 struct Inner {
     list: ActiveList,
     entry_id: Option<Uuid>,
     /// The connections admitted and not yet closed, by the id they are
     /// registered under.
-    connections: HashMap<ConnectionId, Arc<Closing>>,
+    connections: HashMap<ConnectionId, Admitted>,
 }
 
 impl Inner {
@@ -184,9 +201,9 @@ impl Inner {
     /// `closed` when it was open.
     fn close(&mut self, id: ConnectionId, command: CloseCommand, closed: &mut Vec<Arc<Closing>>) {
         self.list.remove(id);
-        if let Some(closing) = self.connections.remove(&id) {
-            closing.close(command);
-            closed.push(closing);
+        if let Some(admitted) = self.connections.remove(&id) {
+            admitted.closing.close(command);
+            closed.push(admitted.closing);
         }
     }
 
@@ -477,6 +494,70 @@ impl EndpointList {
         }
     }
 
+    /// Blocks every endpoint of `endpoint_ids` for good, as customer data
+    /// deletion does before it deletes their data, whether or not this node
+    /// holds any of it.
+    ///
+    /// The blocks are stored first, in a synced write, so they hold after a
+    /// restart; a duplicate-key event of a blocked endpoint being stored has
+    /// been stored by then, and none is stored after. Then every open
+    /// connection of a blocked endpoint is closed
+    /// with `not_listed`, and the `ReceiverStream` lock of `flows` is taken
+    /// and released once, on a blocking thread, so that a batch write in
+    /// progress has finished; every write after it reads the blocks. It
+    /// answers only once every connection it closed has stopped processing
+    /// messages. Blocking an endpoint already blocked changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the time cannot be read or the blocks cannot be
+    /// stored, and then no connection was closed, though some blocks may
+    /// already be stored; or if waiting for the batch write in progress
+    /// fails, after the blocks were stored and the connections closed.
+    pub(crate) async fn block(
+        &self,
+        database: &Database,
+        flows: &Arc<EndpointFlows>,
+        endpoint_ids: &[Uuid],
+    ) -> anyhow::Result<()> {
+        if endpoint_ids.is_empty() {
+            return Ok(());
+        }
+        let now_ns = now_nanos()?;
+        {
+            let database = database.clone();
+            let endpoint_ids = endpoint_ids.to_vec();
+            tokio::task::spawn_blocking(move || database.block_endpoints(&endpoint_ids, now_ns))
+                .await
+                .context("storing the endpoint blocks was interrupted")??;
+        }
+        let mut closed = Vec::new();
+        {
+            let mut inner = self.lock();
+            let blocked: Vec<ConnectionId> = inner
+                .connections
+                .iter()
+                .filter(|(_, admitted)| endpoint_ids.contains(&admitted.endpoint_id))
+                .map(|(id, _)| *id)
+                .collect();
+            let command = CloseCommand::for_standing(&Standing::NotListed);
+            for id in blocked {
+                inner.close(id, command.clone(), &mut closed);
+            }
+        }
+        let (blocked_count, closed_count) = (endpoint_ids.len(), closed.len());
+        info!(
+            "Endpoint entry: blocked {blocked_count} endpoint(s) for customer data deletion; \
+             closed {closed_count} connection(s)"
+        );
+        let flows = Arc::clone(flows);
+        tokio::task::spawn_blocking(move || drop(flows.lock()))
+            .await
+            .context("waiting for the telemetry streams' batch write failed")?;
+        wait_stopped(&closed).await;
+        Ok(())
+    }
+
     /// Starts a connection whose TLS handshake has completed, from the key
     /// whose SPKI hash is `spki_sha256` at `address`.
     ///
@@ -550,8 +631,10 @@ impl PendingConnection {
     /// it is registered, which may replace the connection open with the same
     /// key and reveal a lease expiry, and judged by its standing: an active
     /// one is admitted and stays registered until it ends, and any other
-    /// gets its standing's telemetry error.
-    pub(super) fn admit(&self) -> Admission {
+    /// gets its standing's telemetry error. An endpoint the list identifies
+    /// that is blocked in `database` gets `not_listed`, whatever its
+    /// standing; the block is read under the list's lock.
+    pub(super) fn admit(&self, database: &Database) -> Admission {
         let mut closed = Vec::new();
         let mut inner = self.list.lock();
         if !inner.list.is_ready() {
@@ -587,7 +670,19 @@ impl PendingConnection {
             );
             inner.close(replaced, CloseCommand::Silent, &mut closed);
         }
-        let ConnectionStanding { standing, identity } = inner.list.standing(&self.spki_sha256, now);
+        let ConnectionStanding {
+            mut standing,
+            identity,
+        } = inner.list.standing(&self.spki_sha256, now);
+        if let Some(identity) = &identity {
+            let endpoint_id = identity.endpoint_id;
+            // Refused rather than admitted when the block cannot be read.
+            if database.is_endpoint_blocked_or_unreadable(endpoint_id, "refusing its connection") {
+                let address = &self.address;
+                debug!("Endpoint connection from {address}: endpoint {endpoint_id} is blocked");
+                standing = Standing::NotListed;
+            }
+        }
         // Only an active standing matched to a list entry is admitted: the
         // entry's endpoint id is the source of everything the connection
         // sends, and an active standing always comes from one.
@@ -600,8 +695,14 @@ impl PendingConnection {
                 verdict => verdict,
             };
         let endpoint_id = endpoint_id.filter(|_| verdict == StandingVerdict::Accept);
-        if endpoint_id.is_some() {
-            inner.connections.insert(self.id, Arc::clone(&self.closing));
+        if let Some(endpoint_id) = endpoint_id {
+            inner.connections.insert(
+                self.id,
+                Admitted {
+                    endpoint_id,
+                    closing: Arc::clone(&self.closing),
+                },
+            );
         } else {
             debug!(
                 "Endpoint connection from {}: standing {standing:?}",
@@ -647,7 +748,10 @@ impl Drop for Registration {
 /// events.
 ///
 /// One whose key matches no entry of the list is logged and not stored: a
-/// connection admitted as active always matches one.
+/// connection admitted as active always matches one. Nor is one of a blocked
+/// endpoint, though it is revealed outside the list's lock by a connection
+/// that may be in no registry [`EndpointList::block`] waits on: the database
+/// reads the block under the lock it stores blocks under.
 pub(super) fn store_duplicate_key(database: &Database, at: Timestamp, duplicate_key: DuplicateKey) {
     let DuplicateKey {
         spki_sha256,
@@ -672,9 +776,19 @@ pub(super) fn store_duplicate_key(database: &Database, at: Timestamp, duplicate_
         addresses,
         replacements: u64::try_from(replacements).unwrap_or(u64::MAX),
     };
-    if let Err(e) = database.append_endpoint_duplicate_key(received_ns, endpoint_id, &event) {
-        error!("Endpoint duplicate key of {endpoint_id}: {e:#}");
+    match database.append_endpoint_duplicate_key(received_ns, endpoint_id, &event) {
+        Ok(Some(_)) => {}
+        Ok(None) => debug!("Endpoint duplicate key of {endpoint_id}: blocked; not stored"),
+        Err(e) => error!("Endpoint duplicate key of {endpoint_id}: {e:#}"),
     }
+}
+
+/// The time [`EndpointList::block`] stores a block at, in nanoseconds since
+/// the Unix epoch.
+fn now_nanos() -> anyhow::Result<i64> {
+    let now = Timestamp::now();
+    i64::try_from(now.as_nanosecond())
+        .map_err(|_| anyhow::anyhow!("{now} does not fit i64 nanoseconds since the Unix epoch"))
 }
 
 /// Waits until every connection in `closed` has stopped processing
@@ -876,6 +990,7 @@ pub(super) mod tests {
                 pending,
                 registration: Some(registration),
                 stop,
+                db: self.db.clone(),
             }
         }
 
@@ -896,11 +1011,12 @@ pub(super) mod tests {
         pending: PendingConnection,
         registration: Option<Registration>,
         stop: CancellationToken,
+        db: Database,
     }
 
     impl Conn {
         fn hello(&mut self) -> StandingVerdict {
-            self.pending.admit().verdict
+            self.pending.admit(&self.db).verdict
         }
 
         /// Serves the connection until it is told to close; the task ends as
@@ -954,6 +1070,112 @@ pub(super) mod tests {
                 version: None
             }
         );
+    }
+
+    /// A blocked endpoint gets `not_listed` at `hello` though it is active,
+    /// and its open connections are closed with it when it is blocked; other
+    /// endpoints' are not.
+    #[tokio::test]
+    async fn a_blocked_endpoint_is_closed_and_refused_whatever_its_standing() {
+        let fixture = Fixture::new();
+        fixture
+            .apply(
+                &full(
+                    1,
+                    vec![
+                        entry(1, spki(1), EntryState::Active),
+                        entry(2, spki(2), EntryState::Active),
+                        entry(3, spki(3), suspended()),
+                    ],
+                ),
+                ENTRY_ID,
+            )
+            .await
+            .expect("a full list applies");
+        let first = fixture.admitted(spki(1), ip(1));
+        let other = fixture.admitted(spki(2), ip(2));
+        assert_eq!(fixture.list.registered(), (2, 2));
+
+        fixture
+            .list
+            .block(&fixture.db, &fixture.flows, &[])
+            .await
+            .expect("blocking nothing succeeds");
+        assert!(!first.is_told(), "blocking nothing closes nothing");
+        fixture
+            .list
+            .block(
+                &fixture.db,
+                &fixture.flows,
+                &[Uuid::from_u128(1), Uuid::from_u128(3), Uuid::from_u128(9)],
+            )
+            .await
+            .expect("the endpoints are blocked");
+        assert_eq!(first.told().await, Told::Error(TelemetryError::NotListed));
+        assert!(!other.is_told());
+        assert_eq!(fixture.list.registered(), (1, 1));
+        for id in [1, 3, 9] {
+            assert!(fixture.db.is_endpoint_blocked(Uuid::from_u128(id)).unwrap());
+        }
+
+        for key in [spki(1), spki(3)] {
+            let mut refused = fixture.connect(key, ip(3));
+            assert_eq!(
+                verdict_error(&refused.hello()),
+                Some(TelemetryError::NotListed)
+            );
+        }
+        assert_eq!(fixture.list.registered(), (1, 1), "neither is registered");
+        // Nor does a later list that still holds it active change that.
+        fixture
+            .apply(
+                &full(2, vec![entry(1, spki(1), EntryState::Active)]),
+                ENTRY_ID,
+            )
+            .await
+            .expect("a full list applies");
+        let mut refused = fixture.connect(spki(1), ip(1));
+        assert_eq!(
+            verdict_error(&refused.hello()),
+            Some(TelemetryError::NotListed)
+        );
+    }
+
+    /// A block is read from the store at every `hello`, so it holds for a
+    /// list and a database opened again after a restart.
+    #[tokio::test]
+    async fn a_block_holds_after_a_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+            let list = Arc::new(EndpointList::new(LEASE));
+            let flows = Arc::new(EndpointFlows::new(db.clone()));
+            list.block(&db, &flows, &[Uuid::from_u128(1)])
+                .await
+                .expect("the endpoint is blocked");
+            db.shutdown().expect("shut down");
+        }
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("reopen");
+        let fixture = Fixture {
+            list: Arc::new(EndpointList::new(LEASE)),
+            flows: Arc::new(EndpointFlows::new(db.clone())),
+            db,
+            _dir: dir,
+        };
+        fixture.list.load_entry_id(&fixture.db);
+        fixture
+            .apply(
+                &full(1, vec![entry(1, spki(1), EntryState::Active)]),
+                ENTRY_ID,
+            )
+            .await
+            .expect("a full list applies");
+        let mut refused = fixture.connect(spki(1), ip(1));
+        assert_eq!(
+            verdict_error(&refused.hello()),
+            Some(TelemetryError::NotListed)
+        );
+        assert_eq!(fixture.list.registered(), (0, 0));
     }
 
     #[tokio::test]
@@ -1600,7 +1822,7 @@ pub(super) mod tests {
         for n in 0..=DUPLICATE_KEY_THRESHOLD {
             let address = ip(if n % 2 == 0 { 1 } else { 2 });
             let conn = fixture.connect(spki(1), address);
-            let admission = conn.pending.admit();
+            let admission = conn.pending.admit(&conn.db);
             assert_eq!(admission.verdict, StandingVerdict::Accept);
             if let Some(found) = admission.duplicate_key {
                 revealed = Some(found);
@@ -1628,6 +1850,80 @@ pub(super) mod tests {
                 addresses: vec![ip(1), ip(2)],
                 replacements: u64::try_from(DUPLICATE_KEY_THRESHOLD).unwrap(),
             }
+        );
+    }
+
+    /// The block is stored before the list's lock is taken to close the
+    /// endpoint's connections. A connection admitted between the two reads
+    /// the block and is refused, but its registration still replaces the
+    /// open connection of the same key and reveals a duplicate key, which is
+    /// stored outside the lock and by a connection in no registry the block
+    /// waits on. Customer data deletion may have deleted the endpoint's
+    /// events by then, and the event is not stored after it.
+    #[tokio::test]
+    async fn a_duplicate_key_revealed_after_the_block_is_stored_is_not_stored() {
+        let fixture = Fixture::new();
+        fixture
+            .apply(
+                &full(1, vec![entry(1, spki(1), EntryState::Active)]),
+                ENTRY_ID,
+            )
+            .await
+            .expect("a full list applies");
+        let endpoint_id = Uuid::from_u128(1);
+        let mut held = Vec::new();
+        for n in 0..DUPLICATE_KEY_THRESHOLD {
+            let address = ip(if n % 2 == 0 { 1 } else { 2 });
+            let conn = fixture.connect(spki(1), address);
+            let admission = conn.pending.admit(&conn.db);
+            assert_eq!(admission.verdict, StandingVerdict::Accept);
+            assert!(admission.duplicate_key.is_none());
+            held.push(conn);
+        }
+        assert_eq!(fixture.list.registered(), (1, 1));
+
+        // The block is stored; `EndpointList::block` has not yet taken the
+        // list's lock.
+        fixture
+            .db
+            .block_endpoints(&[endpoint_id], 10)
+            .expect("store the block");
+        let address = ip(if DUPLICATE_KEY_THRESHOLD.is_multiple_of(2) {
+            1
+        } else {
+            2
+        });
+        let conn = fixture.connect(spki(1), address);
+        let admission = conn.pending.admit(&conn.db);
+        assert_eq!(
+            verdict_error(&admission.verdict),
+            Some(TelemetryError::NotListed)
+        );
+        assert_eq!(
+            fixture.list.registered(),
+            (0, 0),
+            "the replaced connection left the registry"
+        );
+        let (at, duplicate_key) = admission
+            .duplicate_key
+            .expect("the replacement reveals a duplicate key");
+        assert_eq!(duplicate_key.endpoint_id, Some(endpoint_id));
+        // The block completes, and the deletion deletes the endpoint's
+        // events, before the event is stored.
+        fixture
+            .list
+            .block(&fixture.db, &fixture.flows, &[endpoint_id])
+            .await
+            .expect("the block completes");
+        fixture
+            .db
+            .delete_endpoint_history(&[endpoint_id])
+            .expect("delete the events");
+        store_duplicate_key(&fixture.db, at, duplicate_key);
+
+        assert!(
+            fixture.db.endpoint_events_since(-1).unwrap().is_empty(),
+            "no event of the blocked endpoint is stored after its deletion"
         );
     }
 

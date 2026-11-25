@@ -65,6 +65,35 @@ pub(super) const ACCEPTED_KINDS: [u16; 22] = [
     kind::AUDITD,
 ];
 
+/// The raw-data column families the records of [`ACCEPTED_KINDS`] are stored
+/// in, one per kind: the 14 Sysmon kinds module ingest also stores, and the
+/// eight added for endpoints. Customer data deletion deletes an endpoint's
+/// records from these.
+pub(crate) const RECORD_COLUMN_FAMILIES: [&str; 22] = [
+    "process create",
+    "file create time",
+    "network connect",
+    "process terminate",
+    "driver load",
+    "image load",
+    "create remote thread",
+    "raw access read",
+    "process access",
+    "file create",
+    "registry object add del",
+    "registry value set",
+    "registry key rename",
+    "file create stream hash",
+    "pipe event",
+    "dns query",
+    "file delete",
+    "process tamper",
+    "file delete detected",
+    "endpoint windows event log",
+    "endpoint journald",
+    "endpoint auditd",
+];
+
 /// The one schema version of each accepted kind the entry reads.
 const ACCEPTED_SCHEMA: u16 = 1;
 

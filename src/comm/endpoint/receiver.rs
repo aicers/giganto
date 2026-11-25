@@ -159,7 +159,14 @@ impl EndpointFlows {
     }
 
     /// Handles a message delivered on `connection`, unless the connection's
-    /// `stop` token is cancelled by the time the lock is taken.
+    /// `stop` token is cancelled by the time the lock is taken, or its
+    /// endpoint is blocked by then: then nothing is written, nothing is
+    /// sent, and the connection is closed.
+    ///
+    /// The block is checked here, under the lock, as well as at the
+    /// connection's `hello`: a connection admitted just before its endpoint
+    /// was blocked writes nothing once the block is stored, even before the
+    /// block has closed it.
     ///
     /// It blocks, so it must not be called on an async worker thread.
     pub(super) fn handle(
@@ -171,6 +178,19 @@ impl EndpointFlows {
         let mut guard = self.lock();
         if stop.is_cancelled() {
             return Handled::Stopped;
+        }
+        let endpoint_id = connection.endpoint_id();
+        // Refused rather than written when the block cannot be read: a write
+        // the block should have stopped cannot be taken back.
+        if self
+            .database
+            .is_endpoint_blocked_or_unreadable(endpoint_id, "closing the connection")
+        {
+            info!("Endpoint {endpoint_id}: blocked by customer data deletion; closing");
+            return Handled::Done {
+                output: ReceiverOutput::Disconnect,
+                stored_at: None,
+            };
         }
         let Some(stream) = guard.stream.as_mut() else {
             let endpoint_id = connection.endpoint_id();
@@ -254,6 +274,26 @@ impl FlowsGuard<'_> {
             .replace_endpoint_entry_id(entry_id, previous)?;
         *self.stream = Some(stream);
         Ok(())
+    }
+
+    /// Deletes the stream states of every endpoint of `endpoint_ids`, which
+    /// customer data deletion has blocked, from the store.
+    ///
+    /// The stream held is kept as it is. Rebuilding it from the store would
+    /// forget the opening of every open stream, which is not persistent, so
+    /// every other endpoint's connection would get `unknown_stream` at its
+    /// next batch; kept, those streams go on. What the stream held still
+    /// remembers of a blocked endpoint is never used again: a blocked
+    /// endpoint's messages are refused under the lock before the stream
+    /// sees them, and forgetting one of its closed streams deletes what is
+    /// already gone. The next stream built from the store, at a new
+    /// generation or `entry_id`, remembers none of it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stream states cannot be read or deleted.
+    pub(crate) fn delete_endpoint_streams(&self, endpoint_ids: &[Uuid]) -> Result<()> {
+        self.flows.database.delete_endpoint_streams(endpoint_ids)
     }
 }
 

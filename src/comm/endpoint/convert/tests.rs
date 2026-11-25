@@ -2003,6 +2003,27 @@ fn every_kind_is_stored_in_the_column_family_its_store_reads() {
     }
 }
 
+#[test]
+fn the_record_column_families_are_those_of_the_accepted_kinds() {
+    let families: std::collections::BTreeSet<&str> = ACCEPTED_KINDS
+        .into_iter()
+        .map(|kind| empty_event(kind).column_family())
+        .collect();
+    let listed: std::collections::BTreeSet<&str> = RECORD_COLUMN_FAMILIES.into_iter().collect();
+    assert_eq!(families, listed);
+    assert_eq!(
+        listed.len(),
+        RECORD_COLUMN_FAMILIES.len(),
+        "no family twice"
+    );
+    for family in RECORD_COLUMN_FAMILIES {
+        assert!(
+            crate::storage::RAW_DATA_COLUMN_FAMILY_NAMES.contains(&family),
+            "{family}"
+        );
+    }
+}
+
 /// Decodes `bytes` as the bincode 1 of the struct `like` holds.
 fn decode_like(like: &EndpointEvent, bytes: &[u8]) -> EndpointEvent {
     fn de<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Box<T> {

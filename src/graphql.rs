@@ -1293,7 +1293,7 @@ pub(crate) mod tests {
         /// The endpoint telemetry streams the schema was built with.
         pub(crate) endpoint_flows: Arc<crate::comm::endpoint::EndpointFlows>,
         pub(crate) ingest_sensors: IngestSensors,
-        pub(super) runtime_ingest_sensors: RunTimeIngestSensors,
+        pub(crate) runtime_ingest_sensors: RunTimeIngestSensors,
         pub(super) pcap_sensors: PcapSensors,
         pub(super) stream_direct_channels: StreamDirectChannels,
         /// The recorded peer identities the schema resolves peer names

@@ -315,6 +315,8 @@ impl Database {
         cfs_name.push(endpoint::ENDPOINT_STREAMS_CF);
         cfs_name.push(endpoint::ENDPOINT_LOSSES_CF);
         cfs_name.push(endpoint::ENDPOINT_LAST_RECEIVED_CF);
+        cfs_name.push(endpoint::ENDPOINT_BLOCKED_CF);
+        cfs_name.push(endpoint::ENDPOINT_DELETION_JOBS_CF);
 
         let cfs = cfs_name
             .into_iter()
@@ -2267,8 +2269,9 @@ async fn retain_periodically_with_hook(
             _ = itv.tick() => {}
         }
 
-        // Ahead of the claim: customer data deletion does not touch these
-        // column families, so a deletion in progress is no reason to skip it.
+        // Ahead of the claim: both this expiry and customer data deletion
+        // only delete from these column families, so they may run at the
+        // same time, and a deletion in progress is no reason to skip it.
         expire_endpoint_history(&db).await;
 
         // Claimed for the whole cycle and released when the guard goes out
@@ -2678,11 +2681,11 @@ mod tests {
             assert_eq!(checked_db, 3);
             assert_eq!(
                 checked_cf,
-                // The customer deletion jobs and the five endpoint families
+                // The customer deletion jobs and the seven endpoint families
                 // are in neither list.
                 3 * (RAW_DATA_COLUMN_FAMILY_NAMES.len()
                     + super::META_DATA_COLUMN_FAMILY_NAMES.len()
-                    + 6)
+                    + 8)
             );
             drop(db);
         }

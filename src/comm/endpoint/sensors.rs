@@ -5,11 +5,19 @@
 //! of it, and `RunTimeIngestSensors` while a connection of it is live, so
 //! module ingest's periodic refresh keeps its `sensors` row current. The
 //! `sensors` row itself is written with every batch that stores records.
+//!
+//! An endpoint customer data deletion has blocked joins neither set again:
+//! the block is read under the `RunTimeIngestSensors` write lock, which is
+//! held until the endpoint has joined both, and the deletion takes the
+//! endpoint out of `RunTimeIngestSensors` under the same lock. So a batch
+//! stored just before the block, whose add comes after the deletion took the
+//! endpoint out, adds nothing, and no `sensors` row is written back for it.
 
 use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::{Mutex, Notify};
-use tracing::error;
+use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::{
     comm::{IngestSensors, RunTimeIngestSensors},
@@ -49,19 +57,31 @@ impl EndpointSensors {
         }
     }
 
-    /// Counts a connection of `sensor` that stored records, the last at
-    /// `received`, and adds `sensor` to both sets.
-    pub(super) async fn add(&self, sensor: &str, received: DateTime) {
+    /// Counts a connection of endpoint `endpoint_id` that stored records, the
+    /// last at `received`, and adds the endpoint to both sets under its
+    /// sensor name, unless the endpoint is blocked; returns whether it was
+    /// added. A blocked endpoint changes neither set and is not counted.
+    pub(super) async fn add(&self, endpoint_id: Uuid, received: DateTime) -> bool {
+        let sensor = endpoint_id.to_string();
         let mut live = self.live.lock().await;
-        *live.entry(sensor.to_owned()).or_default() += 1;
-        self.runtime_ingest_sensors
-            .write()
-            .await
-            .insert(sensor.to_owned(), received);
-        self.ingest_sensors.write().await.insert(sensor.to_owned());
+        let mut runtime = self.runtime_ingest_sensors.write().await;
+        if self
+            .database
+            .is_endpoint_blocked_or_unreadable(endpoint_id, "not adding it to the sensor sets")
+        {
+            info!("Endpoint {endpoint_id}: blocked; not adding it to the sensor sets");
+            return false;
+        }
+        *live.entry(sensor.clone()).or_default() += 1;
+        runtime.insert(sensor.clone(), received);
+        // Still under the `RunTimeIngestSensors` write lock, so a deletion
+        // that blocked the endpoint meanwhile removes both after this.
+        self.ingest_sensors.write().await.insert(sensor);
+        drop(runtime);
         if let Some(notify) = &self.notify_sensor_change {
             notify.notify_one();
         }
+        true
     }
 
     /// Stops counting a connection [`add`](Self::add) counted. When it was
@@ -103,6 +123,7 @@ mod tests {
     };
 
     const SENSOR: &str = "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0";
+    const ENDPOINT: Uuid = Uuid::from_u128(0x0b1c_2d3e_4f50_6172_8394_a5b6_c7d8_e9f0);
 
     fn sensors(db: &Database) -> EndpointSensors {
         EndpointSensors::new(
@@ -128,8 +149,8 @@ mod tests {
         sensors.remove(SENSOR).await;
         assert_eq!(sensors_row(&db), None);
 
-        sensors.add(SENSOR, DateTime::now()).await;
-        sensors.add(SENSOR, DateTime::now()).await;
+        assert!(sensors.add(ENDPOINT, DateTime::now()).await);
+        assert!(sensors.add(ENDPOINT, DateTime::now()).await);
         sensors.remove(SENSOR).await;
         assert!(
             sensors
@@ -154,11 +175,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_blocked_endpoint_joins_neither_set() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open the database");
+        let sensors = sensors(&db);
+        db.block_endpoints(&[ENDPOINT], 1).expect("block");
+
+        assert!(!sensors.add(ENDPOINT, DateTime::now()).await);
+        assert!(sensors.runtime_ingest_sensors.read().await.is_empty());
+        assert!(!sensors.ingest_sensors.read().await.contains(SENSOR));
+        assert!(sensors.live.lock().await.is_empty(), "not counted");
+
+        // Its connection's teardown then writes nothing.
+        sensors.remove(SENSOR).await;
+        assert_eq!(sensors_row(&db), None);
+    }
+
+    #[tokio::test]
     async fn a_sensor_gone_from_the_runtime_set_is_not_written_back() {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Database::open(dir.path(), &DbOptions::default()).expect("open the database");
         let sensors = sensors(&db);
-        sensors.add(SENSOR, DateTime::now()).await;
+        assert!(sensors.add(ENDPOINT, DateTime::now()).await);
         // As customer data deletion takes it out.
         sensors.runtime_ingest_sensors.write().await.remove(SENSOR);
 
