@@ -1202,6 +1202,96 @@ mod tests {
         assert!(error.to_string().contains("code 9"), "{error}");
     }
 
+    /// Each reader reports a malformed entry as an error naming what is wrong
+    /// with it, rather than skipping it or returning a partial list.
+    #[test]
+    fn malformed_entries_are_errors() {
+        type Read = fn(&Database) -> Result<()>;
+        /// A column family, a raw key and value, the reader, and what its
+        /// error must say.
+        type Case<'a> = (&'a str, &'a [u8], &'a [u8], Read, &'a str);
+
+        let loss_key = endpoint_loss_key(
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            1,
+            2,
+            LossReason::ConversionFailure,
+            5,
+        );
+        let event_key = endpoint_event_key(5, Uuid::from_u128(1), 0);
+        let endpoint_id = Uuid::from_u128(1);
+        let read_losses: Read = |db| db.endpoint_losses_since(0).map(drop);
+        let read_events: Read = |db| db.endpoint_events_since(0).map(drop);
+        let read_last: Read = |db| db.endpoint_last_received(None, 10).map(drop);
+        let cases: [Case<'_>; 6] = [
+            (ENDPOINT_LOSSES_CF, b"short", b"", read_losses, "bytes long"),
+            (ENDPOINT_LOSSES_CF, &loss_key, &[0xff], read_losses, "UTF-8"),
+            (ENDPOINT_EVENTS_CF, &[0; 9], b"", read_events, "bytes long"),
+            (ENDPOINT_EVENTS_CF, &event_key, &[1], read_events, "decode"),
+            (
+                ENDPOINT_LAST_RECEIVED_CF,
+                b"abc",
+                &[0; 8],
+                read_last,
+                "not 16",
+            ),
+            (
+                ENDPOINT_LAST_RECEIVED_CF,
+                endpoint_id.as_bytes(),
+                &[0; 3],
+                read_last,
+                "not 8",
+            ),
+        ];
+        for (cf, key, value, read, expected) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+            db.put_cf_for_test(cf, key, value).expect("raw write");
+            let error = read(&db).expect_err(expected);
+            assert!(format!("{error:#}").contains(expected), "{cf}: {error:#}");
+        }
+    }
+
+    /// An event key with a negative received time, which sorts after every
+    /// other, is neither returned nor expired, and a key too short to carry a
+    /// received time is left alone by the expiry.
+    #[test]
+    fn events_outside_the_received_time_range_are_skipped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let endpoint_id = Uuid::from_u128(1);
+        let value = bincode::serialize(&duplicate_key(1)).expect("serialize");
+        let negative = endpoint_event_key(-1, endpoint_id, 0);
+        let short = [0_u8; 3];
+        db.put_cf_for_test(ENDPOINT_EVENTS_CF, &negative, &value)
+            .expect("raw write");
+        db.put_cf_for_test(ENDPOINT_EVENTS_CF, &short, b"")
+            .expect("raw write");
+        db.append_endpoint_duplicate_key(5, endpoint_id, &duplicate_key(2))
+            .unwrap();
+
+        let events = db.endpoint_events_since(0).expect("read");
+        assert_eq!(
+            events.iter().map(|e| e.received_ns).collect::<Vec<_>>(),
+            vec![5]
+        );
+
+        let expired = db
+            .expire_endpoint_history(1_800_000_000_000_000_000)
+            .expect("expire");
+        assert_eq!(expired.events, 1);
+        for key in [&negative[..], &short[..]] {
+            assert!(
+                db.get_cf_for_test(ENDPOINT_EVENTS_CF, key)
+                    .expect("read")
+                    .is_some(),
+                "{key:?} is kept"
+            );
+        }
+    }
+
     #[test]
     fn events_since_are_read_back_in_key_order() {
         let dir = tempfile::tempdir().expect("tempdir");

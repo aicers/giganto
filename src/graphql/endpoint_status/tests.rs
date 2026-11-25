@@ -7,7 +7,10 @@ use uuid::Uuid;
 use crate::graphql::{caller::REVIEW_SERVICE, tests::TestSchema};
 use crate::storage::{
     Database,
-    endpoint::{DuplicateKeyEvent, EndpointBatch, EndpointChange, LossReason},
+    endpoint::{
+        DuplicateKeyEvent, ENDPOINT_EVENTS_CF, ENDPOINT_LAST_RECEIVED_CF, ENDPOINT_LOSSES_CF,
+        EndpointBatch, EndpointChange, LossReason,
+    },
 };
 
 const ENTRY_ID: &str = "0b1c9e4e-6c8f-4a51-9d0e-6a3f6c2a1f10";
@@ -321,6 +324,28 @@ async fn last_received_caps_first_at_the_maximum_page_size() {
     assert_eq!(response.errors.len(), 1, "an invalid cursor is refused");
     let response = as_review(&schema, &last_received_query("(first: -1)")).await;
     assert_eq!(response.errors.len(), 1, "a negative first is refused");
+}
+
+/// A malformed stored entry fails the query with the reason, instead of
+/// returning a list that silently leaves it out.
+#[tokio::test]
+async fn a_malformed_entry_fails_the_query() {
+    let cases = [
+        (ENDPOINT_LOSSES_CF, losses_query(0)),
+        (ENDPOINT_EVENTS_CF, events_query(0)),
+        (ENDPOINT_LAST_RECEIVED_CF, last_received_query("")),
+    ];
+    for (cf, call) in cases {
+        let schema = TestSchema::new();
+        schema
+            .db
+            .put_cf_for_test(cf, &[0; 9], b"")
+            .expect("raw write");
+        let response = as_review(&schema, &call).await;
+        assert_eq!(response.errors.len(), 1, "{call}");
+        let message = &response.errors.first().expect("an error").message;
+        assert!(message.contains("bytes long"), "{call}: {message}");
+    }
 }
 
 #[tokio::test]

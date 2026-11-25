@@ -2338,7 +2338,17 @@ async fn retain_periodically_with_hook(
 async fn expire_endpoint_history(db: &Database) {
     let db = db.clone();
     let now_ns = DateTime::now().timestamp_nanos_opt().unwrap_or(i64::MAX);
-    match tokio::task::spawn_blocking(move || db.expire_endpoint_history(now_ns)).await {
+    report_endpoint_expiry(
+        tokio::task::spawn_blocking(move || db.expire_endpoint_history(now_ns)).await,
+    );
+}
+
+/// Logs the outcome of one [`expire_endpoint_history`] run: what it deleted,
+/// or why it could not.
+fn report_endpoint_expiry(
+    outcome: std::result::Result<Result<endpoint::ExpiredEndpointHistory>, tokio::task::JoinError>,
+) {
+    match outcome {
         Ok(Ok(expired)) => debug!(
             losses = expired.losses,
             events = expired.events,
@@ -4426,6 +4436,35 @@ mod tests {
         cancel.cancel();
         assert!(task.await.unwrap().is_ok());
         drop(deletion);
+    }
+
+    /// A failed endpoint expiry, whether the deletion returned an error or
+    /// its blocking task did not finish, is logged as a warning with the
+    /// cause, so that retention carries on and an operator can see why.
+    #[tokio::test]
+    async fn a_failed_endpoint_expiry_is_logged_as_a_warning() {
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
+
+        super::report_endpoint_expiry(Ok(Err(anyhow!("the store is gone"))));
+        let contents = logs.contents();
+        assert!(
+            contents.contains("WARN")
+                && contents.contains("Cannot delete expired endpoint loss records and events")
+                && contents.contains("the store is gone"),
+            "{contents}"
+        );
+
+        let task = tokio::spawn(std::future::pending::<
+            anyhow::Result<super::endpoint::ExpiredEndpointHistory>,
+        >());
+        task.abort();
+        super::report_endpoint_expiry(task.await);
+        let contents = logs.contents();
+        assert!(
+            contents.contains("Deleting expired endpoint loss records and events failed")
+                && contents.contains("cancelled"),
+            "{contents}"
+        );
     }
 
     /// Starts a retention task over `db` that runs a pass every 10ms.
