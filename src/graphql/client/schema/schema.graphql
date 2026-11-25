@@ -1087,6 +1087,37 @@ type EndpointClockOffset {
 }
 
 """
+One key's connections replaced each other too often, from more than one
+address: two hosts may hold the same key.
+"""
+type EndpointDuplicateKeyEvent {
+	"""
+	When the node recorded the event, in nanoseconds since the Unix epoch.
+	"""
+	receivedAt: StringNumberI64!
+	"""
+	The endpoint ID, lowercase hyphenated.
+	"""
+	endpointId: String!
+	"""
+	The event's number among those of the same `receivedAt` and endpoint.
+	"""
+	sequence: StringNumberU32!
+	"""
+	The SHA-256 of the key's `SubjectPublicKeyInfo`, in lowercase hex.
+	"""
+	spkiSha256: String!
+	"""
+	The distinct source addresses of the connections counted.
+	"""
+	addresses: [String!]!
+	"""
+	How many replacements were counted.
+	"""
+	replacements: StringNumberU64!
+}
+
+"""
 An `EventData` element of a Windows event log record.
 """
 type EndpointEventData {
@@ -1237,6 +1268,50 @@ type EndpointJournaldEventEdge {
 }
 
 """
+When an endpoint last sent records to this node.
+"""
+type EndpointLastReceivedTime {
+	"""
+	The endpoint ID, lowercase hyphenated.
+	"""
+	endpointId: String!
+	"""
+	The node's time when it received the endpoint's last write carrying
+	records, in nanoseconds since the Unix epoch.
+	"""
+	lastReceivedAt: StringNumberI64!
+}
+
+type EndpointLastReceivedTimeConnection {
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+	"""
+	A list of edges.
+	"""
+	edges: [EndpointLastReceivedTimeEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [EndpointLastReceivedTime!]!
+}
+
+"""
+An edge in a connection.
+"""
+type EndpointLastReceivedTimeEdge {
+	"""
+	The item at the end of the edge
+	"""
+	node: EndpointLastReceivedTime!
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+}
+
+"""
 What the node answers an active list update or confirmation with.
 """
 type EndpointListAck {
@@ -1286,6 +1361,63 @@ input EndpointLogFilter {
 	The endpoint ID the records are stored under.
 	"""
 	sensor: String!
+}
+
+"""
+A range of an endpoint's records that was lost.
+"""
+type EndpointLoss {
+	"""
+	The entry ID the loss was recorded under.
+	"""
+	entryId: ID!
+	"""
+	The endpoint ID, lowercase hyphenated.
+	"""
+	endpointId: String!
+	"""
+	The telemetry stream ID, lowercase hyphenated.
+	"""
+	streamId: String!
+	"""
+	The first sequence number of the range.
+	"""
+	from: StringNumberU64!
+	"""
+	The last sequence number of the range.
+	"""
+	to: StringNumberU64!
+	"""
+	Why the records were lost.
+	"""
+	reason: EndpointLossReason!
+	"""
+	The reason's detail, empty for `LOST_ON_RESET`.
+	"""
+	detail: String!
+	"""
+	When the node recorded the loss, in nanoseconds since the Unix epoch.
+	"""
+	receivedAt: StringNumberI64!
+}
+
+"""
+Why an endpoint's records were lost.
+"""
+enum EndpointLossReason {
+	"""
+	The endpoint dropped the range; the detail is the drop reason.
+	"""
+	DROPPED
+	"""
+	The endpoint lost the range when its state was reset; the detail is
+	empty.
+	"""
+	LOST_ON_RESET
+	"""
+	The node could not decode or convert the record; the detail is why.
+	"""
+	CONVERSION_FAILED
 }
 
 """
@@ -3775,6 +3907,31 @@ type Query {
 	Only REview may call it.
 	"""
 	endpointActiveListState: EndpointActiveListState!
+	"""
+	Returns this node's endpoint loss records received at or after
+	`since`, in nanoseconds since the Unix epoch, under every entry ID.
+	
+	`since` is inclusive; a negative one returns every record. The list is
+	in no particular order and not paged. Only REview may call it.
+	"""
+	endpointLosses(since: StringNumberI64!): [EndpointLoss!]!
+	"""
+	Returns this node's endpoint duplicate-key events received at or after
+	`since`, in nanoseconds since the Unix epoch.
+	
+	`since` is inclusive; a negative one returns every event. The list is
+	ordered by `receivedAt`, then endpoint ID, then `sequence`, and not
+	paged. Only REview may call it.
+	"""
+	endpointEvents(since: StringNumberI64!): [EndpointDuplicateKeyEvent!]!
+	"""
+	Returns when each endpoint last sent records to this node, in endpoint
+	ID order.
+	
+	The cursor is the endpoint ID; `after` returns the endpoints strictly
+	after it. Only REview may call it.
+	"""
+	endpointLastReceived(after: String, first: Int): EndpointLastReceivedTimeConnection!
 }
 
 """

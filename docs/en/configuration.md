@@ -168,12 +168,35 @@ log queries and export, with that endpoint ID as the sensor.
   customer data deletion like any sensor's.
 - An update that changes the entry ID makes every endpoint start new
   streams; the loss records kept under the old entry ID stay.
+- Loss records and duplicate-key events (a key whose connections keep
+  replacing each other from more than one address) are deleted 30 days after
+  the node received them, once a day, whether or not the endpoint entry is
+  open. The period is fixed, not a configuration key, and each endpoint's
+  last-received time is kept.
 - An endpoint that moves to another node leaves its records split between
   the old node and the new one. A query for that single sensor, such as a
   Sysmon query or a consumer's publish range request, returns only the
   records of the node it reached, or of the one peer holding that sensor.
   Queries are not routed differently because of this, and the old node's
   records remain subject to retention and customer data deletion.
+
+REview reads what the node recorded about the endpoints through three more
+GraphQL fields. As with the active list fields, only REview may call them, and
+each answers with this node's data alone, never a peer's:
+
+- `endpointLosses(since)`: the loss records received at or after `since`, in
+  nanoseconds, under every entry ID, each with its entry, endpoint and stream
+  ID, its range, its reason (`DROPPED`, `LOST_ON_RESET` or
+  `CONVERSION_FAILED`) and detail, and when it was received.
+- `endpointEvents(since)`: the duplicate-key events received at or after
+  `since`, each with the endpoint ID, a sequence number, the key's SPKI
+  SHA-256, the source addresses and the number of replacements counted.
+- `endpointLastReceived(after, first)`: a connection over the endpoints in
+  endpoint ID order, each with when it last sent records; the cursor is the
+  endpoint ID.
+
+`since` is inclusive, so a record received in the same nanosecond as the last
+one fetched is returned again, and a negative `since` returns everything.
 
 Endpoints trust only the root CA, while the `--cert` file holds only the node's
 leaf certificate. On this port, and only here, Giganto therefore presents the

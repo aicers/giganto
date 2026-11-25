@@ -147,19 +147,13 @@ fn refusal_error(refusal: &ApplyRefusal) -> async_graphql::Error {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-
-    use async_graphql::{Request, Response, Value, value};
+    use async_graphql::{Response, Value, value};
     use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-    use poem::{Addr, web::RemoteAddr};
     use senta_protocol::auth::active_list::{EntryState, ListEntry, ListUpdate};
     use uuid::Uuid;
 
     use super::*;
-    use crate::{
-        graphql::{caller::REVIEW_SERVICE, tests::TestSchema},
-        web::GraphqlCallers,
-    };
+    use crate::graphql::{caller::REVIEW_SERVICE, tests::TestSchema};
 
     const ENTRY_ID: &str = "0b1c9e4e-6c8f-4a51-9d0e-6a3f6c2a1f10";
     const OTHER_ENTRY_ID: &str = "5d2a4b7c-1e3f-4a5b-8c6d-7e8f9a0b1c2d";
@@ -167,13 +161,7 @@ mod tests {
     /// The caller, by the service name in its certificate; `None` is a
     /// caller whose certificate carries none.
     async fn execute_as(schema: &TestSchema, service: Option<&str>, query: &str) -> Response {
-        let callers = Arc::new(GraphqlCallers::default());
-        let addr: SocketAddr = "192.0.2.10:40000".parse().expect("an address");
-        callers.record_for_test(addr, service);
-        let request = Request::new(query)
-            .data(RemoteAddr(Addr::SocketAddr(addr)))
-            .data(callers);
-        schema.schema.execute(request).await
+        schema.execute_as(service, query).await
     }
 
     async fn as_review(schema: &TestSchema, query: &str) -> Response {

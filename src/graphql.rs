@@ -5,6 +5,7 @@ pub(crate) mod customer_deletion;
 pub(crate) mod endpoint_header;
 mod endpoint_list;
 mod endpoint_log;
+mod endpoint_status;
 mod export;
 #[cfg(test)]
 pub(crate) use export::{ExportTestControl, register_export_test_control};
@@ -94,6 +95,7 @@ pub struct Query(
     customer_deletion::CustomerDeletionQuery,
     endpoint_log::EndpointLogQuery,
     endpoint_list::EndpointListQuery,
+    endpoint_status::EndpointStatusQuery,
 );
 
 #[derive(Default, MergedObject)]
@@ -1498,6 +1500,22 @@ pub(crate) mod tests {
 
         pub async fn execute(&self, query: &str) -> async_graphql::Response {
             let request: async_graphql::Request = query.into();
+            self.schema.execute(request).await
+        }
+
+        /// Executes `query` as a caller whose client certificate names
+        /// `service`; `None` is a caller whose certificate names none.
+        pub(crate) async fn execute_as(
+            &self,
+            service: Option<&str>,
+            query: &str,
+        ) -> async_graphql::Response {
+            let callers = Arc::new(crate::web::GraphqlCallers::default());
+            let addr: std::net::SocketAddr = "192.0.2.10:40000".parse().expect("an address");
+            callers.record_for_test(addr, service);
+            let request = Request::new(query)
+                .data(poem::web::RemoteAddr(poem::Addr::SocketAddr(addr)))
+                .data(callers);
             self.schema.execute(request).await
         }
     }
