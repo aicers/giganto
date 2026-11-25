@@ -4,9 +4,10 @@ use async_graphql::{Response, Value};
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
+use crate::cancellation::{DrainOutcome, TaskTracker};
 use crate::graphql::{caller::REVIEW_SERVICE, tests::TestSchema};
 use crate::storage::{
-    Database,
+    Database, DbOptions,
     endpoint::{
         DuplicateKeyEvent, ENDPOINT_EVENTS_CF, ENDPOINT_LAST_RECEIVED_CF, ENDPOINT_LOSSES_CF,
         EndpointBatch, EndpointChange, LossReason,
@@ -467,13 +468,17 @@ async fn a_blocked_history_read_leaves_the_runtime_responsive() {
 
     let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    let read = tokio::spawn(super::read_off_runtime(move || {
-        let _ = started_tx.send(());
-        release_rx
-            .recv_timeout(RELEASE_TIMEOUT)
-            .map_err(|_| anyhow::anyhow!("the read was never released"))?;
-        Ok(READ_RESULT)
-    }));
+    let tracker = TaskTracker::new();
+    let read = tokio::spawn(async move {
+        super::read_off_runtime(&tracker, move || {
+            let _ = started_tx.send(());
+            release_rx
+                .recv_timeout(RELEASE_TIMEOUT)
+                .map_err(|_| anyhow::anyhow!("the read was never released"))?;
+            Ok(READ_RESULT)
+        })
+        .await
+    });
 
     started_rx.await.expect("the read should have started");
     let other = tokio::spawn(async { "progressed" })
@@ -493,4 +498,91 @@ async fn a_blocked_history_read_leaves_the_runtime_responsive() {
         .expect("the request task should not panic")
         .expect("a released read should succeed");
     assert_eq!(result, READ_RESULT);
+}
+
+/// A request dropped during a history read leaves the read on the generation
+/// tracker: the drain waits until the read has finished and released its
+/// database clone, so the store can then be opened again at the same path.
+///
+/// Were the read detached, the drain would report the tracker empty at once
+/// and the generation would shut down while the read still held the store's
+/// file lock.
+#[tokio::test]
+async fn a_dropped_history_read_holds_the_generation_drain_until_it_finishes() {
+    const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+    const BLOCKED_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
+    const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let db = Database::open(dir.path(), &DbOptions::default()).expect("open the store");
+    write_event(&db, ENDPOINT_ID, SINCE, 1);
+    let tracker = TaskTracker::new();
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel::<usize>();
+    let read_db = db.clone();
+    let request = tokio::spawn({
+        let tracker = tracker.clone();
+        async move {
+            super::read_off_runtime(&tracker, move || {
+                let _ = started_tx.send(());
+                release_rx
+                    .recv_timeout(RELEASE_TIMEOUT)
+                    .map_err(|_| anyhow::anyhow!("the read was never released"))?;
+                let events = read_db.endpoint_events_since(0)?;
+                let _ = finished_tx.send(events.len());
+                Ok(events)
+            })
+            .await
+        }
+    });
+    started_rx.await.expect("the read should have started");
+
+    // The web graceful-shutdown timeout drops the request mid-read.
+    request.abort();
+    assert!(
+        request
+            .await
+            .expect_err("the request was aborted")
+            .is_cancelled(),
+        "the request should have been cancelled"
+    );
+
+    tracker.cancel_children();
+    match tracker
+        .drain(BLOCKED_DRAIN_TIMEOUT)
+        .await
+        .expect("drain the tracker")
+    {
+        DrainOutcome::Pending(pending) => assert!(
+            pending
+                .iter()
+                .any(|task| task.name == "endpoint-history-read"),
+            "{pending:?}"
+        ),
+        DrainOutcome::Drained => panic!("the drain ended while the read still ran"),
+    }
+
+    release_tx
+        .send(())
+        .expect("the read should still be waiting");
+    assert_eq!(
+        tracker
+            .drain(DRAIN_TIMEOUT)
+            .await
+            .expect("drain the tracker"),
+        DrainOutcome::Drained
+    );
+    assert_eq!(
+        finished_rx
+            .try_recv()
+            .expect("the read should have finished"),
+        1
+    );
+
+    db.shutdown().expect("shut the store down");
+    drop(db);
+    Database::open(dir.path(), &DbOptions::default())
+        .expect("the store should open again once the read has released it");
 }

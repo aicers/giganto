@@ -17,9 +17,12 @@ use self::loss_reason::EndpointLossReason;
 use super::{
     MAXIMUM_PAGE_SIZE, StringNumberI64, StringNumberU32, StringNumberU64, caller::ReviewOnly,
 };
-use crate::storage::{
-    Database,
-    endpoint::{StoredEndpointEvent, StoredLoss},
+use crate::{
+    cancellation::TaskTracker,
+    storage::{
+        Database,
+        endpoint::{StoredEndpointEvent, StoredLoss},
+    },
 };
 
 #[derive(Default)]
@@ -164,7 +167,8 @@ impl EndpointStatusQuery {
         since: StringNumberI64,
     ) -> Result<Vec<EndpointLoss>> {
         let db = ctx.data::<Database>()?.clone();
-        let losses = read_off_runtime(move || db.endpoint_losses_since(since.0)).await?;
+        let tracker = ctx.data::<TaskTracker>()?;
+        let losses = read_off_runtime(tracker, move || db.endpoint_losses_since(since.0)).await?;
         Ok(losses.into_iter().map(Into::into).collect())
     }
 
@@ -181,7 +185,8 @@ impl EndpointStatusQuery {
         since: StringNumberI64,
     ) -> Result<Vec<EndpointDuplicateKeyEvent>> {
         let db = ctx.data::<Database>()?.clone();
-        let events = read_off_runtime(move || db.endpoint_events_since(since.0)).await?;
+        let tracker = ctx.data::<TaskTracker>()?;
+        let events = read_off_runtime(tracker, move || db.endpoint_events_since(since.0)).await?;
         Ok(events
             .into_iter()
             .map(EndpointDuplicateKeyEvent::from)
@@ -236,25 +241,45 @@ impl EndpointStatusQuery {
     }
 }
 
-/// Runs a history read on Tokio's blocking pool and awaits its result.
+/// Runs a history read on Tokio's blocking pool, under the generation's
+/// top-level tracker, and awaits its result.
 ///
 /// `endpointLosses` scans the whole retained loss column family whatever
 /// `since` is, and `endpointEvents` reads an unpaged range; the 30-day
 /// retention bounds their age, not their size. Run on an async worker, either
 /// read would hold that worker for the whole scan, stalling the ingestion,
-/// timers and requests scheduled on it. The handle is awaited, so a failed or
-/// panicking read fails the request. If the request itself is dropped first,
-/// the read runs to completion and its result is discarded: it only reads, so
-/// nothing is left half-done.
-async fn read_off_runtime<T, F>(read: F) -> Result<T>
+/// timers and requests scheduled on it.
+///
+/// A blocking read cannot be stopped once it has started, and it holds a
+/// [`Database`] clone until it returns. If the request is dropped first — the
+/// web graceful-shutdown timeout cuts it off — the read would otherwise run on
+/// unobserved, and teardown could finish while it still held the clone: the
+/// next generation's `Database::open` then fails on RocksDB's file lock. So the
+/// read is awaited by a supervisor registered on `tracker`, which the
+/// generation drains before it shuts the store down; the supervisor ignores
+/// cancellation, because there is nothing it could cancel. It hands the result
+/// to the request, and logs a failure nobody is left to receive.
+async fn read_off_runtime<T, F>(tracker: &TaskTracker, read: F) -> Result<T>
 where
     F: FnOnce() -> anyhow::Result<T> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(read)
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    tracker
+        .spawn("endpoint-history-read", |_cancel| async move {
+            let result = match tokio::task::spawn_blocking(read).await {
+                Ok(result) => result.map_err(|e| format!("{e:#}")),
+                Err(e) => Err(format!("the endpoint history read did not finish: {e}")),
+            };
+            if let Err(Err(e)) = result_tx.send(result) {
+                tracing::warn!("endpoint history read for a dropped request failed: {e}");
+            }
+        })
+        .map_err(|e| format!("could not start the endpoint history read: {e}"))?;
+    result_rx
         .await
-        .map_err(|e| format!("the endpoint history read did not finish: {e}"))?
-        .map_err(|e| format!("{e:#}").into())
+        .map_err(|_| "the endpoint history read ended without a result")?
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
