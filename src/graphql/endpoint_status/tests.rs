@@ -452,3 +452,45 @@ fn the_schema_carries_the_endpoint_status_fields() {
         assert!(sdl.contains(expected), "missing {expected:?}");
     }
 }
+
+/// A history read runs off the async workers: while one is blocked, another
+/// task on the same single-threaded runtime still runs.
+///
+/// `#[tokio::test]` gives a current-thread runtime, so a read run inline would
+/// hold its only thread: the other task could not run until the read gave up
+/// waiting for its release, and the read would then have finished, and
+/// failed, before it was released.
+#[tokio::test]
+async fn a_blocked_history_read_leaves_the_runtime_responsive() {
+    const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+    const READ_RESULT: u32 = 7;
+
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let read = tokio::spawn(super::read_off_runtime(move || {
+        let _ = started_tx.send(());
+        release_rx
+            .recv_timeout(RELEASE_TIMEOUT)
+            .map_err(|_| anyhow::anyhow!("the read was never released"))?;
+        Ok(READ_RESULT)
+    }));
+
+    started_rx.await.expect("the read should have started");
+    let other = tokio::spawn(async { "progressed" })
+        .await
+        .expect("the other task should not panic");
+    assert_eq!(other, "progressed");
+    assert!(
+        !read.is_finished(),
+        "the other task ran only after the read had given up"
+    );
+
+    release_tx
+        .send(())
+        .expect("the read should still be waiting");
+    let result = read
+        .await
+        .expect("the request task should not panic")
+        .expect("a released read should succeed");
+    assert_eq!(result, READ_RESULT);
+}

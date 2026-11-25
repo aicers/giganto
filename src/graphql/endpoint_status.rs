@@ -163,11 +163,9 @@ impl EndpointStatusQuery {
         ctx: &Context<'_>,
         since: StringNumberI64,
     ) -> Result<Vec<EndpointLoss>> {
-        let db = ctx.data::<Database>()?;
-        let losses = db
-            .endpoint_losses_since(since.0)
-            .map_err(|e| format!("{e:#}"))?;
-        super::ready(Ok(losses.into_iter().map(Into::into).collect())).await
+        let db = ctx.data::<Database>()?.clone();
+        let losses = read_off_runtime(move || db.endpoint_losses_since(since.0)).await?;
+        Ok(losses.into_iter().map(Into::into).collect())
     }
 
     /// Returns this node's endpoint duplicate-key events received at or after
@@ -182,15 +180,12 @@ impl EndpointStatusQuery {
         ctx: &Context<'_>,
         since: StringNumberI64,
     ) -> Result<Vec<EndpointDuplicateKeyEvent>> {
-        let db = ctx.data::<Database>()?;
-        let events = db
-            .endpoint_events_since(since.0)
-            .map_err(|e| format!("{e:#}"))?;
-        super::ready(Ok(events
+        let db = ctx.data::<Database>()?.clone();
+        let events = read_off_runtime(move || db.endpoint_events_since(since.0)).await?;
+        Ok(events
             .into_iter()
             .map(EndpointDuplicateKeyEvent::from)
-            .collect()))
-        .await
+            .collect())
     }
 
     /// Returns when each endpoint last sent records to this node, in endpoint
@@ -239,6 +234,27 @@ impl EndpointStatusQuery {
         )
         .await
     }
+}
+
+/// Runs a history read on Tokio's blocking pool and awaits its result.
+///
+/// `endpointLosses` scans the whole retained loss column family whatever
+/// `since` is, and `endpointEvents` reads an unpaged range; the 30-day
+/// retention bounds their age, not their size. Run on an async worker, either
+/// read would hold that worker for the whole scan, stalling the ingestion,
+/// timers and requests scheduled on it. The handle is awaited, so a failed or
+/// panicking read fails the request. If the request itself is dropped first,
+/// the read runs to completion and its result is discarded: it only reads, so
+/// nothing is left half-done.
+async fn read_off_runtime<T, F>(read: F) -> Result<T>
+where
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(read)
+        .await
+        .map_err(|e| format!("the endpoint history read did not finish: {e}"))?
+        .map_err(|e| format!("{e:#}").into())
 }
 
 #[cfg(test)]
