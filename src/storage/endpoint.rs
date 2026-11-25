@@ -37,8 +37,15 @@ pub(crate) const ENDPOINT_LOSSES_CF: &str = "endpoint_losses";
 /// endpoint's last write carrying records.
 pub(crate) const ENDPOINT_LAST_RECEIVED_CF: &str = "endpoint_last_received";
 
+/// How long loss records and endpoint events are kept after they were
+/// received: 30 days, in nanoseconds.
+pub(crate) const ENDPOINT_HISTORY_RETENTION_NS: i64 = 30 * 24 * 60 * 60 * 1_000_000_000;
+
 /// The one key of [`ENDPOINT_ENTRY_CF`].
 const ENTRY_ID_KEY: &[u8] = b"entry_id";
+
+/// How many deletions [`Database::expire_endpoint_history`] puts in one write.
+const EXPIRY_BATCH_LEN: usize = 10_000;
 
 /// The length of an [`ENDPOINT_EVENTS_CF`] key: the received time, the
 /// endpoint id and the sequence number.
@@ -107,6 +114,63 @@ impl LossReason {
             Self::ConversionFailure => 2,
         }
     }
+
+    /// Returns the reason a key's reason code stands for, or `None` for a
+    /// code no reason has.
+    #[must_use]
+    pub(crate) fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Dropped),
+            1 => Some(Self::LostOnReset),
+            2 => Some(Self::ConversionFailure),
+            _ => None,
+        }
+    }
+}
+
+/// A loss record, read back from its [`ENDPOINT_LOSSES_CF`] key and value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredLoss {
+    /// The `entry_id` the record was written under.
+    pub(crate) entry_id: Uuid,
+    /// The endpoint whose records were lost.
+    pub(crate) endpoint_id: Uuid,
+    /// The stream the records were lost from.
+    pub(crate) stream: Uuid,
+    /// The first sequence number of the range lost.
+    pub(crate) from: u64,
+    /// The last sequence number of the range lost.
+    pub(crate) to: u64,
+    /// Why the records were lost.
+    pub(crate) reason: LossReason,
+    /// The reason's detail, empty for [`LossReason::LostOnReset`].
+    pub(crate) detail: String,
+    /// When the record was written, in nanoseconds since the Unix epoch.
+    pub(crate) received_ns: i64,
+}
+
+/// A duplicate-key event, read back from its [`ENDPOINT_EVENTS_CF`] key and
+/// value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredEndpointEvent {
+    /// When the event was recorded, in nanoseconds since the Unix epoch.
+    pub(crate) received_ns: i64,
+    /// The endpoint the event is about.
+    pub(crate) endpoint_id: Uuid,
+    /// The event's sequence number among those of the same received time and
+    /// endpoint.
+    pub(crate) sequence: u32,
+    /// The event.
+    pub(crate) event: DuplicateKeyEvent,
+}
+
+/// How many entries [`Database::expire_endpoint_history`] deleted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ExpiredEndpointHistory {
+    /// The loss records deleted.
+    pub(crate) losses: usize,
+    /// The endpoint events deleted.
+    pub(crate) events: usize,
 }
 
 /// A record converted for storage: its value goes into `column_family` under
@@ -294,6 +358,66 @@ fn synced() -> WriteOptions {
     let mut options = WriteOptions::default();
     options.set_sync(true);
     options
+}
+
+/// Returns the big-endian `i64` at the start of `bytes`, if it is that long.
+fn be_i64(bytes: &[u8]) -> Option<i64> {
+    bytes.first_chunk::<8>().copied().map(i64::from_be_bytes)
+}
+
+/// Decodes an [`ENDPOINT_LOSSES_CF`] entry.
+fn decode_loss(key: &[u8], value: &[u8]) -> Result<StoredLoss> {
+    let key: &[u8; LOSS_KEY_LEN] = key.try_into().map_err(|_| {
+        anyhow!(
+            "an endpoint loss key is {} bytes long, not {LOSS_KEY_LEN}",
+            key.len()
+        )
+    })?;
+    let (entry_id, rest) = key.split_first_chunk::<16>().context("an entry_id")?;
+    let (endpoint_id, rest) = rest.split_first_chunk::<16>().context("an endpoint id")?;
+    let (stream, rest) = rest.split_first_chunk::<16>().context("a stream id")?;
+    let (from, rest) = rest.split_first_chunk::<8>().context("a range start")?;
+    let (to, rest) = rest.split_first_chunk::<8>().context("a range end")?;
+    let (code, received) = rest.split_first().context("a reason code")?;
+    let received: &[u8; 8] = received.try_into().context("a received time")?;
+    let reason = LossReason::from_code(*code)
+        .ok_or_else(|| anyhow!("an endpoint loss key carries the unknown reason code {code}"))?;
+    let detail = String::from_utf8(value.to_vec())
+        .map_err(|_| anyhow!("an endpoint loss detail is not UTF-8"))?;
+    Ok(StoredLoss {
+        entry_id: Uuid::from_bytes(*entry_id),
+        endpoint_id: Uuid::from_bytes(*endpoint_id),
+        stream: Uuid::from_bytes(*stream),
+        from: u64::from_be_bytes(*from),
+        to: u64::from_be_bytes(*to),
+        reason,
+        detail,
+        received_ns: i64::from_be_bytes(*received),
+    })
+}
+
+/// Decodes an [`ENDPOINT_EVENTS_CF`] entry.
+fn decode_event(key: &[u8], value: &[u8]) -> Result<StoredEndpointEvent> {
+    let key: &[u8; EVENT_KEY_LEN] = key.try_into().map_err(|_| {
+        anyhow!(
+            "an endpoint event key is {} bytes long, not {EVENT_KEY_LEN}",
+            key.len()
+        )
+    })?;
+    let (received, rest) = key.split_first_chunk::<8>().context("a received time")?;
+    let (endpoint_id, sequence) = rest.split_first_chunk::<16>().context("an endpoint id")?;
+    let sequence: &[u8; 4] = sequence.try_into().context("a sequence number")?;
+    let endpoint_id = Uuid::from_bytes(*endpoint_id);
+    let received_ns = i64::from_be_bytes(*received);
+    let event: DuplicateKeyEvent = bincode::deserialize(value).with_context(|| {
+        format!("cannot decode the endpoint event of {endpoint_id} received at {received_ns}")
+    })?;
+    Ok(StoredEndpointEvent {
+        received_ns,
+        endpoint_id,
+        sequence: u32::from_be_bytes(*sequence),
+        event,
+    })
 }
 
 impl Database {
@@ -654,6 +778,161 @@ impl Database {
             sequence = next;
         }
     }
+
+    /// Returns every loss record received at or after `since` nanoseconds
+    /// since the Unix epoch, under every `entry_id`, in key order.
+    ///
+    /// The keys start with the `entry_id`, not the received time, so every
+    /// record is read; retention bounds how many there are. Received times are
+    /// never negative, so a negative `since` returns every record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be read, or an entry in it
+    /// is malformed.
+    pub(crate) fn endpoint_losses_since(&self, since: i64) -> Result<Vec<StoredLoss>> {
+        let cf = self.get_cf_handle(ENDPOINT_LOSSES_CF)?;
+        let mut losses = Vec::new();
+        for item in self.db.iterator_cf(cf, IteratorMode::Start) {
+            let (key, value) = item.context("cannot read the endpoint losses")?;
+            let loss = decode_loss(&key, &value)?;
+            if loss.received_ns >= since {
+                losses.push(loss);
+            }
+        }
+        Ok(losses)
+    }
+
+    /// Returns every endpoint event received at or after `since` nanoseconds
+    /// since the Unix epoch, in key order: by received time, then endpoint id,
+    /// then sequence number.
+    ///
+    /// Received times are never negative, and a negative one would sort after
+    /// every other in a big-endian key, so a negative `since` is read as 0 and
+    /// returns every event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be read, or an entry in it
+    /// is malformed.
+    pub(crate) fn endpoint_events_since(&self, since: i64) -> Result<Vec<StoredEndpointEvent>> {
+        let cf = self.get_cf_handle(ENDPOINT_EVENTS_CF)?;
+        let start = since.max(0).to_be_bytes();
+        let mut events = Vec::new();
+        for item in self
+            .db
+            .iterator_cf(cf, IteratorMode::From(&start, Direction::Forward))
+        {
+            let (key, value) = item.context("cannot read the endpoint events")?;
+            let event = decode_event(&key, &value)?;
+            if event.received_ns < 0 {
+                break;
+            }
+            events.push(event);
+        }
+        Ok(events)
+    }
+
+    /// Returns, in endpoint id order, the last received time of up to `limit`
+    /// endpoints whose id comes strictly after `after`, or from the first
+    /// when `after` is `None`, and whether more endpoints follow them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column family cannot be read, or an entry in it
+    /// is malformed.
+    pub(crate) fn endpoint_last_received(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> Result<(Vec<(Uuid, i64)>, bool)> {
+        let cf = self.get_cf_handle(ENDPOINT_LAST_RECEIVED_CF)?;
+        let mode = match &after {
+            Some(after) => IteratorMode::From(after.as_bytes(), Direction::Forward),
+            None => IteratorMode::Start,
+        };
+        let mut page = Vec::new();
+        for item in self.db.iterator_cf(cf, mode) {
+            let (key, value) = item.context("cannot read the endpoint last received times")?;
+            if after.is_some_and(|after| key.as_ref() == after.as_bytes()) {
+                continue;
+            }
+            if page.len() == limit {
+                return Ok((page, true));
+            }
+            let endpoint_id = Uuid::from_slice(&key).map_err(|_| {
+                anyhow!(
+                    "an endpoint last received key is {} bytes long, not 16",
+                    key.len()
+                )
+            })?;
+            let received: [u8; 8] = value.as_ref().try_into().map_err(|_| {
+                anyhow!(
+                    "the last received time of endpoint {endpoint_id} is {} bytes long, not 8",
+                    value.len()
+                )
+            })?;
+            page.push((endpoint_id, i64::from_be_bytes(received)));
+        }
+        Ok((page, false))
+    }
+
+    /// Deletes every loss record and endpoint event received
+    /// [`ENDPOINT_HISTORY_RETENTION_NS`] or more before `now_ns`, nanoseconds
+    /// since the Unix epoch, and returns how many of each it deleted. The last
+    /// received times are left alone.
+    ///
+    /// A key too short to carry a received time is left alone too. The
+    /// deletions are written in batches of [`EXPIRY_BATCH_LEN`]; a failure
+    /// leaves the earlier batches deleted, which the next run does not mind.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a column family cannot be read or written.
+    pub(crate) fn expire_endpoint_history(&self, now_ns: i64) -> Result<ExpiredEndpointHistory> {
+        let cutoff = now_ns.saturating_sub(ENDPOINT_HISTORY_RETENTION_NS);
+        let losses_cf = self.get_cf_handle(ENDPOINT_LOSSES_CF)?;
+        let events_cf = self.get_cf_handle(ENDPOINT_EVENTS_CF)?;
+        let mut expired = ExpiredEndpointHistory::default();
+        let mut batch = WriteBatch::default();
+        let write = |batch: &mut WriteBatch, at_least: usize| -> Result<()> {
+            if batch.len() >= at_least.max(1) {
+                self.db
+                    .write(std::mem::take(batch))
+                    .context("cannot delete expired endpoint losses and events")?;
+            }
+            Ok(())
+        };
+
+        for item in self.db.iterator_cf(losses_cf, IteratorMode::Start) {
+            let (key, _) = item.context("cannot read the endpoint losses")?;
+            let received = (key.len() == LOSS_KEY_LEN)
+                .then(|| key.get(LOSS_KEY_LEN - 8..).and_then(be_i64))
+                .flatten();
+            if received.is_some_and(|received| received <= cutoff) {
+                batch.delete_cf(losses_cf, &key);
+                expired.losses += 1;
+                write(&mut batch, EXPIRY_BATCH_LEN)?;
+            }
+        }
+
+        // Keys start with the received time, so the expired ones come first.
+        // A negative time would sort after every other; none is stored.
+        for item in self.db.iterator_cf(events_cf, IteratorMode::Start) {
+            let (key, _) = item.context("cannot read the endpoint events")?;
+            let Some(received) = be_i64(&key) else {
+                continue;
+            };
+            if !(0..=cutoff).contains(&received) {
+                break;
+            }
+            batch.delete_cf(events_cf, &key);
+            expired.events += 1;
+            write(&mut batch, EXPIRY_BATCH_LEN)?;
+        }
+        write(&mut batch, 1)?;
+        Ok(expired)
+    }
 }
 
 #[cfg(test)]
@@ -778,6 +1057,378 @@ mod tests {
             .expect("the second event is stored under sequence 1");
         let decoded: DuplicateKeyEvent = bincode::deserialize(&stored).unwrap();
         assert_eq!(decoded, event);
+    }
+
+    const DAY_NS: i64 = 24 * 60 * 60 * 1_000_000_000;
+
+    /// Writes a loss record of `from..=to` in `stream` of `endpoint_id` under
+    /// `entry_id`, received at `received_ns`.
+    fn write_loss(
+        db: &Database,
+        entry_id: Uuid,
+        (endpoint_id, stream): (Uuid, Uuid),
+        (from, to): (u64, u64),
+        (reason, detail): (LossReason, &str),
+        received_ns: i64,
+    ) {
+        db.write_endpoint_batch(EndpointBatch {
+            entry_id,
+            received_ns,
+            changes: vec![EndpointChange::Loss {
+                endpoint_id,
+                stream,
+                from,
+                to,
+                reason,
+                detail: detail.to_owned(),
+            }],
+            received_from: Vec::new(),
+        })
+        .expect("write a loss");
+    }
+
+    fn duplicate_key(replacements: u64) -> DuplicateKeyEvent {
+        DuplicateKeyEvent {
+            spki_sha256: [7; 32],
+            addresses: vec!["192.0.2.1".parse().unwrap(), "2001:db8::1".parse().unwrap()],
+            replacements,
+        }
+    }
+
+    #[test]
+    fn reason_codes_round_trip() {
+        for reason in [
+            LossReason::Dropped,
+            LossReason::LostOnReset,
+            LossReason::ConversionFailure,
+        ] {
+            assert_eq!(LossReason::from_code(reason.code()), Some(reason));
+        }
+        assert_eq!(LossReason::from_code(3), None);
+    }
+
+    #[test]
+    fn losses_since_are_read_back_under_every_entry_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let (old_entry, entry) = (Uuid::from_u128(0x10), Uuid::from_u128(0x20));
+        let ids = (Uuid::from_u128(0x1), Uuid::from_u128(0x2));
+        let since = 1_000_i64;
+        write_loss(
+            &db,
+            entry,
+            ids,
+            (1, 4),
+            (LossReason::Dropped, "queue_full"),
+            since - 1,
+        );
+        write_loss(
+            &db,
+            entry,
+            ids,
+            (5, 9),
+            (LossReason::Dropped, "queue_full"),
+            since,
+        );
+        write_loss(
+            &db,
+            entry,
+            ids,
+            (10, 10),
+            (LossReason::LostOnReset, ""),
+            since + 1,
+        );
+        write_loss(
+            &db,
+            old_entry,
+            ids,
+            (11, 11),
+            (LossReason::ConversionFailure, "bad image path"),
+            since + 2,
+        );
+
+        let mut losses = db.endpoint_losses_since(since).expect("read");
+        losses.sort_unstable_by_key(|loss| loss.received_ns);
+        let expected = |entry_id, from, to, reason, detail: &str, received_ns| StoredLoss {
+            entry_id,
+            endpoint_id: ids.0,
+            stream: ids.1,
+            from,
+            to,
+            reason,
+            detail: detail.to_owned(),
+            received_ns,
+        };
+        assert_eq!(
+            losses,
+            vec![
+                expected(entry, 5, 9, LossReason::Dropped, "queue_full", since),
+                expected(entry, 10, 10, LossReason::LostOnReset, "", since + 1),
+                expected(
+                    old_entry,
+                    11,
+                    11,
+                    LossReason::ConversionFailure,
+                    "bad image path",
+                    since + 2
+                ),
+            ]
+        );
+        assert_eq!(db.endpoint_losses_since(-1).expect("read").len(), 4);
+        assert_eq!(db.endpoint_losses_since(i64::MIN).expect("read").len(), 4);
+        assert_eq!(
+            db.endpoint_losses_since(since + 3).expect("read"),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_loss_with_an_unknown_reason_code_is_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let mut key = endpoint_loss_key(
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            1,
+            2,
+            LossReason::Dropped,
+            5,
+        );
+        key[LOSS_KEY_LEN - 9] = 9;
+        db.put_cf_for_test(ENDPOINT_LOSSES_CF, &key, b"")
+            .expect("raw write");
+        let error = db.endpoint_losses_since(0).expect_err("reason code 9");
+        assert!(error.to_string().contains("code 9"), "{error}");
+    }
+
+    /// Each reader reports a malformed entry as an error naming what is wrong
+    /// with it, rather than skipping it or returning a partial list.
+    #[test]
+    fn malformed_entries_are_errors() {
+        type Read = fn(&Database) -> Result<()>;
+        /// A column family, a raw key and value, the reader, and what its
+        /// error must say.
+        type Case<'a> = (&'a str, &'a [u8], &'a [u8], Read, &'a str);
+
+        let loss_key = endpoint_loss_key(
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            1,
+            2,
+            LossReason::ConversionFailure,
+            5,
+        );
+        let event_key = endpoint_event_key(5, Uuid::from_u128(1), 0);
+        let endpoint_id = Uuid::from_u128(1);
+        let read_losses: Read = |db| db.endpoint_losses_since(0).map(drop);
+        let read_events: Read = |db| db.endpoint_events_since(0).map(drop);
+        let read_last: Read = |db| db.endpoint_last_received(None, 10).map(drop);
+        let cases: [Case<'_>; 6] = [
+            (ENDPOINT_LOSSES_CF, b"short", b"", read_losses, "bytes long"),
+            (ENDPOINT_LOSSES_CF, &loss_key, &[0xff], read_losses, "UTF-8"),
+            (ENDPOINT_EVENTS_CF, &[0; 9], b"", read_events, "bytes long"),
+            (ENDPOINT_EVENTS_CF, &event_key, &[1], read_events, "decode"),
+            (
+                ENDPOINT_LAST_RECEIVED_CF,
+                b"abc",
+                &[0; 8],
+                read_last,
+                "not 16",
+            ),
+            (
+                ENDPOINT_LAST_RECEIVED_CF,
+                endpoint_id.as_bytes(),
+                &[0; 3],
+                read_last,
+                "not 8",
+            ),
+        ];
+        for (cf, key, value, read, expected) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+            db.put_cf_for_test(cf, key, value).expect("raw write");
+            let error = read(&db).expect_err(expected);
+            assert!(format!("{error:#}").contains(expected), "{cf}: {error:#}");
+        }
+    }
+
+    /// An event key with a negative received time, which sorts after every
+    /// other, is neither returned nor expired, and a key too short to carry a
+    /// received time is left alone by the expiry.
+    #[test]
+    fn events_outside_the_received_time_range_are_skipped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let endpoint_id = Uuid::from_u128(1);
+        let value = bincode::serialize(&duplicate_key(1)).expect("serialize");
+        let negative = endpoint_event_key(-1, endpoint_id, 0);
+        let short = [0_u8; 3];
+        db.put_cf_for_test(ENDPOINT_EVENTS_CF, &negative, &value)
+            .expect("raw write");
+        db.put_cf_for_test(ENDPOINT_EVENTS_CF, &short, b"")
+            .expect("raw write");
+        db.append_endpoint_duplicate_key(5, endpoint_id, &duplicate_key(2))
+            .unwrap();
+
+        let events = db.endpoint_events_since(0).expect("read");
+        assert_eq!(
+            events.iter().map(|e| e.received_ns).collect::<Vec<_>>(),
+            vec![5]
+        );
+
+        let expired = db
+            .expire_endpoint_history(1_800_000_000_000_000_000)
+            .expect("expire");
+        assert_eq!(expired.events, 1);
+        for key in [&negative[..], &short[..]] {
+            assert!(
+                db.get_cf_for_test(ENDPOINT_EVENTS_CF, key)
+                    .expect("read")
+                    .is_some(),
+                "{key:?} is kept"
+            );
+        }
+    }
+
+    #[test]
+    fn events_since_are_read_back_in_key_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let (first, second) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
+        let since = 5_000_i64;
+        db.append_endpoint_duplicate_key(since - 1, first, &duplicate_key(1))
+            .unwrap();
+        db.append_endpoint_duplicate_key(since, second, &duplicate_key(2))
+            .unwrap();
+        db.append_endpoint_duplicate_key(since, first, &duplicate_key(3))
+            .unwrap();
+        db.append_endpoint_duplicate_key(since, first, &duplicate_key(4))
+            .unwrap();
+        db.append_endpoint_duplicate_key(since + 1, first, &duplicate_key(5))
+            .unwrap();
+
+        let events = db.endpoint_events_since(since).expect("read");
+        let keys: Vec<_> = events
+            .iter()
+            .map(|event| {
+                (
+                    event.received_ns,
+                    event.endpoint_id,
+                    event.sequence,
+                    event.event.replacements,
+                )
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                (since, first, 0, 3),
+                (since, first, 1, 4),
+                (since, second, 0, 2),
+                (since + 1, first, 0, 5),
+            ]
+        );
+        assert_eq!(events.first().map(|e| &e.event), Some(&duplicate_key(3)));
+        assert_eq!(db.endpoint_events_since(-5).expect("read").len(), 5);
+        assert_eq!(db.endpoint_events_since(i64::MIN).expect("read").len(), 5);
+        assert_eq!(
+            db.endpoint_events_since(since + 2).expect("read"),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn last_received_times_are_paged_in_endpoint_id_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        for (n, at) in [(3_u128, 30_i64), (1, 10), (2, 20)] {
+            db.write_endpoint_batch(EndpointBatch {
+                entry_id: Uuid::from_u128(0x99),
+                received_ns: at,
+                changes: Vec::new(),
+                received_from: vec![Uuid::from_u128(n)],
+            })
+            .expect("write");
+        }
+        let (page, more) = db.endpoint_last_received(None, 2).expect("read");
+        assert_eq!(
+            page,
+            vec![(Uuid::from_u128(1), 10), (Uuid::from_u128(2), 20)]
+        );
+        assert!(more);
+        let (page, more) = db
+            .endpoint_last_received(Some(Uuid::from_u128(2)), 2)
+            .expect("read");
+        assert_eq!(page, vec![(Uuid::from_u128(3), 30)]);
+        assert!(!more);
+        let (page, more) = db
+            .endpoint_last_received(Some(Uuid::from_u128(3)), 2)
+            .expect("read");
+        assert_eq!(page, Vec::new());
+        assert!(!more);
+        // An `after` that is not stored starts at the next id.
+        let (page, _) = db
+            .endpoint_last_received(Some(Uuid::from_u128(0)), 1)
+            .expect("read");
+        assert_eq!(page, vec![(Uuid::from_u128(1), 10)]);
+    }
+
+    #[test]
+    fn expiry_deletes_losses_and_events_thirty_days_old_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::open(dir.path(), &DbOptions::default()).expect("open");
+        let now = 1_800_000_000_000_000_000_i64;
+        let line = now - 30 * DAY_NS;
+        let ids = (Uuid::from_u128(0x1), Uuid::from_u128(0x2));
+        let entry = Uuid::from_u128(0x10);
+        for (n, at) in [(1_u64, line - 1), (2, line), (3, line + 1), (4, now)] {
+            write_loss(&db, entry, ids, (n, n), (LossReason::LostOnReset, ""), at);
+            db.append_endpoint_duplicate_key(at, ids.0, &duplicate_key(n))
+                .unwrap();
+        }
+        db.write_endpoint_batch(EndpointBatch {
+            entry_id: entry,
+            received_ns: line - DAY_NS,
+            changes: Vec::new(),
+            received_from: vec![ids.0],
+        })
+        .expect("write a last received time");
+
+        let expired = db.expire_endpoint_history(now).expect("expire");
+        assert_eq!(
+            expired,
+            ExpiredEndpointHistory {
+                losses: 2,
+                events: 2
+            }
+        );
+        let mut losses: Vec<_> = db
+            .endpoint_losses_since(0)
+            .unwrap()
+            .into_iter()
+            .map(|loss| loss.received_ns)
+            .collect();
+        losses.sort_unstable();
+        assert_eq!(losses, vec![line + 1, now]);
+        let events: Vec<_> = db
+            .endpoint_events_since(0)
+            .unwrap()
+            .into_iter()
+            .map(|event| event.received_ns)
+            .collect();
+        assert_eq!(events, vec![line + 1, now]);
+        assert_eq!(
+            db.endpoint_last_received(None, 10).unwrap(),
+            (vec![(ids.0, line - DAY_NS)], false),
+            "the last received times are not expired"
+        );
+
+        assert_eq!(
+            db.expire_endpoint_history(now).expect("expire again"),
+            ExpiredEndpointHistory::default()
+        );
     }
 
     #[test]

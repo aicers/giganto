@@ -2267,6 +2267,10 @@ async fn retain_periodically_with_hook(
             _ = itv.tick() => {}
         }
 
+        // Ahead of the claim: customer data deletion does not touch these
+        // column families, so a deletion in progress is no reason to skip it.
+        expire_endpoint_history(&db).await;
+
         // Claimed for the whole cycle and released when the guard goes out
         // of scope at the end of this iteration, on every path out of it. The
         // claim is a flag, not a held lock: nothing below waits on a mutex.
@@ -2319,6 +2323,42 @@ async fn retain_periodically_with_hook(
             return Ok(());
         }
         info!("Database cleanup completed.");
+    }
+}
+
+/// Deletes the endpoint loss records and events received
+/// [`endpoint::ENDPOINT_HISTORY_RETENTION_NS`] or more ago.
+///
+/// It runs once per retention cycle, in every generation, whether or not the
+/// endpoint entry is open: what the entry wrote while it was open must expire
+/// after it closes too. A failure is logged and left to the next cycle, which
+/// deletes whatever this one did not; it does not stop retention. The blocking
+/// task is awaited, never abandoned, for the reason [`retain_cleanup_pass`]
+/// gives.
+async fn expire_endpoint_history(db: &Database) {
+    let db = db.clone();
+    let now_ns = DateTime::now().timestamp_nanos_opt().unwrap_or(i64::MAX);
+    report_endpoint_expiry(
+        tokio::task::spawn_blocking(move || db.expire_endpoint_history(now_ns)).await,
+    );
+}
+
+/// Logs the outcome of one [`expire_endpoint_history`] run: what it deleted,
+/// or why it could not.
+fn report_endpoint_expiry(
+    outcome: std::result::Result<Result<endpoint::ExpiredEndpointHistory>, tokio::task::JoinError>,
+) {
+    match outcome {
+        Ok(Ok(expired)) => debug!(
+            losses = expired.losses,
+            events = expired.events,
+            "Deleted expired endpoint loss records and events"
+        ),
+        Ok(Err(error)) => warn!(
+            error = %format_args!("{error:#}"),
+            "Cannot delete expired endpoint loss records and events"
+        ),
+        Err(error) => warn!(%error, "Deleting expired endpoint loss records and events failed"),
     }
 }
 
@@ -4301,6 +4341,130 @@ mod tests {
 
         cancel.cancel();
         assert!(task.await.unwrap().is_ok());
+    }
+
+    /// A retention cycle deletes the endpoint loss records and events
+    /// received 30 days or more ago and keeps the newer ones and every last
+    /// received time, with no endpoint entry running and while a customer
+    /// data deletion holds the store.
+    #[tokio::test]
+    async fn retain_periodically_expires_endpoint_losses_and_events() {
+        use uuid::Uuid;
+
+        use super::endpoint::{
+            DuplicateKeyEvent, ENDPOINT_HISTORY_RETENTION_NS, EndpointBatch, EndpointChange,
+            LossReason,
+        };
+
+        let (_dir, db) = setup_db();
+        let now_nanos = DateTime::now().timestamp_nanos_opt().unwrap();
+        let old = now_nanos - ENDPOINT_HISTORY_RETENTION_NS - 3_600_000_000_000;
+        let new = now_nanos - ENDPOINT_HISTORY_RETENTION_NS + 3_600_000_000_000;
+        let endpoint_id = Uuid::from_u128(1);
+        for (at, from) in [(old, 1), (new, 2)] {
+            db.write_endpoint_batch(EndpointBatch {
+                entry_id: Uuid::from_u128(9),
+                received_ns: at,
+                changes: vec![EndpointChange::Loss {
+                    endpoint_id,
+                    stream: Uuid::from_u128(2),
+                    from,
+                    to: from,
+                    reason: LossReason::Dropped,
+                    detail: "queue_full".to_owned(),
+                }],
+                received_from: vec![endpoint_id],
+            })
+            .unwrap();
+            db.append_endpoint_duplicate_key(
+                at,
+                endpoint_id,
+                &DuplicateKeyEvent {
+                    spki_sha256: [1; 32],
+                    addresses: Vec::new(),
+                    replacements: 1,
+                },
+            )
+            .unwrap();
+        }
+
+        let coordination = idle_coordination();
+        let deletion = coordination
+            .begin_deletion(1)
+            .expect("no retention cycle holds the store yet");
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(super::retain_periodically(
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(3600),
+            db.clone(),
+            cancel.clone(),
+            Arc::clone(&coordination),
+        ));
+
+        let deadline = std::time::Instant::now() + STORAGE_TEST_TIMEOUT;
+        while db.endpoint_losses_since(0).unwrap().len() > 1
+            || db.endpoint_events_since(0).unwrap().len() > 1
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cleanup did not expire the old endpoint losses and events"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let losses = db.endpoint_losses_since(0).unwrap();
+        assert_eq!(
+            losses
+                .iter()
+                .map(|loss| loss.received_ns)
+                .collect::<Vec<_>>(),
+            vec![new]
+        );
+        let events = db.endpoint_events_since(0).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.received_ns)
+                .collect::<Vec<_>>(),
+            vec![new]
+        );
+        assert_eq!(
+            db.endpoint_last_received(None, 10).unwrap(),
+            (vec![(endpoint_id, new)], false)
+        );
+
+        cancel.cancel();
+        assert!(task.await.unwrap().is_ok());
+        drop(deletion);
+    }
+
+    /// A failed endpoint expiry, whether the deletion returned an error or
+    /// its blocking task did not finish, is logged as a warning with the
+    /// cause, so that retention carries on and an operator can see why.
+    #[tokio::test]
+    async fn a_failed_endpoint_expiry_is_logged_as_a_warning() {
+        let (logs, _guard) = crate::test_bootroot::capture_logs();
+
+        super::report_endpoint_expiry(Ok(Err(anyhow!("the store is gone"))));
+        let contents = logs.contents();
+        assert!(
+            contents.contains("WARN")
+                && contents.contains("Cannot delete expired endpoint loss records and events")
+                && contents.contains("the store is gone"),
+            "{contents}"
+        );
+
+        let task = tokio::spawn(std::future::pending::<
+            anyhow::Result<super::endpoint::ExpiredEndpointHistory>,
+        >());
+        task.abort();
+        super::report_endpoint_expiry(task.await);
+        let contents = logs.contents();
+        assert!(
+            contents.contains("Deleting expired endpoint loss records and events failed")
+                && contents.contains("cancelled"),
+            "{contents}"
+        );
     }
 
     /// Starts a retention task over `db` that runs a pass every 10ms.
