@@ -37,6 +37,8 @@ use giganto_client::ingest::{
     },
     timeseries::PeriodicTimeSeries,
 };
+#[cfg(test)]
+pub(crate) use migration::COMPATIBLE_VERSION_REQ;
 pub use migration::migrate_data_dir;
 pub use rocksdb::Direction;
 #[cfg(feature = "storage_diagnostics")]
@@ -142,9 +144,8 @@ pub struct CustomerDataDeletion {
     /// The time-series-generation-policy IDs whose periodic time series the
     /// job deletes.
     ///
-    /// Kept last, so that a job already migrated to this format still reads
-    /// as the previous one if the migration step runs over it again, and is
-    /// written back unchanged.
+    /// The field is the last one of the stored layout. Moving it changes the
+    /// stored format of every job.
     pub periodic_time_series_ids: Vec<String>,
 }
 
@@ -1162,8 +1163,7 @@ impl<'db, T> RawEventStore<'db, T> {
     /// event, the timestamp is moved forward one nanosecond at a time until
     /// the key is free, in which case the event is written there, or holds a
     /// byte-identical event, in which case nothing is written. Unlike
-    /// `append`, which migrations use to rewrite records in place, this never
-    /// replaces a stored value.
+    /// `append`, this never replaces a stored value.
     ///
     /// # Errors
     ///
@@ -1339,6 +1339,7 @@ impl<'db, T: DeserializeOwned> RawEventStore<'db, T> {
         ))
     }
 
+    #[cfg(test)]
     pub fn iter_forward(&self) -> Iter<'db> {
         Iter::new(self.db.iterator_cf(self.cf, rocksdb::IteratorMode::Start))
     }

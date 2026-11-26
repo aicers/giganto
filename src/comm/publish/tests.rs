@@ -10885,15 +10885,65 @@ mod shutdown {
 }
 
 #[test]
-fn publish_version_req_admits_earlier_clients_and_this_version() {
+fn publish_version_req_admits_only_this_minor_release() {
     let req = semver::VersionReq::parse(super::PUBLISH_VERSION_REQ).unwrap();
-    for admitted in ["0.28.0", "0.33.0", PROTOCOL_VERSION] {
-        assert!(
-            req.matches(&semver::Version::parse(admitted).unwrap()),
-            "{admitted} must be admitted"
-        );
+    assert!(
+        req.matches(&semver::Version::parse(PROTOCOL_VERSION).unwrap()),
+        "{PROTOCOL_VERSION} must be admitted"
+    );
+    let previous_minor = crate::version_req::previous_minor_version();
+    for refused in [
+        semver::Version::parse("0.28.0").unwrap(),
+        semver::Version::parse("0.37.0").unwrap(),
+        previous_minor,
+    ] {
+        assert!(!req.matches(&refused), "{refused} must be refused");
     }
-    assert!(!req.matches(&semver::Version::parse("0.27.0").unwrap()));
+}
+
+/// A client announcing an earlier release, such as the `0.28.0` crusher and
+/// Hog announce, is refused at the version handshake.
+#[tokio::test]
+async fn handshake_refuses_a_client_of_an_earlier_release() {
+    init_crypto();
+    let temp_dir = tempfile::tempdir().expect("create publish temp dir");
+    let db =
+        Database::open(temp_dir.path(), &DbOptions::default()).expect("open publish test database");
+    let certs = build_test_certs();
+    let (peers, peer_idents) = new_peers_data(None);
+    let (server_addr, server_handle) = spawn_server(
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+        db,
+        new_pcap_sensors(),
+        new_stream_direct_channels(),
+        build_ingest_sensors(),
+        peers,
+        peer_idents,
+        &certs,
+    );
+
+    let client_endpoint = init_client();
+    let conn = client_endpoint
+        .connect(server_addr, NODE1.server_name())
+        .expect("Failed to connect")
+        .await
+        .expect("Failed to finish connection");
+    let err = tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, client_handshake(&conn, "0.28.0"))
+        .await
+        .expect("the version handshake must finish in time")
+        .expect_err("a 0.28.0 client must be refused");
+    assert!(
+        matches!(
+            &err,
+            giganto_client::connection::HandshakeError::IncompatibleProtocol(version)
+                if version == "0.28.0"
+        ),
+        "unexpected handshake error: {err:?}"
+    );
+
+    conn.close(0u32.into(), b"done");
+    client_endpoint.wait_idle().await;
+    server_handle.shutdown().await;
 }
 
 mod multi_source;

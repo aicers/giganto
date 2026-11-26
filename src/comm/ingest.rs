@@ -65,6 +65,7 @@ use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::publish::notify_direct_stream;
 use crate::comm::{
     IngestSensors, PcapSensors, RunTimeIngestSensors, StreamDirectChannelMap, StreamDirectChannels,
+    close_after_failed_handshake,
 };
 use crate::datetime::DateTime;
 use crate::server::{
@@ -73,13 +74,18 @@ use crate::server::{
 };
 use crate::storage::{Database, RawEventStore, SensorStore, StorageKey, UniqueAppend};
 use crate::tls_reload::TlsWatch;
+use crate::version_req::version_req;
 
 const ACK_INTERVAL_TIME: u64 = 60;
 const CHANNEL_CLOSE_MESSAGE: &[u8; 12] = b"channel done";
 const CHANNEL_CLOSE_TIMESTAMP: i64 = -1;
 const NO_TIMESTAMP: i64 = 0;
 const SENSOR_INTERVAL: u64 = 60 * 60 * 24;
-const INGEST_VERSION_REQ: &str = ">=0.27.0,<0.40.0";
+// The `INGEST_VERSION_REQ` defines the versions an ingest client (a sensor) may announce. Its lower
+// bound follows the crate's minor release, so a release refuses clients of earlier minor releases,
+// and a sensor must announce a version within the range. A later release that must keep accepting
+// an earlier one replaces the derived lower bound with a literal.
+pub(crate) const INGEST_VERSION_REQ: &str = version_req!("<0.40.0");
 /// Names the ingest subsystem tracker in the drain progress log.
 const INGEST_DRAIN_LABEL: &str = "ingest";
 
@@ -461,7 +467,7 @@ async fn handle_connection(
         }
         Err(e) => {
             info!("Incompatible version");
-            connection.close(quinn::VarInt::from_u32(0), e.to_string().as_bytes());
+            close_after_failed_handshake(&connection, &e, &token).await;
             bail!("{e}")
         }
     }
