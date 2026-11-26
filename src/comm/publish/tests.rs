@@ -2202,7 +2202,7 @@ mod fixtures {
 
     pub(super) fn periodic_time_series_raw_event_case() -> RawEventCase {
         RawEventCase {
-            kind: "timeseries",
+            kind: "periodic_time_series",
             insert: insert_periodic_time_series_raw_event_case,
             build_expected: build_periodic_time_series_raw_expected,
             validate_payload: None,
@@ -3028,6 +3028,17 @@ mod fixtures {
             mime_types: Vec::new(),
             body: Vec::new(),
             state: String::new(),
+            request_header_names: vec![
+                "Host".to_string(),
+                "Accept".to_string(),
+                "X-Forwarded-For".to_string(),
+                "X-Forwarded-For".to_string(),
+            ],
+            accept: "text/html".to_string(),
+            connection: "keep-alive".to_string(),
+            accept_encoding: "gzip, deflate".to_string(),
+            accept_language: "en-US,en;q=0.9".to_string(),
+            pragma: "no-cache".to_string(),
         };
 
         bincode::serialize(&http_body).unwrap()
@@ -4692,6 +4703,110 @@ async fn request_range_data_with_network_kinds() {
     .await;
 }
 
+/// Asserts that `http` carries the request header names and values
+/// `gen_http_raw_event` fills in.
+fn assert_gen_http_request_headers(http: &Http) {
+    assert_eq!(
+        http.request_header_names,
+        ["Host", "Accept", "X-Forwarded-For", "X-Forwarded-For"]
+    );
+    assert_eq!(http.accept, "text/html");
+    assert_eq!(http.connection, "keep-alive");
+    assert_eq!(http.accept_encoding, "gzip, deflate");
+    assert_eq!(http.accept_language, "en-US,en;q=0.9");
+    assert_eq!(http.pragma, "no-cache");
+}
+
+#[tokio::test]
+async fn request_range_data_with_http_carries_request_header_columns() {
+    const SENSOR: &str = "ingest src 1";
+
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let timestamp = next_timestamp();
+            insert_http_raw_event(&harness.db.http_store().unwrap(), SENSOR, timestamp);
+
+            let request = build_range_request(SENSOR, "http");
+            let result_data = harness
+                .publish
+                .send_range_request::<(i64, String, Vec<u8>)>(RANGE_MESSAGE_CODE, request)
+                .await;
+            let (recv_timestamp, recv_sensor, payload) = result_data
+                .into_iter()
+                .flatten()
+                .next()
+                .expect("range response carries the stored http event");
+            assert_eq!(recv_timestamp, timestamp);
+            assert_eq!(recv_sensor, SENSOR);
+
+            let payload = String::from_utf8(payload).expect("http range payload is utf-8");
+            let columns: Vec<&str> = payload.split('\t').collect();
+            let trailing = columns
+                .get(columns.len().saturating_sub(6)..)
+                .expect("payload has at least six columns");
+            assert_eq!(
+                trailing,
+                [
+                    "Host,Accept,X-Forwarded-For,X-Forwarded-For",
+                    "text/html",
+                    "keep-alive",
+                    "gzip, deflate",
+                    "en-US,en;q=0.9",
+                    "no-cache",
+                ]
+            );
+            // The six columns follow `state`, which is empty here and so
+            // printed as `-`.
+            assert_eq!(columns.get(columns.len() - 7), Some(&"-"));
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn request_stream_semi_supervised_http_passes_request_headers_unchanged() {
+    with_test_harness(|harness| {
+        Box::pin(async move {
+            let publish = &mut harness.publish;
+            send_stream_request(
+                &mut publish.send,
+                StreamRequestPayload::SemiSupervised {
+                    record_type: RequestStreamRecord::Http,
+                    request: build_network_semi_supervised_request(),
+                },
+            )
+            .await
+            .unwrap();
+            let mut stream = publish.conn.accept_uni().await.unwrap();
+            let start_msg = receive_semi_supervised_stream_start_message(&mut stream)
+                .await
+                .unwrap();
+            assert_eq!(start_msg, RequestStreamRecord::Http);
+
+            let send_time = next_timestamp();
+            let payload = gen_http_raw_event();
+            notify_direct_stream(
+                &NetworkKey::new(SENSOR_SEMI_SUPERVISED_ONE, RequestStreamRecord::Http),
+                &payload,
+                send_time,
+                SENSOR_SEMI_SUPERVISED_ONE,
+                &*harness.stream_direct_channels.read().await,
+            )
+            .unwrap();
+
+            let recv_data = receive_semi_supervised_data(&mut stream).await.unwrap();
+            let (recv_timestamp, recv_sensor, recv_payload) =
+                decode_semi_supervised_frame(&recv_data);
+            assert_eq!(recv_timestamp, send_time);
+            assert_eq!(recv_sensor, SENSOR_SEMI_SUPERVISED_ONE);
+            assert_eq!(recv_payload, payload, "live http bytes must pass unchanged");
+            let http: Http = bincode::deserialize(&recv_payload).unwrap();
+            assert_gen_http_request_headers(&http);
+        })
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn request_range_data_with_log() {
     const SENSOR: &str = "src1";
@@ -4988,7 +5103,7 @@ async fn request_range_data_with_periodic_time_series() {
             let cases = prepare_periodic_time_series_range_cases(
                 &harness.db,
                 TIME_SERIES_POLICY_ID,
-                "timeseries",
+                "periodic_time_series",
             );
             assert_range_cases_series(&harness.publish, TIME_SERIES_POLICY_ID, &cases).await;
         })
@@ -5039,7 +5154,7 @@ async fn request_range_data_with_periodic_time_series_honours_range_and_count() 
             ] {
                 let request = RequestRange {
                     sensor: TIME_SERIES_POLICY_ID.to_string(),
-                    kind: "timeseries".to_string(),
+                    kind: "periodic_time_series".to_string(),
                     start: START,
                     end: END,
                     count,
@@ -5086,7 +5201,7 @@ fn insert_grouping_policy_series(db: &Database) {
 fn policy_range_request(count: usize) -> RequestRange {
     RequestRange {
         sensor: "42".to_string(),
-        kind: "timeseries".to_string(),
+        kind: "periodic_time_series".to_string(),
         start: 0,
         end: 1_000,
         count,
@@ -5259,7 +5374,7 @@ async fn time_series_reads_leave_sensor_sets_unchanged() {
             let cases = prepare_periodic_time_series_range_cases(
                 &harness.db,
                 TIME_SERIES_POLICY_ID,
-                "timeseries",
+                "periodic_time_series",
             );
             assert_range_cases_series(&harness.publish, TIME_SERIES_POLICY_ID, &cases).await;
             let case = periodic_time_series_raw_event_case();
@@ -7023,11 +7138,15 @@ async fn request_range_data_with_network_kinds_giganto_cluster() {
 #[serial_test::serial(publish_cluster)]
 async fn request_range_data_with_periodic_time_series_giganto_cluster() {
     let context = setup_cluster_with_cases(|node2_db| {
-        prepare_periodic_time_series_range_cases(node2_db, TIME_SERIES_POLICY_ID, "timeseries")
+        prepare_periodic_time_series_range_cases(
+            node2_db,
+            TIME_SERIES_POLICY_ID,
+            "periodic_time_series",
+        )
     })
     .await;
     let publish = &context.publish;
-    let request = build_range_request(TIME_SERIES_POLICY_ID, "timeseries");
+    let request = build_range_request(TIME_SERIES_POLICY_ID, "periodic_time_series");
 
     // Node 2 holds the series, and node 1 does not fetch it from its peer.
     let result_data = publish
@@ -7039,7 +7158,7 @@ async fn request_range_data_with_periodic_time_series_giganto_cluster() {
     let local_cases = prepare_periodic_time_series_range_cases(
         &context.node1_db,
         TIME_SERIES_POLICY_ID,
-        "timeseries",
+        "periodic_time_series",
     );
     let result_data = publish
         .send_range_request::<(i64, String, Vec<f64>)>(RANGE_MESSAGE_CODE, request.clone())

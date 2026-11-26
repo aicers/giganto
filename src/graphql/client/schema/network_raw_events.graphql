@@ -125,6 +125,12 @@ query NetworkRawEvents(
           mimeTypes
           body
           state
+          requestHeaderNames
+          accept
+          connection
+          acceptEncoding
+          acceptLanguage
+          pragma
         }
         ... on RdpRawEvent {
           time

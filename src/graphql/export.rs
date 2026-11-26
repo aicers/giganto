@@ -312,6 +312,12 @@ struct HttpJsonOutput {
     mime_types: Vec<String>,
     body: Vec<u8>,
     state: String,
+    request_header_names: Vec<String>,
+    accept: String,
+    connection: String,
+    accept_encoding: String,
+    accept_language: String,
+    pragma: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -1383,7 +1389,13 @@ convert_json_output!(
     filenames,
     mime_types,
     body,
-    state
+    state,
+    request_header_names,
+    accept,
+    connection,
+    accept_encoding,
+    accept_language,
+    pragma
 );
 
 convert_json_output!(RdpJsonOutput, Rdp, cookie);

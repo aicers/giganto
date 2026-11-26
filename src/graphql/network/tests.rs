@@ -764,7 +764,13 @@ async fn network_raw_events_with_data_giganto_cluster() {
                             "filenames": ["file1.txt", "file2.txt", "response1.txt", "response2.txt"],
                             "mimeTypes": ["text/plain", "text/plain"],
                             "body": [200, 300],
-                            "state": "OK"
+                            "state": "OK",
+                            "requestHeaderNames": ["Host", "Accept"],
+                            "accept": "*/*",
+                            "connection": "close",
+                            "acceptEncoding": "gzip",
+                            "acceptLanguage": "en",
+                            "pragma": ""
                         }
                     },
                     {
@@ -1720,6 +1726,12 @@ async fn http_with_data() {
                     mimeTypes,
                     body,
                     state,
+                    requestHeaderNames,
+                    accept,
+                    connection,
+                    acceptEncoding,
+                    acceptLanguage,
+                    pragma,
                     respPort,
                     proto,
                     time,
@@ -1736,14 +1748,16 @@ async fn http_with_data() {
     let res = schema.execute(query).await;
     assert_eq!(
         res.data.to_string(),
-        "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, method: \"POST\", host: \"cluml\", uri: \"/cluml.gif\", \
-         referer: \"cluml.com\", version: \"\", userAgent: \"giganto\", requestLen: \"0\", responseLen: \"0\", \
-         statusCode: 200, statusMsg: \"\", username: \"\", password: \"\", cookie: \"\", \
-         contentEncoding: \"\", contentType: \"\", cacheControl: \"\", filenames: [], mimeTypes: [], \
-         body: [], state: \"\", respPort: 80, proto: 17, time: \"2026-01-01T00:00:00Z\", \
-         startTime: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", origPkts: \"1\", respPkts: \"1\", \
-         origL2Bytes: \"100\", respL2Bytes: \"200\"}}]}}"
+        format!(
+            "{{httpRawEvents: {{edges: [{{node: {{origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
+             origPort: 46378, method: \"POST\", host: \"cluml\", uri: \"/cluml.gif\", \
+             referer: \"cluml.com\", version: \"\", userAgent: \"giganto\", requestLen: \"0\", responseLen: \"0\", \
+             statusCode: 200, statusMsg: \"\", username: \"\", password: \"\", cookie: \"\", \
+             contentEncoding: \"\", contentType: \"\", cacheControl: \"\", filenames: [], mimeTypes: [], \
+             body: [], state: \"\", {HTTP_REQUEST_HEADERS_EXPECTED}, respPort: 80, proto: 17, \
+             time: \"2026-01-01T00:00:00Z\", startTime: \"2026-01-01T00:00:00Z\", duration: \"1000000000\", \
+             origPkts: \"1\", respPkts: \"1\", origL2Bytes: \"100\", respL2Bytes: \"200\"}}}}]}}}}"
+        )
     );
 
     assert_addr_port_boundaries(
@@ -1768,12 +1782,18 @@ async fn http_with_data() {
 }
 
 pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
-    let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
-    key.extend_from_slice(sensor.as_bytes());
-    key.push(0);
-    key.extend(timestamp.to_be_bytes());
+    insert_raw_event_bytes(
+        store,
+        sensor,
+        timestamp,
+        &bincode::serialize(&http_body()).unwrap(),
+    );
+}
 
-    let http_body = Http {
+/// Returns an `Http` whose request header names keep a duplicate in the
+/// order received, and whose five request header values are all set.
+fn http_body() -> Http {
+    Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -1805,10 +1825,235 @@ pub(crate) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, t
         mime_types: Vec::new(),
         body: Vec::new(),
         state: String::new(),
-    };
-    let ser_http_body = bincode::serialize(&http_body).unwrap();
+        request_header_names: vec![
+            "Host".to_string(),
+            "X-Forwarded-For".to_string(),
+            "Accept".to_string(),
+            "x-forwarded-for".to_string(),
+            "X-Forwarded-For".to_string(),
+        ],
+        accept: "text/html,application/xhtml+xml".to_string(),
+        connection: "keep-alive".to_string(),
+        accept_encoding: "gzip, deflate, br".to_string(),
+        accept_language: "ko-KR,ko;q=0.9".to_string(),
+        pragma: "no-cache".to_string(),
+    }
+}
 
-    store.append(&key, &ser_http_body).unwrap();
+/// Returns `http_body` with no request header names and all five request
+/// header values empty.
+fn http_body_without_request_headers() -> Http {
+    Http {
+        request_header_names: Vec::new(),
+        accept: String::new(),
+        connection: String::new(),
+        accept_encoding: String::new(),
+        accept_language: String::new(),
+        pragma: String::new(),
+        ..http_body()
+    }
+}
+
+const HTTP_REQUEST_HEADERS_EXPECTED: &str = "requestHeaderNames: [\"Host\", \"X-Forwarded-For\", \
+     \"Accept\", \"x-forwarded-for\", \"X-Forwarded-For\"], accept: \"text/html,application/xhtml+xml\", \
+     connection: \"keep-alive\", acceptEncoding: \"gzip, deflate, br\", acceptLanguage: \"ko-KR,ko;q=0.9\", \
+     pragma: \"no-cache\"";
+
+const HTTP_REQUEST_HEADERS_EMPTY_EXPECTED: &str = "requestHeaderNames: [], accept: \"\", \
+     connection: \"\", acceptEncoding: \"\", acceptLanguage: \"\", pragma: \"\"";
+
+/// The `networkRawEvents` query selecting the request header fields of
+/// `HttpRawEvent` members.
+const NETWORK_HTTP_REQUEST_HEADERS_QUERY: &str = r#"
+    {
+        networkRawEvents(
+            filter: { sensor: "src 1" }
+            first: 2
+        ) {
+            edges {
+                node {
+                    __typename
+                    ... on HttpRawEvent {
+                        requestHeaderNames
+                        accept
+                        connection
+                        acceptEncoding
+                        acceptLanguage
+                        pragma
+                    }
+                }
+            }
+        }
+    }"#;
+
+fn network_http_request_headers_expected() -> String {
+    format!(
+        "{{networkRawEvents: {{edges: [\
+         {{node: {{__typename: \"HttpRawEvent\", {HTTP_REQUEST_HEADERS_EXPECTED}}}}}, \
+         {{node: {{__typename: \"HttpRawEvent\", {HTTP_REQUEST_HEADERS_EMPTY_EXPECTED}}}}}]}}}}"
+    )
+}
+
+#[tokio::test]
+async fn http_request_header_fields_empty() {
+    let schema = TestSchema::new();
+    let store = schema.db.http_store().unwrap();
+    let (time1, _) = fixed_time_nanos();
+    insert_raw_event_bytes(
+        &store,
+        "src 1",
+        time1,
+        &bincode::serialize(&http_body_without_request_headers()).unwrap(),
+    );
+
+    let query = r#"
+    {
+        httpRawEvents(filter: { sensor: "src 1" }, first: 1) {
+            edges {
+                node {
+                    requestHeaderNames
+                    accept
+                    connection
+                    acceptEncoding
+                    acceptLanguage
+                    pragma
+                }
+            }
+        }
+    }"#;
+    let res = schema.execute(query).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.to_string(),
+        format!(
+            "{{httpRawEvents: {{edges: [{{node: {{{HTTP_REQUEST_HEADERS_EMPTY_EXPECTED}}}}}]}}}}"
+        )
+    );
+}
+
+#[tokio::test]
+async fn network_raw_events_http_request_header_fields() {
+    let schema = TestSchema::new();
+    let store = schema.db.http_store().unwrap();
+    let (time1, _) = fixed_time_nanos();
+    insert_http_raw_event(&store, "src 1", time1);
+    insert_raw_event_bytes(
+        &store,
+        "src 1",
+        time1 + 1,
+        &bincode::serialize(&http_body_without_request_headers()).unwrap(),
+    );
+
+    let res = schema.execute(NETWORK_HTTP_REQUEST_HEADERS_QUERY).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.to_string(),
+        network_http_request_headers_expected()
+    );
+}
+
+/// Returns the peer's JSON `node` of a `networkRawEvents` edge for an
+/// `HttpRawEvent`, with the given request header fields.
+fn peer_http_node(time: &str, request_headers: &str) -> String {
+    format!(
+        r#"{{
+            "__typename": "HttpRawEvent",
+            "time": "{time}",
+            "origAddr": "192.168.4.76",
+            "respAddr": "192.168.4.76",
+            "origPort": 46378,
+            "respPort": 80,
+            "proto": 17,
+            "startTime": "{time}",
+            "duration": "1000000000",
+            "origPkts": "1",
+            "respPkts": "1",
+            "origL2Bytes": "100",
+            "respL2Bytes": "200",
+            "method": "POST",
+            "host": "cluml",
+            "uri": "/cluml.gif",
+            "referer": "cluml.com",
+            "version": "",
+            "userAgent": "giganto",
+            "requestLen": "0",
+            "responseLen": "0",
+            "statusCode": 200,
+            "statusMsg": "",
+            "username": "",
+            "password": "",
+            "cookie": "",
+            "contentEncoding": "",
+            "contentType": "",
+            "cacheControl": "",
+            "filenames": [],
+            "mimeTypes": [],
+            "body": [],
+            "state": "",
+            {request_headers}
+        }}"#
+    )
+}
+
+#[tokio::test]
+async fn network_raw_events_http_request_header_fields_giganto_cluster() {
+    let nodes = [
+        peer_http_node(
+            "2026-01-01T00:00:00+00:00",
+            r#""requestHeaderNames": ["Host", "X-Forwarded-For", "Accept", "x-forwarded-for",
+            "X-Forwarded-For"], "accept": "text/html,application/xhtml+xml",
+            "connection": "keep-alive", "acceptEncoding": "gzip, deflate, br",
+            "acceptLanguage": "ko-KR,ko;q=0.9", "pragma": "no-cache""#,
+        ),
+        peer_http_node(
+            "2026-01-01T00:00:00.000000001+00:00",
+            r#""requestHeaderNames": [], "accept": "", "connection": "",
+            "acceptEncoding": "", "acceptLanguage": "", "pragma": """#,
+        ),
+    ];
+    let edges = nodes
+        .iter()
+        .map(|node| format!(r#"{{"cursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=", "node": {node}}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let peer_response_mock_data = format!(
+        r#"{{
+            "data": {{
+                "networkRawEvents": {{
+                    "pageInfo": {{
+                        "hasPreviousPage": false,
+                        "hasNextPage": false,
+                        "startCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM=",
+                        "endCursor": "cGl0YTIwMjNNQlAAF5gitjR0HIM="
+                    }},
+                    "edges": [{edges}]
+                }}
+            }}
+        }}"#
+    );
+
+    let mut peer_server = mockito::Server::new_async().await;
+    let mock = peer_server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_body(peer_response_mock_data)
+        .create();
+    let peer_port = peer_server
+        .host_with_port()
+        .parse::<SocketAddr>()
+        .expect("Port must exist")
+        .port();
+    let schema = TestSchema::new_with_graphql_peer(peer_port);
+
+    let query = NETWORK_HTTP_REQUEST_HEADERS_QUERY.replace("src 1", "src 2");
+    let res = schema.execute(&query).await;
+    assert!(res.errors.is_empty(), "{:?}", res.errors);
+    assert_eq!(
+        res.data.to_string(),
+        network_http_request_headers_expected()
+    );
+
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -1835,6 +2080,12 @@ async fn http_with_data_giganto_cluster() {
                     startTime,
                     requestLen,
                     responseLen,
+                    requestHeaderNames,
+                    accept,
+                    connection,
+                    acceptEncoding,
+                    acceptLanguage,
+                    pragma,
                 }
             }
         }
@@ -1896,7 +2147,19 @@ async fn http_with_data_giganto_cluster() {
                                 200,
                                 300
                             ],
-                            "state": "OK"
+                            "state": "OK",
+                            "requestHeaderNames": [
+                                "Host",
+                                "X-Forwarded-For",
+                                "Accept",
+                                "x-forwarded-for",
+                                "X-Forwarded-For"
+                            ],
+                            "accept": "text/html,application/xhtml+xml",
+                            "connection": "keep-alive",
+                            "acceptEncoding": "gzip, deflate, br",
+                            "acceptLanguage": "ko-KR,ko;q=0.9",
+                            "pragma": "no-cache"
                             }
                         }
                     ]
@@ -1924,8 +2187,11 @@ async fn http_with_data_giganto_cluster() {
     // then
     assert_eq!(
         res.data.to_string(),
-        "{httpRawEvents: {edges: [{node: {origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
-         origPort: 46378, startTime: \"2026-01-01T00:00:00Z\", requestLen: \"1024\", responseLen: \"2048\"}}]}}"
+        format!(
+            "{{httpRawEvents: {{edges: [{{node: {{origAddr: \"192.168.4.76\", respAddr: \"192.168.4.76\", \
+             origPort: 46378, startTime: \"2026-01-01T00:00:00Z\", requestLen: \"1024\", responseLen: \"2048\", \
+             {HTTP_REQUEST_HEADERS_EXPECTED}}}}}]}}}}"
+        )
     );
 
     mock.assert_async().await;

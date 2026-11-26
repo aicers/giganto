@@ -1604,12 +1604,29 @@ pub(super) fn insert_dns_raw_event(store: &RawEventStore<Dns>, sensor: &str, tim
 }
 
 pub(super) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, timestamp: i64) {
+    insert_http_record(store, sensor, timestamp, &http_raw_event_body());
+}
+
+pub(super) fn insert_http_record(
+    store: &RawEventStore<Http>,
+    sensor: &str,
+    timestamp: i64,
+    body: &Http,
+) {
     let mut key = Vec::with_capacity(sensor.len() + 1 + mem::size_of::<i64>());
     key.extend_from_slice(sensor.as_bytes());
     key.push(0);
     key.extend(timestamp.to_be_bytes());
 
-    let http_body = Http {
+    store
+        .append(&key, &bincode::serialize(body).unwrap())
+        .unwrap();
+}
+
+/// Returns an `Http` whose request header names keep a duplicate in the
+/// order received, and whose five request header values are all set.
+pub(super) fn http_raw_event_body() -> Http {
+    Http {
         orig_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
         orig_port: 46378,
         resp_addr: "192.168.4.76".parse::<IpAddr>().unwrap(),
@@ -1641,10 +1658,18 @@ pub(super) fn insert_http_raw_event(store: &RawEventStore<Http>, sensor: &str, t
         mime_types: Vec::new(),
         body: Vec::new(),
         state: String::new(),
-    };
-    let ser_http_body = bincode::serialize(&http_body).unwrap();
-
-    store.append(&key, &ser_http_body).unwrap();
+        request_header_names: vec![
+            "Host".to_string(),
+            "Accept".to_string(),
+            "Cookie".to_string(),
+            "cookie".to_string(),
+        ],
+        accept: "text/html".to_string(),
+        connection: "keep-alive".to_string(),
+        accept_encoding: "gzip, deflate".to_string(),
+        accept_language: "en-US,en;q=0.9".to_string(),
+        pragma: "no-cache".to_string(),
+    }
 }
 
 pub(super) fn insert_rdp_raw_event(store: &RawEventStore<Rdp>, sensor: &str, timestamp: i64) {

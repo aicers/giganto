@@ -36,7 +36,7 @@ use crate::{
     },
 };
 
-const COMPATIBLE_VERSION_REQ: &str = ">=0.34.0,<0.39.0";
+const COMPATIBLE_VERSION_REQ: &str = ">=0.34.0,<0.40.0";
 
 /// Migrates the data directory to the up-to-date format if necessary.
 ///
@@ -564,6 +564,12 @@ fn migrate_0_24_to_0_26_http(db: &Database) -> Result<()> {
             mime_types,
             body: old.post_body,
             state: old.state,
+            request_header_names: Vec::new(),
+            accept: String::new(),
+            connection: String::new(),
+            accept_encoding: String::new(),
+            accept_language: String::new(),
+            pragma: String::new(),
         };
         let new = bincode::serialize(&new_http)?;
         store.append(&key, &new)?;
@@ -1087,6 +1093,12 @@ mod tests {
             .concat(),
             body: old_http.post_body.clone(),
             state: old_http.state.clone(),
+            request_header_names: Vec::new(),
+            accept: String::new(),
+            connection: String::new(),
+            accept_encoding: String::new(),
+            accept_language: String::new(),
+            pragma: String::new(),
         };
         assert_eq!(new_http, store_http);
 
@@ -2408,6 +2420,12 @@ mod tests {
             mime_types: vec!["text/plain".to_string(), "application/json".to_string()],
             body: http_old.post_body,
             state: http_old.state,
+            request_header_names: Vec::new(),
+            accept: String::new(),
+            connection: String::new(),
+            accept_encoding: String::new(),
+            accept_language: String::new(),
+            pragma: String::new(),
         };
         assert_eq!(migrated_http, expected_http);
 

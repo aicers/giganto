@@ -53,6 +53,12 @@ query HttpRawEvents(
         mimeTypes
         body
         state
+        requestHeaderNames
+        accept
+        connection
+        acceptEncoding
+        acceptLanguage
+        pragma
       }
     }
   }
