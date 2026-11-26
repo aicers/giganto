@@ -27,10 +27,15 @@ pub(crate) use version_req;
 #[cfg(test)]
 pub(crate) fn previous_minor_version() -> semver::Version {
     let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("valid crate version");
-    if current.minor > 0 {
-        semver::Version::new(current.major, current.minor - 1, 0)
-    } else {
-        semver::Version::new(current.major - 1, 0, 0)
+    previous_minor_of(&current)
+}
+
+/// Returns the first release of the minor release before `version`.
+#[cfg(test)]
+fn previous_minor_of(version: &semver::Version) -> semver::Version {
+    match version.minor.checked_sub(1) {
+        Some(minor) => semver::Version::new(version.major, minor, 0),
+        None => semver::Version::new(version.major - 1, 0, 0),
     }
 }
 
@@ -38,10 +43,23 @@ pub(crate) fn previous_minor_version() -> semver::Version {
 mod tests {
     use semver::{Op, Version, VersionReq};
 
+    use super::previous_minor_of;
     use crate::comm::{
         ingest::INGEST_VERSION_REQ, peer::PEER_VERSION_REQ, publish::PUBLISH_VERSION_REQ,
     };
     use crate::storage::COMPATIBLE_VERSION_REQ;
+
+    #[test]
+    fn previous_minor_steps_back_one_minor_release() {
+        assert_eq!(
+            previous_minor_of(&Version::new(0, 38, 2)),
+            Version::new(0, 37, 0)
+        );
+        assert_eq!(
+            previous_minor_of(&Version::new(1, 0, 3)),
+            Version::new(0, 0, 0)
+        );
+    }
 
     #[test]
     fn lower_bounds_follow_the_crate_minor_release() {
@@ -56,7 +74,7 @@ mod tests {
             let lower = parsed
                 .comparators
                 .first()
-                .unwrap_or_else(|| panic!("{name} has no comparator"));
+                .expect("each requirement has a lower comparator");
             assert_eq!(lower.op, Op::GreaterEq, "{name}: {req}");
             assert_eq!(lower.major, current.major, "{name}: {req}");
             assert_eq!(lower.minor, Some(current.minor), "{name}: {req}");
