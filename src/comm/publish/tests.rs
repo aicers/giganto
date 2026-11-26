@@ -4742,11 +4742,16 @@ async fn request_range_data_with_http_carries_request_header_columns() {
             let payload = String::from_utf8(payload).expect("http range payload is utf-8");
             let columns: Vec<&str> = payload.split('\t').collect();
             let trailing = columns
-                .get(columns.len().saturating_sub(6)..)
-                .expect("payload has at least six columns");
+                .len()
+                .checked_sub(7)
+                .and_then(|start| columns.get(start..))
+                .expect("payload has `state` and the six request header columns");
+            // The six columns follow `state`, which is empty here and so
+            // printed as `-`.
             assert_eq!(
                 trailing,
                 [
+                    "-",
                     "Host,Accept,X-Forwarded-For,X-Forwarded-For",
                     "text/html",
                     "keep-alive",
@@ -4755,9 +4760,6 @@ async fn request_range_data_with_http_carries_request_header_columns() {
                     "no-cache",
                 ]
             );
-            // The six columns follow `state`, which is empty here and so
-            // printed as `-`.
-            assert_eq!(columns.get(columns.len() - 7), Some(&"-"));
         })
     })
     .await;
