@@ -426,6 +426,33 @@ struct HttpRawEvent {
     body: Vec<u8>,
     /// Last State
     state: String,
+    /// Request Header Names
+    ///
+    /// The names of the request headers in the order they were received, in
+    /// their original case, with duplicates kept. Empty when unknown.
+    request_header_names: Vec<String>,
+    /// Accept
+    ///
+    /// The value of the request's `Accept` header. Empty when unknown.
+    accept: String,
+    /// Connection
+    ///
+    /// The value of the request's `Connection` header. Empty when unknown.
+    connection: String,
+    /// Accept Encoding
+    ///
+    /// The value of the request's `Accept-Encoding` header. Empty when
+    /// unknown.
+    accept_encoding: String,
+    /// Accept Language
+    ///
+    /// The value of the request's `Accept-Language` header. Empty when
+    /// unknown.
+    accept_language: String,
+    /// Pragma
+    ///
+    /// The value of the request's `Pragma` header. Empty when unknown.
+    pragma: String,
 }
 
 /// Represents an event extracted from the RDP protocol.
@@ -1722,6 +1749,12 @@ impl FromKeyValue<Http> for HttpRawEvent {
             state: val.state,
             request_len: StringNumberUsize(val.request_len),
             response_len: StringNumberUsize(val.response_len),
+            request_header_names: val.request_header_names,
+            accept: val.accept,
+            connection: val.connection,
+            accept_encoding: val.accept_encoding,
+            accept_language: val.accept_language,
+            pragma: val.pragma,
         })
     }
 }

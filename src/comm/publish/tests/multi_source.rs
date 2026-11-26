@@ -459,7 +459,7 @@ async fn multi_source_range_reads_time_series_by_policy_id() {
             insert_time_series(&harness.db, OTHER_POLICY_ID, &[2]);
 
             let request = multi_source_request(
-                "timeseries",
+                "periodic_time_series",
                 &[(TIME_SERIES_POLICY_ID, 0), (OTHER_POLICY_ID, 0)],
                 100,
             );
@@ -543,7 +543,7 @@ async fn time_series_read(
     sources: &[(&str, i64)],
     count: usize,
 ) -> (Vec<Event<f64>>, Vec<(String, SourceStatus)>) {
-    let request = multi_source_request("timeseries", sources, count);
+    let request = multi_source_request("periodic_time_series", sources, count);
     let (events, status) =
         request_with_status::<f64, _>(&harness.publish, MessageCode::MultiSourceRange, request)
             .await;
@@ -921,7 +921,7 @@ async fn multi_source_time_series_read_fails_whole_when_the_store_cannot_be_open
         .drop_cf_for_test(PERIODIC_TIME_SERIES_CF)
         .expect("drop the time-series column family");
 
-    let request = multi_source_request("timeseries", &[(POLICY, 0)], 100);
+    let request = multi_source_request("periodic_time_series", &[(POLICY, 0)], 100);
     let body = bincode::serialize(&request).expect("encode the request");
     let (mut send, client_conn) = open_range_stream("time.series.no.store").await;
     let token = CancellationToken::new();
@@ -1004,7 +1004,6 @@ const SERVED_KINDS: &[&str] = &[
     "dce rpc",
     "ftp",
     "mqtt",
-    "timeseries",
     "periodic_time_series",
     "ldap",
     "tls",
@@ -1043,7 +1042,7 @@ async fn multi_source_requests_serve_every_kind_range_reads_serve() {
                 RawEventKind::from_str(kind).expect("a kind name");
                 // Time series are served locally under any ID; for any other
                 // kind the source is a sensor no node serves.
-                let expected = if matches!(*kind, "timeseries" | "periodic_time_series") {
+                let expected = if *kind == "periodic_time_series" {
                     SourceStatus::Served
                 } else {
                     SourceStatus::NoNode
@@ -1184,7 +1183,10 @@ async fn raw_data_with_status_rereads_time_series_by_policy_id() {
         Box::pin(async move {
             insert_time_series(&harness.db, TIME_SERIES_POLICY_ID, &[1, 2]);
 
-            let request = raw_data_request("timeseries", &[(TIME_SERIES_POLICY_ID, &[1, 2, 3])]);
+            let request = raw_data_request(
+                "periodic_time_series",
+                &[(TIME_SERIES_POLICY_ID, &[1, 2, 3])],
+            );
             let (events, status) = request_with_status::<f64, _>(
                 &harness.publish,
                 MessageCode::RawDataWithStatus,
@@ -1264,7 +1266,7 @@ async fn raw_data_with_status_fails_only_the_source_that_does_not_decode() {
                 &harness.publish,
                 MessageCode::RawDataWithStatus,
                 raw_data_request(
-                    "timeseries",
+                    "periodic_time_series",
                     &[(POLICY_UNDECODABLE, &[1]), (TIME_SERIES_POLICY_ID, &[1])],
                 ),
             )
@@ -1458,7 +1460,7 @@ async fn time_series_requests_do_not_fetch_a_series_from_the_peer() {
     .await;
     insert_time_series(&context.node1_db, TIME_SERIES_POLICY_ID, &[1]);
 
-    let request = multi_source_request("timeseries", &[(TIME_SERIES_POLICY_ID, 0)], 100);
+    let request = multi_source_request("periodic_time_series", &[(TIME_SERIES_POLICY_ID, 0)], 100);
     let (events, status) =
         request_with_status::<f64, _>(&context.publish, MessageCode::MultiSourceRange, request)
             .await;
@@ -1466,7 +1468,7 @@ async fn time_series_requests_do_not_fetch_a_series_from_the_peer() {
     assert_eq!(timestamps, vec![1]);
     assert_eq!(statuses(status), served(&[TIME_SERIES_POLICY_ID]));
 
-    let request = raw_data_request("timeseries", &[(TIME_SERIES_POLICY_ID, &[1, 2])]);
+    let request = raw_data_request("periodic_time_series", &[(TIME_SERIES_POLICY_ID, &[1, 2])]);
     let (events, status) =
         request_with_status::<f64, _>(&context.publish, MessageCode::RawDataWithStatus, request)
             .await;

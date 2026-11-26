@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use anyhow::anyhow;
 use giganto_client::ingest::{
     log::OpLog,
-    network::{Conn, Dhcp, Kerberos},
+    network::{Conn, Dhcp, Http, Kerberos},
 };
 use mockito::Server;
 use tempfile::tempdir;
@@ -29,8 +29,8 @@ use crate::graphql::export::tests::fixture::{
     test_event_timestamp_nanos,
 };
 use crate::graphql::export::tests::fixture::{
-    dhcp_raw_event_body, insert_dhcp_record, insert_kerberos_record, kerberos_raw_event_body,
-    read_export_file_with_retry,
+    dhcp_raw_event_body, http_raw_event_body, insert_dhcp_record, insert_http_record,
+    insert_kerberos_record, kerberos_raw_event_body, read_export_file_with_retry,
 };
 use crate::graphql::tests::TestSchema;
 use crate::storage::{Database, DbOptions, Direction, KeyExtractor, TimestampKeyExtractor};
@@ -997,6 +997,78 @@ async fn export_kerberos_identification_fields() {
     assert_eq!(json[1]["req_etypes"], serde_json::json!([]));
     assert_eq!(json[1]["enc_part_etype"], serde_json::json!(18));
     assert_eq!(json[1]["ticket_etype"], serde_json::json!(-128));
+}
+
+#[tokio::test]
+async fn export_http_request_header_fields() {
+    let schema = TestSchema::new();
+    let store = schema.db.http_store().unwrap();
+    let populated = http_raw_event_body();
+    let empty = Http {
+        request_header_names: Vec::new(),
+        accept: String::new(),
+        connection: String::new(),
+        accept_encoding: String::new(),
+        accept_language: String::new(),
+        pragma: String::new(),
+        ..http_raw_event_body()
+    };
+    let timestamp = test_event_timestamp_nanos();
+    insert_http_record(&store, "src1", timestamp, &populated);
+    insert_http_record(&store, "src1", timestamp + 1, &empty);
+
+    let csv = export_identification_lines(&schema, "http", "csv").await;
+    assert_eq!(csv.len(), 2);
+    assert!(csv[0].ends_with(&format!("\t{populated}")));
+    assert!(csv[0].ends_with(
+        "\t-\tHost,Accept,Cookie,cookie\ttext/html\tkeep-alive\tgzip, deflate\ten-US,en;q=0.9\tno-cache"
+    ));
+    assert!(csv[1].ends_with(&format!("\t{empty}")));
+    assert!(csv[1].ends_with("\t-\t-\t-\t-\t-\t-\t-"));
+
+    let lines = export_identification_lines(&schema, "http", "json").await;
+    assert_keys_in_order(
+        &lines[0],
+        &[
+            "state",
+            "request_header_names",
+            "accept",
+            "connection",
+            "accept_encoding",
+            "accept_language",
+            "pragma",
+        ],
+    );
+    let json: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(json.len(), 2);
+    assert_eq!(
+        json[0]["request_header_names"],
+        serde_json::json!(["Host", "Accept", "Cookie", "cookie"])
+    );
+    assert_eq!(json[0]["accept"], serde_json::json!("text/html"));
+    assert_eq!(json[0]["connection"], serde_json::json!("keep-alive"));
+    assert_eq!(
+        json[0]["accept_encoding"],
+        serde_json::json!("gzip, deflate")
+    );
+    assert_eq!(
+        json[0]["accept_language"],
+        serde_json::json!("en-US,en;q=0.9")
+    );
+    assert_eq!(json[0]["pragma"], serde_json::json!("no-cache"));
+    assert_eq!(json[1]["request_header_names"], serde_json::json!([]));
+    for key in [
+        "accept",
+        "connection",
+        "accept_encoding",
+        "accept_language",
+        "pragma",
+    ] {
+        assert_eq!(json[1][key], serde_json::json!(""), "{key}");
+    }
 }
 
 #[tokio::test]

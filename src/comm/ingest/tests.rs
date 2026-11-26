@@ -740,6 +740,12 @@ fn single_event_cases() -> Vec<SingleEventCase> {
                 mime_types: Vec::new(),
                 body: Vec::new(),
                 state: String::new(),
+                request_header_names: populated_request_header_names(),
+                accept: "text/html".to_string(),
+                connection: "keep-alive".to_string(),
+                accept_encoding: "gzip, deflate".to_string(),
+                accept_language: "en-US,en;q=0.9".to_string(),
+                pragma: "no-cache".to_string(),
             },
         ),
         single_event_case(
@@ -1791,8 +1797,29 @@ fn http_event(uri: &str) -> Vec<u8> {
         mime_types: Vec::new(),
         body: Vec::new(),
         state: String::new(),
+        request_header_names: Vec::new(),
+        accept: String::new(),
+        connection: String::new(),
+        accept_encoding: String::new(),
+        accept_language: String::new(),
+        pragma: String::new(),
     })
     .expect("serialize http event")
+}
+
+/// Returns request header names in their original case, with a duplicate
+/// name kept where it was received.
+fn populated_request_header_names() -> Vec<String> {
+    [
+        "Host",
+        "User-Agent",
+        "Accept",
+        "X-Forwarded-For",
+        "x-forwarded-for",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 /// Sends `record` as one batch of `kind` and asserts that it is stored
@@ -1835,6 +1862,26 @@ async fn sysmon_records_with_an_endpoint_header_are_stored_unchanged() {
         RawEventKind::FileDelete,
         &harness.db.file_delete_store().unwrap(),
         &file_delete(Some(full_header())),
+    )
+    .await;
+    harness.shutdown(b"done").await;
+}
+
+#[tokio::test]
+async fn http_with_request_headers_is_stored_unchanged() {
+    let harness = TestHarness::with_ack_transmission(1).await;
+    let mut http: Http = bincode::deserialize(&http_event("/request-headers")).unwrap();
+    http.request_header_names = populated_request_header_names();
+    http.accept = "text/html,application/xhtml+xml".to_string();
+    http.connection = "keep-alive".to_string();
+    http.accept_encoding = "gzip, deflate, br".to_string();
+    http.accept_language = "ko-KR,ko;q=0.9,en;q=0.8".to_string();
+    http.pragma = "no-cache".to_string();
+    assert_ingested_unchanged(
+        &harness,
+        RawEventKind::Http,
+        &harness.db.http_store().unwrap(),
+        &http,
     )
     .await;
     harness.shutdown(b"done").await;
