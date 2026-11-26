@@ -62,7 +62,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-pub(crate) use self::active_list::{ApplyFailure, ApplyRefusal, EndpointList, ListAck, ListState};
+#[cfg(test)]
+pub(crate) use self::active_list::ListState;
+pub(crate) use self::active_list::{ApplyFailure, ApplyRefusal, EndpointList, ListAck};
 use self::active_list::{CloseCommand, PendingConnection, store_duplicate_key};
 pub(crate) use self::convert::RECORD_COLUMN_FAMILIES as ENDPOINT_RECORD_COLUMN_FAMILIES;
 use self::receiver::{Delivered, Handled};
@@ -251,6 +253,7 @@ impl Server {
 }
 
 impl BoundServer {
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn local_addr(&self) -> SocketAddr {
         self.local_addr
