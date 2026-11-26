@@ -7,15 +7,18 @@ pub(crate) mod stream_channel_key;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use giganto_client::connection::HandshakeError;
 use quinn::Connection;
 use rustls::pki_types::{
     CertificateDer, PrivateKeyDer,
     pem::{PemObject, SectionKind},
 };
 use tokio::sync::{RwLock, mpsc::UnboundedSender};
+use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use tracing::warn;
 
@@ -24,6 +27,10 @@ use crate::{
     datetime::DateTime,
     storage::Database,
 };
+
+/// How long a server waits, after refusing a client's protocol version, for
+/// the client to read the refusal and close the connection itself.
+const REFUSAL_READ_GRACE: Duration = Duration::from_secs(5);
 
 pub type PcapSensors = Arc<RwLock<HashMap<String, Vec<Connection>>>>;
 pub type IngestSensors = Arc<RwLock<HashSet<String>>>;
@@ -96,6 +103,28 @@ pub(crate) fn to_root_cert(ca_certs_paths: &[String]) -> Result<rustls::RootCert
     }
 
     Ok(root_cert)
+}
+
+/// Closes `connection` after its version handshake failed with `error`.
+///
+/// On `IncompatibleProtocol` the server has already sent the client its
+/// refusal. Closing at once would discard that reply before it arrives, and
+/// the client would see a lost connection instead of the refusal, so the
+/// connection is closed only once the client has closed it, after
+/// `REFUSAL_READ_GRACE`, or when `token` is cancelled, whichever comes first.
+/// Any other failure closes the connection at once.
+pub(crate) async fn close_after_failed_handshake(
+    connection: &Connection,
+    error: &HandshakeError,
+    token: &CancellationToken,
+) {
+    if matches!(error, HandshakeError::IncompatibleProtocol(_)) {
+        tokio::select! {
+            () = token.cancelled() => {}
+            _ = tokio::time::timeout(REFUSAL_READ_GRACE, connection.closed()) => {}
+        }
+    }
+    connection.close(quinn::VarInt::from_u32(0), error.to_string().as_bytes());
 }
 
 pub(crate) fn new_pcap_sensors() -> PcapSensors {

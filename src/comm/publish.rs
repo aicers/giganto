@@ -57,6 +57,7 @@ use self::multi_source::{
 use crate::cancellation::{TaskTracker, drain_with_report};
 use crate::comm::{
     IngestSensors, PcapSensors, StreamDirectChannelMap, StreamDirectChannels,
+    close_after_failed_handshake,
     ingest::{NetworkKey, implement::EventFilter},
     peer::{PeerIdents, PeerNameLookupError, Peers, peer_name_by_ip},
     stream_channel_key::StreamChannelKey,
@@ -69,8 +70,14 @@ use crate::server::{
 };
 use crate::storage::{BoundaryIter, Database, Direction, RawEventStore, StorageKey};
 use crate::tls_reload::{self, TlsWatch};
+use crate::version_req::version_req;
 
-const PUBLISH_VERSION_REQ: &str = ">=0.28.0,<0.40.0";
+// The `PUBLISH_VERSION_REQ` defines the versions a publish client (a sensor, an analysis service
+// or a peer Giganto) may announce. Its lower bound follows the crate's minor release, so a release
+// refuses clients of earlier minor releases, and a client must announce a version within the
+// range. A later release that must keep accepting an earlier one replaces the derived lower bound
+// with a literal.
+pub(crate) const PUBLISH_VERSION_REQ: &str = version_req!("<0.40.0");
 /// Names the publish subsystem tracker in the drain progress log.
 const PUBLISH_DRAIN_LABEL: &str = "publish";
 
@@ -394,7 +401,7 @@ async fn handle_connection(
         }
         Err(e) => {
             info!("Incompatible version");
-            connection.close(quinn::VarInt::from_u32(0), e.to_string().as_bytes());
+            close_after_failed_handshake(&connection, &e, &token).await;
             bail!("{e}")
         }
     };

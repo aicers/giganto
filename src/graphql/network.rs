@@ -142,10 +142,9 @@ struct ConnRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -216,10 +215,9 @@ struct DnsRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP address
@@ -285,10 +283,9 @@ struct MalformedDnsRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP address
@@ -354,10 +351,9 @@ struct HttpRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -466,10 +462,9 @@ struct RdpRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -513,10 +508,9 @@ struct SmtpRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -572,10 +566,9 @@ struct NtlmRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -627,10 +620,9 @@ struct KerberosRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -721,10 +713,9 @@ struct SshRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -820,10 +811,9 @@ struct DceRpcRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -900,10 +890,9 @@ struct FtpRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -952,10 +941,9 @@ struct MqttRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -1009,10 +997,9 @@ struct LdapRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -1068,10 +1055,9 @@ struct TlsRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -1156,10 +1142,9 @@ struct SmbRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -1223,10 +1208,9 @@ struct NfsRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -1272,10 +1256,9 @@ struct BootpRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -1377,10 +1360,9 @@ struct DhcpRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -1476,10 +1458,9 @@ struct RadiusRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address
@@ -1549,10 +1530,9 @@ struct IcmpRawEvent {
     /// Event Time
     ///
     /// The timestamp the sensor sent with this event. The event is stored under
-    /// this time, and the `time` range of a query filter matches it. Since 0.26.0
-    /// sensors send the time they created the event, not the session start time,
-    /// which is `startTime`; events stored before 0.26.0 keep the session start
-    /// time here. When a different event of the same kind from the same sensor
+    /// this time, and the `time` range of a query filter matches it. Sensors send
+    /// the time they created the event, not the session start time, which is
+    /// `startTime`. When a different event of the same kind from the same sensor
     /// already holds this time, the event is stored at the next free nanosecond.
     time: DateTime,
     /// Source IP Address

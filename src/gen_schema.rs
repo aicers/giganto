@@ -10,6 +10,7 @@ mod storage;
 #[cfg(test)]
 mod test_bootroot;
 mod tls_reload;
+mod version_req;
 mod web;
 
 use std::fs;

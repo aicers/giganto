@@ -4725,15 +4725,58 @@ fn ingest_run_ends_in_the_shutdown_tail() {
 }
 
 #[test]
-fn ingest_version_req_admits_earlier_sensors_and_this_version() {
+fn ingest_version_req_admits_only_this_minor_release() {
     let req = semver::VersionReq::parse(super::INGEST_VERSION_REQ).unwrap();
-    for admitted in ["0.27.0", "0.33.0", PROTOCOL_VERSION] {
-        assert!(
-            req.matches(&semver::Version::parse(admitted).unwrap()),
-            "{admitted} must be admitted"
-        );
+    assert!(
+        req.matches(&semver::Version::parse(PROTOCOL_VERSION).unwrap()),
+        "{PROTOCOL_VERSION} must be admitted"
+    );
+    let previous_minor = crate::version_req::previous_minor_version();
+    for refused in [
+        semver::Version::parse("0.27.0").unwrap(),
+        semver::Version::parse("0.28.0").unwrap(),
+        previous_minor,
+    ] {
+        assert!(!req.matches(&refused), "{refused} must be refused");
     }
-    assert!(!req.matches(&semver::Version::parse("0.26.0").unwrap()));
+}
+
+/// A sensor announcing an earlier release, such as the `0.28.0` that current
+/// sensor builds announce, is refused at the version handshake.
+#[tokio::test]
+async fn handshake_refuses_a_client_of_an_earlier_release() {
+    init_crypto();
+    let db_dir = tempfile::tempdir().expect("create ingest temp dir");
+    let db =
+        Database::open(db_dir.path(), &DbOptions::default()).expect("open ingest test database");
+    let mut server = spawn_server(db);
+
+    let endpoint = init_client();
+    let conn = endpoint
+        .connect(server.local_addr, test_server_name())
+        .expect("Failed to connect")
+        .await
+        .expect("Failed to finish connection");
+
+    let err = with_timeout(
+        "refused version handshake",
+        SHUTDOWN_TIMEOUT,
+        client_handshake(&conn, "0.28.0"),
+    )
+    .await
+    .expect_err("a 0.28.0 client must be refused");
+    assert!(
+        matches!(
+            &err,
+            giganto_client::connection::HandshakeError::IncompatibleProtocol(version)
+                if version == "0.28.0"
+        ),
+        "unexpected handshake error: {err:?}"
+    );
+
+    conn.close(0u32.into(), b"done");
+    endpoint.wait_idle().await;
+    server.shutdown().await;
 }
 
 /// Connects a QUIC client built on `config` to `server_addr` and returns the

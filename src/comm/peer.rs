@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use toml_edit::DocumentMut;
 use tracing::{error, info, warn};
 
+use crate::version_req::version_req;
 use crate::{
     cancellation::{TaskTracker, drain_with_report},
     comm::IngestSensors,
@@ -96,13 +97,10 @@ fn current_applied_generation(slot: &SharedClientConfig) -> u64 {
 }
 
 // The `PEER_VERSION_REQ` defines the compatibility range for Giganto instances in a cluster.
-// Reasons for updating this version include, but not be limited to:
-// - Updates of GraphQL API version: Since Giganto acts as both a client and server for other
-//   Gigantos in the cluster, maintaining the same API version is necessary for the communication
-//   within the cluster.
-// - Updates of event protocol structures: Any changes to giganto-client's event protocols require
-//   all Gigantos in the cluster to use the same protocol version for compatibility.
-const PEER_VERSION_REQ: &str = ">=0.35.0,<0.40.0";
+// Its lower bound follows the crate's minor release, so a release refuses peers of earlier minor
+// releases, and the Gigantos of one cluster therefore run the same minor release. A later release
+// that must keep accepting an earlier one replaces the derived lower bound with a literal.
+pub(crate) const PEER_VERSION_REQ: &str = version_req!("<0.40.0");
 const PEER_RETRY_INTERVAL: u64 = 5;
 /// Names the peer subsystem tracker in the drain progress log.
 const PEER_DRAIN_LABEL: &str = "peer";
@@ -2927,6 +2925,49 @@ pub mod tests {
         let err = server_handle.await.unwrap().unwrap_err();
         assert!(err.to_string().contains("not supported"));
         assert!(err.to_string().contains("Protocol version"));
+    }
+
+    #[tokio::test]
+    async fn test_server_connection_rejects_a_peer_of_the_previous_minor_release() {
+        init_crypto();
+
+        let (server_endpoint, server_addr) = setup_server_endpoint();
+
+        let (peer_conn_info, _config) = build_peer_conn_info("127.0.0.1:3335".parse().unwrap());
+        let token = CancellationToken::new();
+        let tracker = TaskTracker::with_token(token.clone());
+        let (_client_endpoint, client_conn, _streams, server_handle) = paired_server_connection(
+            &server_endpoint,
+            server_addr,
+            peer_conn_info,
+            tracker,
+            token,
+            false,
+        )
+        .await;
+        let previous_minor = crate::version_req::previous_minor_version().to_string();
+        let client_result = client_handshake(&client_conn, &previous_minor).await;
+        assert!(client_result.is_err(), "the peer must be refused");
+
+        let err = server_handle.await.unwrap().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("Protocol version {previous_minor} is not supported"),
+        );
+    }
+
+    #[test]
+    fn peer_version_req_admits_only_this_minor_release() {
+        let req = semver::VersionReq::parse(PEER_VERSION_REQ).unwrap();
+        assert!(
+            req.matches(&semver::Version::parse(PROTOCOL_VERSION).unwrap()),
+            "{PROTOCOL_VERSION} must be admitted"
+        );
+        let previous_minor = crate::version_req::previous_minor_version();
+        assert!(
+            !req.matches(&previous_minor),
+            "{previous_minor} must be refused"
+        );
     }
 
     #[test]
