@@ -133,19 +133,13 @@ async fn handle_pcap(ctx: &Context<'_>, filter: &PacketFilter) -> Result<Pcap> {
     let db = ctx.data::<Database>()?;
     let store = db.packet_store()?;
 
-    // generate storage search key
-    let key_builder = StorageKey::builder()
+    let prefix = StorageKey::builder()
         .start_key(filter.get_start_key())
-        .mid_key(filter.get_mid_key());
-    let from_key = key_builder
-        .clone()
-        .lower_closed_bound_end_key(filter.get_range_end_key().0)
-        .build();
-    let to_key = key_builder
-        .upper_open_bound_end_key(filter.get_range_end_key().1)
-        .build();
-
-    let iter = store.boundary_iter(&from_key.key(), &to_key.key(), Direction::Forward);
+        .mid_key(filter.get_mid_key())
+        .build()
+        .key();
+    let (start, end) = filter.get_range_end_key();
+    let iter = store.timestamp_range_iter(&prefix, start, end, None, Direction::Forward);
     let (records, _) = collect_records(iter, 10, filter);
 
     let packet_vector = records.into_iter().map(|(_, packet)| packet).collect();
