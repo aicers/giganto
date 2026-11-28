@@ -20,7 +20,8 @@ use crate::version_req::version_req;
 // Its lower bound follows the crate's minor release, so a release refuses data directories of
 // earlier minor releases. A later release that must keep opening an earlier one replaces the
 // derived lower bound with a literal and adds a migration step to `migrate_data_dir`.
-pub(crate) const COMPATIBLE_VERSION_REQ: &str = version_req!("<0.40.0");
+// The upper bound is derived too, so a release pull request needs no hand edit.
+pub(crate) const COMPATIBLE_VERSION_REQ: &str = version_req!();
 
 /// Checks the format version of the data directory.
 ///

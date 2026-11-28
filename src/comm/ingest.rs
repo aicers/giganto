@@ -85,7 +85,8 @@ const SENSOR_INTERVAL: u64 = 60 * 60 * 24;
 // bound follows the crate's minor release, so a release refuses clients of earlier minor releases,
 // and a sensor must announce a version within the range. A later release that must keep accepting
 // an earlier one replaces the derived lower bound with a literal.
-pub(crate) const INGEST_VERSION_REQ: &str = version_req!("<0.40.0");
+// The upper bound is derived too, so a release pull request needs no hand edit.
+pub(crate) const INGEST_VERSION_REQ: &str = version_req!();
 /// Names the ingest subsystem tracker in the drain progress log.
 const INGEST_DRAIN_LABEL: &str = "ingest";
 
