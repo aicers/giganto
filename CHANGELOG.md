@@ -4,6 +4,19 @@ This file documents recent notable changes to this project. The format of this
 file is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.0](https://github.com/aicers/giganto/compare/0.38.0...0.39.0) - 2026-11-28
+
+### Added
+
+- [**breaking**] store and expose HTTP request header names and the Accept, Connection, Accept-Encoding, Accept-Language and Pragma values ([#2062](https://github.com/aicers/giganto/pull/2062))
+
+### Other
+
+- derive the upper bound of the version ranges from the crate version ([#2073](https://github.com/aicers/giganto/pull/2073))
+- *(dependabot)* exclude git-tag dependencies from the cooldown ([#2069](https://github.com/aicers/giganto/pull/2069))
+- refresh the apt index before installing packages ([#2071](https://github.com/aicers/giganto/pull/2071))
+- [**breaking**] drop data-directory migrations and refuse data directories, peers and sensors of earlier releases ([#2066](https://github.com/aicers/giganto/pull/2066))
+
 ## [0.38.0](https://github.com/aicers/giganto/compare/0.37.0...0.38.0) - 2026-11-25
 
 ### Added
