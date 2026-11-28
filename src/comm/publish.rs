@@ -77,7 +77,8 @@ use crate::version_req::version_req;
 // refuses clients of earlier minor releases, and a client must announce a version within the
 // range. A later release that must keep accepting an earlier one replaces the derived lower bound
 // with a literal.
-pub(crate) const PUBLISH_VERSION_REQ: &str = version_req!("<0.40.0");
+// The upper bound is derived too, so a release pull request needs no hand edit.
+pub(crate) const PUBLISH_VERSION_REQ: &str = version_req!();
 /// Names the publish subsystem tracker in the drain progress log.
 const PUBLISH_DRAIN_LABEL: &str = "publish";
 

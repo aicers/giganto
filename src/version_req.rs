@@ -2,18 +2,18 @@
 //! clients against.
 
 /// Expands to a version requirement whose lower bound is `MAJOR.MINOR.0` of
-/// the crate's own version, followed by the upper bound `$upper`.
+/// the crate's own version and whose exclusive upper bound is `MAJOR.(MINOR+1).0`.
 ///
-/// At 0.38.x, `version_req!("<0.40.0")` expands to `">=0.38.0,<0.40.0"`.
+/// At 0.38.x, `version_req!()` expands to `">=0.38.0,<0.39.0"`.
 macro_rules! version_req {
-    ($upper:literal) => {
+    () => {
         concat!(
             ">=",
             env!("CARGO_PKG_VERSION_MAJOR"),
             ".",
             env!("CARGO_PKG_VERSION_MINOR"),
-            ".0,",
-            $upper
+            ".0,<",
+            env!("GIGANTO_NEXT_MINOR_VERSION")
         )
     };
 }
@@ -62,7 +62,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_bounds_follow_the_crate_minor_release() {
+    fn bounds_follow_the_crate_minor_release() {
         let current = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
         for (name, req) in [
             ("COMPATIBLE_VERSION_REQ", COMPATIBLE_VERSION_REQ),
@@ -80,10 +80,18 @@ mod tests {
             assert_eq!(lower.minor, Some(current.minor), "{name}: {req}");
             assert_eq!(lower.patch, Some(0), "{name}: {req}");
             assert!(lower.pre.is_empty(), "{name}: {req}");
-            assert!(
-                req.starts_with(&format!(">={}.{}.0,", current.major, current.minor)),
+            assert_eq!(
+                req,
+                format!(
+                    ">={0}.{1}.0,<{0}.{2}.0",
+                    current.major,
+                    current.minor,
+                    current.minor + 1
+                ),
                 "{name}: {req}"
             );
+            let next_minor = Version::new(current.major, current.minor + 1, 0);
+            assert!(!parsed.matches(&next_minor), "{name}: {req}");
         }
     }
 }
