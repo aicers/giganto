@@ -10,3 +10,7 @@ updates:
       include: "scope"
     ignore:
       - dependency-name: "giganto-client"
+    cooldown:
+      default-days: 3
+      exclude:
+        - "senta-protocol"
