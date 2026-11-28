@@ -2936,8 +2936,8 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "senta-protocol"
-version = "0.1.0"
-source = "git+https://github.com/aicers/senta-protocol.git?tag=0.1.0#076daf23b7fd9527dd757e3f238eb75b0a7a278f"
+version = "0.2.0"
+source = "git+https://github.com/aicers/senta-protocol.git?tag=0.2.0#2a2995241905299c1b64dae2189d278705fbffb0"
 dependencies = [
  "base64 0.23.1",
  "ciborium",
@@ -3295,7 +3295,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
